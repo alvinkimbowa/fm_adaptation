@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-config="${1:-configs/pe_linear.yaml}"
+config="${1:-configs/sam3_linear.yaml}"
 train=1
 predict=1
 report=1

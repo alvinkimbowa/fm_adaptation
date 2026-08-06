@@ -9,24 +9,19 @@ data:
   fold: 0
 
 model:
-  name: pe
-  probe: linear
-  run_name: finetune
+  name: sam3
+  probe: nonlinear
   checkpoint: null
 
 training:
-  epochs: 20
-  min_epochs: 5
-  early_stopping_patience: 5
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
   early_stopping_min_delta: 0.001
-  batch_size: 1
-  encoder_batch_size: 1
+  batch_size: 8
+  encoder_batch_size: 8
   num_workers: 4
-  learning_rate: 0.0001
+  learning_rate: 0.001
   weight_decay: 0.01
   seed: 0
   device: cuda
-
-finetuning:
-  encoder_learning_rate: 0.00001
-  accumulation_steps: 8

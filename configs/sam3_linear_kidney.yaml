@@ -9,7 +9,7 @@ data:
   fold: 0
 
 model:
-  name: pe
+  name: sam3
   probe: linear
   checkpoint: null
 

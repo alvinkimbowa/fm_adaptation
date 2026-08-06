@@ -9,7 +9,7 @@ data:
   fold: 0
 
 model:
-  name: pe
+  name: sam3
   probe: linear
   run_name: finetune
   checkpoint: null
@@ -28,5 +28,6 @@ training:
   device: cuda
 
 finetuning:
+  initial_probe: linear
   encoder_learning_rate: 0.00001
   accumulation_steps: 8

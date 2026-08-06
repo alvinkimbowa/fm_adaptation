@@ -43,7 +43,7 @@ class NonlinearProbe(nn.Module):
 
 
 class PEEncoder(nn.Module):
-    name = "pe"
+    name = "sam3"
     feature_channels = 1024
     input_size = 1008
 
@@ -131,7 +131,7 @@ def build_model(
     checkpoint: str | None,
     train_encoder: bool = False,
 ):
-    if model_name != "pe":
+    if model_name != "sam3":
         raise ValueError(f"Unknown foundation model: {model_name}")
     encoder = PEEncoder(checkpoint, trainable=train_encoder)
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe}

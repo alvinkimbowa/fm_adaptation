@@ -11,8 +11,9 @@ data:
   fold: 0
 
 model:
-  name: pe
-  probe: nonlinear
+  name: sam3
+  probe: linear
+  # Null uses SAM3's official Hugging Face download and local cache.
   checkpoint: null
 
 training:

@@ -13,7 +13,7 @@ their original pixel size.
 Run a complete linear-probe experiment:
 
 ```bash
-bash scripts/run_exp.sh configs/pe_linear.yaml
+bash scripts/run_exp.sh configs/sam3_linear.yaml
 ```
 
 Run these commands from an environment containing SAM3 and its training extras
@@ -23,17 +23,17 @@ it before launching an experiment.
 Or run stages separately:
 
 ```bash
-PYTHONPATH=src python -m fm_adaptation.training --config configs/pe_linear.yaml
-PYTHONPATH=src python -m fm_adaptation.predict --config configs/pe_linear.yaml
+PYTHONPATH=src python -m fm_adaptation.training --config configs/sam3_linear.yaml
+PYTHONPATH=src python -m fm_adaptation.predict --config configs/sam3_linear.yaml
 PYTHONPATH=src python -m fm_adaptation.report \
     --results-dir models \
     --nnunet-results-dir ../nnUNet_fork/data/nnUNet_results
 ```
 
-Full PE fine-tuning starts from the corresponding best linear probe:
+Full fine-tuning starts from the corresponding best linear probe:
 
 ```bash
-PYTHONPATH=src python -m fm_adaptation.finetune --config configs/pe_finetune_busbra.yaml
+PYTHONPATH=src python -m fm_adaptation.finetune --config configs/sam3_finetune_busbra.yaml
 ```
 
 Runs are stored under

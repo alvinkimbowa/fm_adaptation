@@ -1,16 +1,16 @@
 data:
   raw_data_dir: ../monounetv2/data/nnUNet_raw
   results_dir: models
-  train_dataset: Dataset084_KidneyUS_Philips
+  train_dataset: Dataset086_MMOTU_2D
   test_datasets:
-    - Dataset084_KidneyUS_Philips
-    - Dataset085_KidneyUS_Other_Devices
+    - Dataset086_MMOTU_2D
+    - Dataset087_MMOTU_CEUS
   test_split: Tr
   fold: 0
 
 model:
-  name: pe
-  probe: nonlinear
+  name: sam3
+  probe: linear
   checkpoint: null
 
 training:
