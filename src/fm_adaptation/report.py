@@ -39,6 +39,10 @@ def _median_iqr(values, scale=1.0):
     return f"{median:.2f} ({q1:.2f}–{q3:.2f})"
 
 
+def _dataset_family(dataset):
+    return dataset.split("_", maxsplit=2)[1]
+
+
 def _render_table(records, datasets, statistic):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
@@ -130,24 +134,40 @@ def main():
     parser.add_argument("--output", default="models/cross_dataset_report.html")
     args = parser.parse_args()
     records = defaultdict(dict)
-    datasets = set()
     for metrics_path in Path(args.results_dir).glob("*/*/*/fold_*/*/*/metrics.csv"):
         run_dir = metrics_path.parents[2]
         model, probe, trained_on = _read_run(run_dir)
         fold = run_dir.name.removeprefix("fold_")
         tested_on = metrics_path.parent.name
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
-        datasets.add(tested_on)
     if not records:
         raise RuntimeError(f"No cross-dataset metrics found under {args.results_dir}")
     style = """
     body{background:#111;color:#bbb;font-family:system-ui;margin:16px}table{border-collapse:collapse;width:100%}
     th,td{padding:7px 10px;text-align:right}th{background:#292929}td{background:#191919;border-bottom:1px solid #222}
-    th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}h2{font-size:16px;font-weight:400;margin-top:28px}
+    th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+    section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
-    ordered_datasets = sorted(datasets)
-    body = _render_table(records, ordered_datasets, "Mean ± SD")
-    body += _render_table(records, ordered_datasets, "Median (Q1–Q3)")
+    body = ""
+    families = sorted({_dataset_family(trained_on) for _, _, trained_on, _ in records})
+    for family in families:
+        family_records = {
+            key: results
+            for key, results in records.items()
+            if _dataset_family(key[2]) == family
+        }
+        family_datasets = sorted(
+            {
+                tested_on
+                for results in family_records.values()
+                for tested_on in results
+                if _dataset_family(tested_on) == family
+            }
+        )
+        body += f"<section><h1>{html.escape(family)}</h1>"
+        body += _render_table(family_records, family_datasets, "Mean ± SD")
+        body += _render_table(family_records, family_datasets, "Median (Q1–Q3)")
+        body += "</section>"
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(f"<!doctype html><meta charset='utf-8'><style>{style}</style>{body}")
