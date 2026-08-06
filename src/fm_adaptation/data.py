@@ -64,7 +64,23 @@ class NnUNet2DDataset(Dataset):
         return image_t, mask_t, {"case_id": case_id, **geometry}
 
 
+class CachedFeatureDataset(Dataset):
+    def __init__(self, cache_dir, case_ids):
+        self.cache_dir = Path(cache_dir)
+        self.case_ids = list(case_ids)
+
+    def __len__(self):
+        return len(self.case_ids)
+
+    def __getitem__(self, index):
+        item = torch.load(
+            self.cache_dir / f"{self.case_ids[index]}.pt",
+            map_location="cpu",
+            weights_only=True,
+        )
+        return item["feature"], item["mask"].long(), {"case_id": self.case_ids[index]}
+
+
 def collate_cases(batch):
     images, masks, metadata = zip(*batch)
     return torch.stack(images), torch.stack(masks), list(metadata)
-

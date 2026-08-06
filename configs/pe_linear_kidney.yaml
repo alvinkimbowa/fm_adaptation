@@ -1,19 +1,16 @@
 data:
   raw_data_dir: ../monounetv2/data/nnUNet_raw
   results_dir: models
-  train_dataset: Dataset080_BUSBRA_GE_Logiq_5
+  train_dataset: Dataset084_KidneyUS_Philips
   test_datasets:
-    - Dataset080_BUSBRA_GE_Logiq_5
-    - Dataset081_BUSBRA_GE_Logiq_7
-    - Dataset082_BUSBRA_Toshiba_Aplio_300
-    - Dataset083_BUSBRA_U_Systems
+    - Dataset084_KidneyUS_Philips
+    - Dataset085_KidneyUS_Other_Devices
   test_split: Tr
   fold: 0
 
 model:
   name: pe
   probe: linear
-  # Null uses SAM3's official Hugging Face download and local cache.
   checkpoint: null
 
 training:

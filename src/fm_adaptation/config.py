@@ -16,7 +16,11 @@ class ExperimentConfig:
     checkpoint: str | None
     probe_name: str
     epochs: int
+    min_epochs: int
+    early_stopping_patience: int
+    early_stopping_min_delta: float
     batch_size: int
+    encoder_batch_size: int
     num_workers: int
     learning_rate: float
     weight_decay: float
@@ -41,7 +45,11 @@ class ExperimentConfig:
             checkpoint=model.get("checkpoint"),
             probe_name=str(model["probe"]),
             epochs=int(training["epochs"]),
+            min_epochs=int(training.get("min_epochs", 1)),
+            early_stopping_patience=int(training.get("early_stopping_patience", 0)),
+            early_stopping_min_delta=float(training.get("early_stopping_min_delta", 0.0)),
             batch_size=int(training["batch_size"]),
+            encoder_batch_size=int(training.get("encoder_batch_size", 4)),
             num_workers=int(training.get("num_workers", 4)),
             learning_rate=float(training["learning_rate"]),
             weight_decay=float(training.get("weight_decay", 0.0)),
@@ -59,3 +67,6 @@ class ExperimentConfig:
             / f"fold_{self.fold}"
         )
 
+    @property
+    def feature_cache_dir(self) -> Path:
+        return self.results_dir / ".feature_cache" / self.model_name / self.train_dataset
