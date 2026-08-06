@@ -4,3 +4,5 @@
 - Added training logs, best/final probe-only checkpoints, original-resolution inference, Dice/MASD metrics, and cross-dataset HTML reports.
 - Verified preprocessing, prediction restoration, metrics, and CLI imports in the SAM3 environment.
 - Added reusable float16 PE feature caching and validation-based early stopping for low-compute probing.
+- Completed fold-0 PE linear-probe training for BUSBRA, KidneyUS, and MMOTU; retained per-epoch loss/Dice histories and best/final probe checkpoints.
+- Baseline cross-dataset analysis identified small-lesion oversegmentation as the main MMOTU failure; selected a minimal nonlinear decoder as one targeted test.

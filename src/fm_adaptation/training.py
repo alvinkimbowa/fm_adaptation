@@ -112,6 +112,7 @@ def main():
     shutil.copyfile(args.config, cfg.run_dir / "config.yaml")
     history_path = cfg.run_dir / "history.csv"
     best_dice = -1.0
+    stopping_reference_dice = -1.0
     epochs_without_improvement = 0
     with open(history_path, "w", newline="") as history_file:
         writer = csv.writer(history_file)
@@ -131,12 +132,15 @@ def main():
             )
             state = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
             torch.save(state, cfg.run_dir / "final.pt")
-            if val_loader is not None and val_dice > best_dice + cfg.early_stopping_min_delta:
+            if val_loader is not None and val_dice > best_dice:
                 best_dice = val_dice
-                epochs_without_improvement = 0
                 torch.save(state, cfg.run_dir / "best.pt")
-            elif val_loader is not None:
-                epochs_without_improvement += 1
+            if val_loader is not None:
+                if val_dice > stopping_reference_dice + cfg.early_stopping_min_delta:
+                    stopping_reference_dice = val_dice
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
             if (
                 val_loader is not None
                 and epoch >= cfg.min_epochs
