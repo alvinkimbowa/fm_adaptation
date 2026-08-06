@@ -24,6 +24,8 @@ def main():
     checkpoint_name = "final" if cfg.fold == "all" else args.checkpoint
     state = torch.load(cfg.run_dir / f"{checkpoint_name}.pt", map_location="cpu", weights_only=True)
     model.probe.load_state_dict(state["probe"])
+    if "encoder" in state:
+        model.encoder.trunk.load_state_dict(state["encoder"])
     model.to(device).eval()
     datasets = cfg.test_datasets or (cfg.train_dataset,)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()

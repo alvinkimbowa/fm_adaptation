@@ -1,4 +1,5 @@
 import sys
+import types
 from pathlib import Path
 
 import cv2
@@ -46,7 +47,7 @@ class PEEncoder(nn.Module):
     feature_channels = 1024
     input_size = 1008
 
-    def __init__(self, checkpoint: str | None):
+    def __init__(self, checkpoint: str | None, trainable: bool = False):
         super().__init__()
         sam3_root = Path(__file__).resolve().parents[2] / "foundational_models" / "sam3"
         sys.path.insert(0, str(sam3_root))
@@ -60,7 +61,11 @@ class PEEncoder(nn.Module):
             enable_segmentation=False,
         )
         self.trunk = model.backbone.vision_backbone.trunk
-        self.trunk.requires_grad_(False)
+        self.trainable = trainable
+        if trainable:
+            for block in self.trunk.blocks:
+                block.mlp.forward = types.MethodType(_trainable_sam3_mlp_forward, block.mlp)
+        self.trunk.requires_grad_(trainable)
 
     def preprocess(self, image: np.ndarray, mask: np.ndarray):
         height, width = mask.shape
@@ -91,9 +96,22 @@ class PEEncoder(nn.Module):
         return image_t, mask_t, geometry
 
     def forward(self, images):
-        with torch.no_grad():
+        if self.trainable:
             features = self.trunk(images)[-1]
+        else:
+            with torch.no_grad():
+                features = self.trunk(images)[-1]
         return features
+
+
+def _trainable_sam3_mlp_forward(mlp, x):
+    """Differentiable equivalent of SAM3's inference-only fused PE MLP."""
+    x = mlp.fc1(x)
+    x = mlp.act(x)
+    x = mlp.drop1(x)
+    x = mlp.norm(x)
+    x = mlp.fc2(x)
+    return mlp.drop2(x)
 
 
 class SegmentationModel(nn.Module):
@@ -106,10 +124,16 @@ class SegmentationModel(nn.Module):
         return self.probe(self.encoder(images), images.shape[-2:])
 
 
-def build_model(model_name: str, probe_name: str, classes: int, checkpoint: str | None):
+def build_model(
+    model_name: str,
+    probe_name: str,
+    classes: int,
+    checkpoint: str | None,
+    train_encoder: bool = False,
+):
     if model_name != "pe":
         raise ValueError(f"Unknown foundation model: {model_name}")
-    encoder = PEEncoder(checkpoint)
+    encoder = PEEncoder(checkpoint, trainable=train_encoder)
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe}
     if probe_name not in probes:
         raise ValueError(f"Unknown probe: {probe_name}")

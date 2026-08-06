@@ -28,6 +28,12 @@ PYTHONPATH=src python -m fm_adaptation.predict --config configs/pe_linear.yaml
 PYTHONPATH=src python -m fm_adaptation.report --results-dir models
 ```
 
+Full PE fine-tuning starts from the corresponding best linear probe:
+
+```bash
+PYTHONPATH=src python -m fm_adaptation.finetune --config configs/pe_finetune_busbra.yaml
+```
+
 Runs are stored under
 `models/{foundation_model}/{training_dataset}/{probe}/fold_{fold}`. Cross-dataset
 predictions and per-case metrics live below each run's `test/{dataset}` directory;

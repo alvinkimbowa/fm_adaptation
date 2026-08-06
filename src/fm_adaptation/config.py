@@ -15,6 +15,7 @@ class ExperimentConfig:
     model_name: str
     checkpoint: str | None
     probe_name: str
+    run_name: str
     epochs: int
     min_epochs: int
     early_stopping_patience: int
@@ -44,6 +45,7 @@ class ExperimentConfig:
             model_name=str(model["name"]),
             checkpoint=model.get("checkpoint"),
             probe_name=str(model["probe"]),
+            run_name=str(model.get("run_name", model["probe"])),
             epochs=int(training["epochs"]),
             min_epochs=int(training.get("min_epochs", 1)),
             early_stopping_patience=int(training.get("early_stopping_patience", 0)),
@@ -63,7 +65,7 @@ class ExperimentConfig:
             self.results_dir
             / self.model_name
             / self.train_dataset
-            / self.probe_name
+            / self.run_name
             / f"fold_{self.fold}"
         )
 

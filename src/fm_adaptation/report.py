@@ -11,7 +11,11 @@ import yaml
 def _read_run(run_dir: Path):
     with open(run_dir / "config.yaml") as f:
         cfg = yaml.safe_load(f)
-    return cfg["model"]["name"], cfg["model"]["probe"], cfg["data"]["train_dataset"]
+    return (
+        cfg["model"]["name"],
+        cfg["model"].get("run_name", cfg["model"]["probe"]),
+        cfg["data"]["train_dataset"],
+    )
 
 
 def _read_metrics(path: Path):
