@@ -29,7 +29,8 @@ def _read_metrics(path: Path):
 
 def _mean_sd(values, scale=1.0):
     values = values[np.isfinite(values)] * scale
-    return f"{values.mean():.2f} ± {values.std(ddof=1):.2f}"
+    ddof = 1 if len(values) > 1 else 0
+    return f"{values.mean():.2f} ± {values.std(ddof=ddof):.2f}"
 
 
 def _median_iqr(values, scale=1.0):
@@ -62,8 +63,9 @@ def _render_table(records, datasets, statistic):
                 continue
             parts.append(f"<td>{fmt(metrics['dice'], 100)}</td><td>{fmt(metrics['masd'])}</td>")
             if dataset != trained_on:
-                cross_dice.extend(metrics["dice"])
-                cross_masd.extend(metrics["masd"])
+                reducer = np.mean if statistic == "Mean ± SD" else np.median
+                cross_dice.append(reducer(metrics["dice"]))
+                cross_masd.append(reducer(metrics["masd"]))
         if cross_dice:
             parts.append(
                 f"<td>{fmt(np.asarray(cross_dice), 100)}</td>"
@@ -76,6 +78,52 @@ def _render_table(records, datasets, statistic):
     return "".join(parts)
 
 
+def _write_summary_csv(records, path):
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "model",
+                "adaptation",
+                "trained_on",
+                "fold",
+                "tested_on",
+                "n",
+                "dice_mean",
+                "dice_sd",
+                "dice_median",
+                "dice_q1",
+                "dice_q3",
+                "masd_mean",
+                "masd_sd",
+                "masd_median",
+                "masd_q1",
+                "masd_q3",
+            ]
+        )
+        for (model, adaptation, trained_on, fold), results in sorted(records.items()):
+            for tested_on, metrics in sorted(results.items()):
+                dice, masd = metrics["dice"], metrics["masd"]
+                writer.writerow(
+                    [
+                        model,
+                        adaptation,
+                        trained_on,
+                        fold,
+                        tested_on,
+                        len(dice),
+                        np.mean(dice),
+                        np.std(dice, ddof=1),
+                        np.median(dice),
+                        *np.percentile(dice, [25, 75]),
+                        np.mean(masd),
+                        np.std(masd, ddof=1),
+                        np.median(masd),
+                        *np.percentile(masd, [25, 75]),
+                    ]
+                )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
@@ -83,7 +131,7 @@ def main():
     args = parser.parse_args()
     records = defaultdict(dict)
     datasets = set()
-    for metrics_path in Path(args.results_dir).glob("*/*/*/fold_*/test/*/metrics.csv"):
+    for metrics_path in Path(args.results_dir).glob("*/*/*/fold_*/*/*/metrics.csv"):
         run_dir = metrics_path.parents[2]
         model, probe, trained_on = _read_run(run_dir)
         fold = run_dir.name.removeprefix("fold_")
@@ -103,6 +151,7 @@ def main():
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(f"<!doctype html><meta charset='utf-8'><style>{style}</style>{body}")
+    _write_summary_csv(records, output.with_suffix(".csv"))
     print(f"Wrote {output}")
 
 

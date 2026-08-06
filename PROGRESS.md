@@ -7,3 +7,4 @@
 - Completed fold-0 PE linear-probe training for BUSBRA, KidneyUS, and MMOTU; retained per-epoch loss/Dice histories and best/final probe checkpoints.
 - Baseline cross-dataset analysis identified small-lesion oversegmentation as the main MMOTU failure; selected a minimal nonlinear decoder as one targeted test.
 - Added full PE fine-tuning from the best linear probe with bf16, activation checkpointing, gradient accumulation, separate encoder/probe learning rates, and full best/final checkpoints.
+- Corrected reports to include in-domain validation and macro-average cross-domain dataset statistics; added machine-readable summary CSV output.
