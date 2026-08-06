@@ -14,4 +14,6 @@
 - Split the HTML report into separate BUSBRA, KidneyUS, and MMOTU table sections.
 - Added available nnU-Net runs to the corresponding cross-dataset comparison tables.
 - Grouped report rows by training dataset and highlighted each metric's best method.
+- Added nonlinear-probe-initialized full fine-tuning as a separate `NLP + FT` experiment.
+- Renamed the model identifier, configs, feature cache, and result root from `pe` to `sam3`.
 - Renamed PE report rows to SAM3 and ordered LP, NLP, then LP + FT.

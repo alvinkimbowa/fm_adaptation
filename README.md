@@ -36,6 +36,13 @@ Full fine-tuning starts from the corresponding best linear probe:
 PYTHONPATH=src python -m fm_adaptation.finetune --config configs/sam3_finetune_busbra.yaml
 ```
 
+Full fine-tuning from the best nonlinear probe uses the corresponding nonlinear model
+and writes a separate `nonlinear_finetune` run:
+
+```bash
+PYTHONPATH=src python -m fm_adaptation.finetune --config configs/sam3_nonlinear_finetune_busbra.yaml
+```
+
 Runs are stored under
 `models/{foundation_model}/{training_dataset}/{probe}/fold_{fold}`. Cross-dataset
 predictions and per-case metrics live below each run's `test/{dataset}` directory;

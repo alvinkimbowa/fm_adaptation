@@ -70,13 +70,25 @@ def _config_label(model, adaptation):
 def _report_names(model, adaptation):
     if model == "nnU-Net":
         return model, ""
-    adaptations = {"linear": "LP", "nonlinear": "NLP", "finetune": "LP + FT"}
-    return "SAM3", adaptations[adaptation]
+    models = {"sam3": "SAM3"}
+    adaptations = {
+        "linear": "LP",
+        "nonlinear": "NLP",
+        "finetune": "LP + FT",
+        "nonlinear_finetune": "NLP + FT",
+    }
+    return models[model], adaptations[adaptation]
 
 
 def _experiment_order(item):
     model, adaptation, trained_on, fold = item[0]
-    order = {"linear": 0, "nonlinear": 1, "finetune": 2, "": 3}
+    order = {
+        "linear": 0,
+        "nonlinear": 1,
+        "finetune": 2,
+        "nonlinear_finetune": 3,
+        "": 4,
+    }
     return trained_on, order[adaptation], fold, model
 
 

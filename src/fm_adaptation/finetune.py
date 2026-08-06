@@ -78,15 +78,15 @@ def main():
     model = build_model(
         cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, train_encoder=True
     )
-    linear_checkpoint = (
+    probe_checkpoint = (
         cfg.results_dir
         / cfg.model_name
         / cfg.train_dataset
-        / "linear"
+        / finetuning["initial_probe"]
         / f"fold_{cfg.fold}"
         / "best.pt"
     )
-    state = torch.load(linear_checkpoint, map_location="cpu", weights_only=True)
+    state = torch.load(probe_checkpoint, map_location="cpu", weights_only=True)
     model.probe.load_state_dict(state["probe"])
     model.to(device)
     train_loader = _loader(cfg, model.encoder.preprocess, "train", True)
