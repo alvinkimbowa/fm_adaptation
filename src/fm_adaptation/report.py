@@ -27,20 +27,57 @@ def _read_metrics(path: Path):
     }
 
 
+def _add_nnunet_records(records, results_dir):
+    metrics_paths = sorted(
+        Path(results_dir).glob("nnunet/Dataset*/*/fold_*/test/Dataset*/metrics.csv")
+    )
+    if not metrics_paths:
+        raise RuntimeError(f"No nnU-Net metrics found under {results_dir}")
+    for metrics_path in metrics_paths:
+        fold_dir = metrics_path.parents[2]
+        trained_on = fold_dir.parents[1].name
+        fold = fold_dir.name.removeprefix("fold_")
+        tested_on = metrics_path.parent.name
+        records[("nnU-Net", "", trained_on, fold)][tested_on] = _read_metrics(
+            metrics_path
+        )
+
+
 def _mean_sd(values, scale=1.0):
-    values = values[np.isfinite(values)] * scale
+    values = values[~np.isnan(values)] * scale
+    if np.isinf(values).any():
+        return "∞"
     ddof = 1 if len(values) > 1 else 0
     return f"{values.mean():.2f} ± {values.std(ddof=ddof):.2f}"
 
 
 def _median_iqr(values, scale=1.0):
-    values = values[np.isfinite(values)] * scale
+    values = values[~np.isnan(values)] * scale
     q1, median, q3 = np.percentile(values, [25, 50, 75])
-    return f"{median:.2f} ({q1:.2f}–{q3:.2f})"
+    fmt = lambda value: "∞" if np.isinf(value) else f"{value:.2f}"
+    return f"{fmt(median)} ({fmt(q1)}–{fmt(q3)})"
 
 
 def _dataset_family(dataset):
     return dataset.split("_", maxsplit=2)[1]
+
+
+def _config_label(model, adaptation):
+    report_model, report_adaptation = _report_names(model, adaptation)
+    return " + ".join(value for value in (report_model, report_adaptation) if value)
+
+
+def _report_names(model, adaptation):
+    if model == "nnU-Net":
+        return model, ""
+    adaptations = {"linear": "LP", "nonlinear": "NLP", "finetune": "LP + FT"}
+    return "SAM3", adaptations[adaptation]
+
+
+def _experiment_order(item):
+    model, adaptation, trained_on, fold = item[0]
+    order = {"linear": 0, "nonlinear": 1, "finetune": 2, "": 3}
+    return order[adaptation], trained_on, fold, model
 
 
 def _render_table(records, datasets, statistic):
@@ -53,10 +90,11 @@ def _render_table(records, datasets, statistic):
     parts.append("<th colspan='2'>Cross-dataset average</th></tr><tr>")
     parts.extend("<th>Dice ↑</th><th>MASD (px) ↓</th>" for _ in range(len(datasets) + 1))
     parts.append("</tr></thead><tbody>")
-    for key, results in sorted(records.items()):
+    for key, results in sorted(records.items(), key=_experiment_order):
         model, probe, trained_on, fold = key
+        config = _config_label(model, probe)
         parts.append(
-            f"<tr><td>{html.escape(model.upper() + ' + ' + probe.upper())}</td>"
+            f"<tr><td>{html.escape(config)}</td>"
             f"<td>{html.escape(trained_on)}</td><td>{html.escape(fold)}</td>"
         )
         cross_dice, cross_masd = [], []
@@ -105,13 +143,15 @@ def _write_summary_csv(records, path):
                 "masd_q3",
             ]
         )
-        for (model, adaptation, trained_on, fold), results in sorted(records.items()):
+        for key, results in sorted(records.items(), key=_experiment_order):
+            model, adaptation, trained_on, fold = key
+            report_model, report_adaptation = _report_names(model, adaptation)
             for tested_on, metrics in sorted(results.items()):
                 dice, masd = metrics["dice"], metrics["masd"]
                 writer.writerow(
                     [
-                        model,
-                        adaptation,
+                        report_model,
+                        report_adaptation,
                         trained_on,
                         fold,
                         tested_on,
@@ -121,7 +161,7 @@ def _write_summary_csv(records, path):
                         np.median(dice),
                         *np.percentile(dice, [25, 75]),
                         np.mean(masd),
-                        np.std(masd, ddof=1),
+                        np.inf if np.isinf(masd).any() else np.std(masd, ddof=1),
                         np.median(masd),
                         *np.percentile(masd, [25, 75]),
                     ]
@@ -131,6 +171,7 @@ def _write_summary_csv(records, path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
+    parser.add_argument("--nnunet-results-dir")
     parser.add_argument("--output", default="models/cross_dataset_report.html")
     args = parser.parse_args()
     records = defaultdict(dict)
@@ -140,6 +181,8 @@ def main():
         fold = run_dir.name.removeprefix("fold_")
         tested_on = metrics_path.parent.name
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
+    if args.nnunet_results_dir:
+        _add_nnunet_records(records, args.nnunet_results_dir)
     if not records:
         raise RuntimeError(f"No cross-dataset metrics found under {args.results_dir}")
     style = """

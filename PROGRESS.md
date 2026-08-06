@@ -12,3 +12,5 @@
 - Completed all LP, nonlinear, and full-fine-tuning runs plus cross-dataset inference. Full fine-tuning achieved cross-domain Dice 0.795 BUSBRA macro, 0.931 KidneyUS, and 0.744 MMOTU CEUS.
 - Final tables are in `models/cross_dataset_report.html` and `.csv`; all nine runs passed checkpoint/history audits.
 - Split the HTML report into separate BUSBRA, KidneyUS, and MMOTU table sections.
+- Added available nnU-Net runs to the corresponding cross-dataset comparison tables.
+- Renamed PE report rows to SAM3 and ordered LP, NLP, then LP + FT.

@@ -25,7 +25,9 @@ Or run stages separately:
 ```bash
 PYTHONPATH=src python -m fm_adaptation.training --config configs/pe_linear.yaml
 PYTHONPATH=src python -m fm_adaptation.predict --config configs/pe_linear.yaml
-PYTHONPATH=src python -m fm_adaptation.report --results-dir models
+PYTHONPATH=src python -m fm_adaptation.report \
+    --results-dir models \
+    --nnunet-results-dir ../nnUNet_fork/data/nnUNet_results
 ```
 
 Full PE fine-tuning starts from the corresponding best linear probe:
@@ -37,4 +39,6 @@ PYTHONPATH=src python -m fm_adaptation.finetune --config configs/pe_finetune_bus
 Runs are stored under
 `models/{foundation_model}/{training_dataset}/{probe}/fold_{fold}`. Cross-dataset
 predictions and per-case metrics live below each run's `test/{dataset}` directory;
-the report command creates `models/cross_dataset_report.html`.
+the report command creates `models/cross_dataset_report.html`. Pass an nnU-Net
+results directory to include its available `test/*/metrics.csv` results as
+comparison rows in each dataset-family table.
