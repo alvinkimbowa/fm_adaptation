@@ -1,0 +1,26 @@
+data:
+  raw_data_dir: ../monounetv2/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset080_BUSBRA_GE_Logiq_5
+  test_datasets:
+    - Dataset080_BUSBRA_GE_Logiq_5
+    - Dataset081_BUSBRA_GE_Logiq_7
+    - Dataset082_BUSBRA_Toshiba_Aplio_300
+    - Dataset083_BUSBRA_U_Systems
+  test_split: Tr
+  fold: 0
+
+model:
+  name: pe
+  probe: nonlinear
+  checkpoint: null
+
+training:
+  epochs: 50
+  batch_size: 1
+  num_workers: 4
+  learning_rate: 0.001
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
+
