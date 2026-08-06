@@ -8,3 +8,4 @@
 - Baseline cross-dataset analysis identified small-lesion oversegmentation as the main MMOTU failure; selected a minimal nonlinear decoder as one targeted test.
 - Added full PE fine-tuning from the best linear probe with bf16, activation checkpointing, gradient accumulation, separate encoder/probe learning rates, and full best/final checkpoints.
 - Corrected reports to include in-domain validation and macro-average cross-domain dataset statistics; added machine-readable summary CSV output.
+- MMOTU nonlinear probe improved in-domain Dice 0.726→0.795 and CEUS Dice 0.653→0.686 while reducing MASD; propagated the unchanged decoder test to BUSBRA and KidneyUS.
