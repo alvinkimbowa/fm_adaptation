@@ -13,4 +13,5 @@
 - Final tables are in `models/cross_dataset_report.html` and `.csv`; all nine runs passed checkpoint/history audits.
 - Split the HTML report into separate BUSBRA, KidneyUS, and MMOTU table sections.
 - Added available nnU-Net runs to the corresponding cross-dataset comparison tables.
+- Grouped report rows by training dataset and highlighted each metric's best method.
 - Renamed PE report rows to SAM3 and ordered LP, NLP, then LP + FT.

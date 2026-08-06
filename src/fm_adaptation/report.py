@@ -77,11 +77,44 @@ def _report_names(model, adaptation):
 def _experiment_order(item):
     model, adaptation, trained_on, fold = item[0]
     order = {"linear": 0, "nonlinear": 1, "finetune": 2, "": 3}
-    return order[adaptation], trained_on, fold, model
+    return trained_on, order[adaptation], fold, model
+
+
+def _best_values(records, datasets, reducer):
+    best = {}
+    for (_, _, trained_on, _), results in records.items():
+        cross = {"dice": [], "masd": []}
+        for dataset in datasets:
+            metrics = results.get(dataset)
+            if metrics is None:
+                continue
+            for metric in ("dice", "masd"):
+                value = reducer(metrics[metric])
+                key = trained_on, dataset, metric
+                choose = max if metric == "dice" else min
+                best[key] = choose(best.get(key, value), value)
+                if dataset != trained_on:
+                    cross[metric].append(value)
+        for metric, values in cross.items():
+            if not values:
+                continue
+            value = reducer(values)
+            key = trained_on, "cross", metric
+            choose = max if metric == "dice" else min
+            best[key] = choose(best.get(key, value), value)
+    return best
+
+
+def _metric_cell(text, value, best):
+    if np.isclose(value, best, equal_nan=False):
+        text = f"<strong>{text}</strong>"
+    return f"<td>{text}</td>"
 
 
 def _render_table(records, datasets, statistic):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
+    reducer = np.mean if statistic == "Mean ± SD" else np.median
+    best = _best_values(records, datasets, reducer)
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'>{heading}</th>")
@@ -90,28 +123,57 @@ def _render_table(records, datasets, statistic):
     parts.append("<th colspan='2'>Cross-dataset average</th></tr><tr>")
     parts.extend("<th>Dice ↑</th><th>MASD (px) ↓</th>" for _ in range(len(datasets) + 1))
     parts.append("</tr></thead><tbody>")
+    previous_trained_on = None
     for key, results in sorted(records.items(), key=_experiment_order):
         model, probe, trained_on, fold = key
         config = _config_label(model, probe)
+        row_class = " class='group-start'" if previous_trained_on not in (None, trained_on) else ""
         parts.append(
-            f"<tr><td>{html.escape(config)}</td>"
+            f"<tr{row_class}><td>{html.escape(config)}</td>"
             f"<td>{html.escape(trained_on)}</td><td>{html.escape(fold)}</td>"
         )
+        previous_trained_on = trained_on
         cross_dice, cross_masd = [], []
         for dataset in datasets:
             metrics = results.get(dataset)
             if metrics is None:
                 parts.append("<td>—</td><td>—</td>")
                 continue
-            parts.append(f"<td>{fmt(metrics['dice'], 100)}</td><td>{fmt(metrics['masd'])}</td>")
-            if dataset != trained_on:
-                reducer = np.mean if statistic == "Mean ± SD" else np.median
-                cross_dice.append(reducer(metrics["dice"]))
-                cross_masd.append(reducer(metrics["masd"]))
-        if cross_dice:
+            dice_value = reducer(metrics["dice"])
+            masd_value = reducer(metrics["masd"])
             parts.append(
-                f"<td>{fmt(np.asarray(cross_dice), 100)}</td>"
-                f"<td>{fmt(np.asarray(cross_masd))}</td>"
+                _metric_cell(
+                    fmt(metrics["dice"], 100),
+                    dice_value,
+                    best[(trained_on, dataset, "dice")],
+                )
+            )
+            parts.append(
+                _metric_cell(
+                    fmt(metrics["masd"]),
+                    masd_value,
+                    best[(trained_on, dataset, "masd")],
+                )
+            )
+            if dataset != trained_on:
+                cross_dice.append(dice_value)
+                cross_masd.append(masd_value)
+        if cross_dice:
+            cross_dice_value = reducer(cross_dice)
+            cross_masd_value = reducer(cross_masd)
+            parts.append(
+                _metric_cell(
+                    fmt(np.asarray(cross_dice), 100),
+                    cross_dice_value,
+                    best[(trained_on, "cross", "dice")],
+                )
+            )
+            parts.append(
+                _metric_cell(
+                    fmt(np.asarray(cross_masd)),
+                    cross_masd_value,
+                    best[(trained_on, "cross", "masd")],
+                )
             )
         else:
             parts.append("<td>—</td><td>—</td>")
@@ -188,6 +250,7 @@ def main():
     style = """
     body{background:#111;color:#bbb;font-family:system-ui;margin:16px}table{border-collapse:collapse;width:100%}
     th,td{padding:7px 10px;text-align:right}th{background:#292929}td{background:#191919;border-bottom:1px solid #222}
+    tr.group-start td{border-top:3px solid #777}strong{color:#eee;font-weight:700}
     th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
