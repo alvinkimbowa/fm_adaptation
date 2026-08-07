@@ -67,29 +67,40 @@ def _config_label(model, adaptation):
     return " + ".join(value for value in (report_model, report_adaptation) if value)
 
 
+ADAPTATIONS = {
+    "linear": ("LP", 0),
+    "nonlinear": ("NLP", 1),
+    "linear_finetune": ("LP + FT", 2),
+    "nonlinear_finetune": ("NLP + FT", 3),
+    "": ("", 4),
+}
+
+
+def _split_adaptation(adaptation):
+    """Split a run name into its known base and any sweep suffix (e.g. `_wd1.0`)."""
+    for base in sorted(ADAPTATIONS, key=len, reverse=True):
+        if adaptation == base:
+            return base, ""
+        if base and adaptation.startswith(f"{base}_"):
+            return base, adaptation[len(base) + 1 :]
+    return "", adaptation
+
+
 def _report_names(model, adaptation):
     if model == "nnU-Net":
         return model, ""
     models = {"sam3": "SAM3"}
-    adaptations = {
-        "linear": "LP",
-        "nonlinear": "NLP",
-        "linear_finetune": "LP + FT",
-        "nonlinear_finetune": "NLP + FT",
-    }
-    return models[model], adaptations[adaptation]
+    base, suffix = _split_adaptation(adaptation)
+    label = ADAPTATIONS[base][0]
+    if suffix:
+        label = f"{label} ({suffix})" if label else suffix
+    return models[model], label
 
 
 def _experiment_order(item):
     model, adaptation, trained_on, fold = item[0]
-    order = {
-        "linear": 0,
-        "nonlinear": 1,
-        "linear_finetune": 2,
-        "nonlinear_finetune": 3,
-        "": 4,
-    }
-    return trained_on, order[adaptation], fold, model
+    base, suffix = _split_adaptation(adaptation)
+    return trained_on, ADAPTATIONS[base][1], suffix, fold, model
 
 
 def _best_values(records, datasets, reducer):
