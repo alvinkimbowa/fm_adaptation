@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import cv2
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from .config import ExperimentConfig
 from .data import NnUNet2DDataset, collate_cases, num_classes
@@ -50,8 +51,9 @@ def main():
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
         rows = []
+        progress = tqdm(loader, desc=f"{'validation' if same_dataset else 'test'} {dataset_name}")
         with torch.no_grad():
-            for images, masks, metadata in loader:
+            for images, masks, metadata in progress:
                 with amp:
                     logits = model(images.to(device))
                 predictions = logits.argmax(1).cpu()
