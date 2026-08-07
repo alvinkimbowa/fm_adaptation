@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
 config="${1:-configs/sam3_linear.yaml}"
 finetune=1
 predict=1
 report=1
 overwrite=false
+gpu_id=0
 
+export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 export PYTHONPATH="${PYTHONPATH:-}:src"
+export CUDA_VISIBLE_DEVICES="$gpu_id"
 
 if [[ "$finetune" -eq 1 ]]; then
     python -m fm_adaptation.finetune --config "$config"

@@ -6,8 +6,11 @@ train=1
 predict=1
 report=1
 overwrite=false
+gpu_id=0
 
 export PYTHONPATH="${PYTHONPATH:-}:src"
+export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
+export CUDA_VISIBLE_DEVICES="$gpu_id"
 
 if [[ "$train" -eq 1 ]]; then
     python -m fm_adaptation.training --config "$config"
