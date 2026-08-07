@@ -2,6 +2,7 @@ import argparse
 import csv
 import time
 from collections import defaultdict
+from fnmatch import fnmatch
 from pathlib import Path
 
 import matplotlib
@@ -24,11 +25,25 @@ def _read_history(path: Path):
     return history
 
 
-def _collect(results_dir: Path):
+def _matches(name, patterns):
+    """Empty means keep everything; entries match exactly, as a glob, or as a `_suffix` tag."""
+    if not patterns:
+        return True
+    return any(
+        name == pattern or fnmatch(name, pattern) or name.endswith(f"_{pattern}")
+        for pattern in patterns
+    )
+
+
+def _collect(results_dir: Path, datasets, experiments):
     runs = defaultdict(dict)
     for path in sorted(results_dir.glob("*/Dataset*/*/fold_*/history.csv")):
         fold_dir = path.parent
         dataset_dir = fold_dir.parents[1]
+        if not _matches(dataset_dir.name, datasets):
+            continue
+        if not _matches(fold_dir.parent.name, experiments):
+            continue
         history = _read_history(path)
         if history.get("epoch"):
             label = f"{fold_dir.parent.name}/{fold_dir.name}"
@@ -57,9 +72,9 @@ def _plot(curves, title, out_path):
     plt.close(fig)
 
 
-def _render(results_dir: Path):
+def _render(results_dir: Path, datasets, experiments):
     written = []
-    for dataset_dir, dataset_runs in sorted(_collect(results_dir).items()):
+    for dataset_dir, dataset_runs in sorted(_collect(results_dir, datasets, experiments).items()):
         curves = []
         for label, (history, fold_dir) in sorted(dataset_runs.items()):
             out_path = fold_dir / "history.png"
@@ -75,13 +90,15 @@ def _render(results_dir: Path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
+    parser.add_argument("--datasets", nargs="*", default=[])
+    parser.add_argument("--experiments", nargs="*", default=[])
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--interval", type=float, default=30.0)
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
     while True:
-        for out_path, epochs in _render(results_dir):
+        for out_path, epochs in _render(results_dir, args.datasets, args.experiments):
             print(f"wrote {out_path} ({epochs} epochs)")
         if not args.watch:
             break
