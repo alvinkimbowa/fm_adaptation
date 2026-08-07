@@ -7,6 +7,7 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from .config import ExperimentConfig
 from .data import NnUNet2DDataset, collate_cases, num_classes
@@ -28,14 +29,15 @@ def _loader(cfg, preprocess, subset, shuffle):
     )
 
 
-def _run_epoch(model, loader, loss_fn, device, optimizer=None, accumulation_steps=1):
+def _run_epoch(model, loader, loss_fn, device, optimizer=None, accumulation_steps=1, desc=""):
     training = optimizer is not None
     model.train(training)
     losses, dices = [], []
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
     if training:
         optimizer.zero_grad(set_to_none=True)
-    for step, (images, masks, _) in enumerate(loader, start=1):
+    progress = tqdm(loader, desc=desc, leave=False)
+    for step, (images, masks, _) in enumerate(progress, start=1):
         images, masks = images.to(device), masks.to(device)
         with torch.set_grad_enabled(training), amp:
             logits = model(images)
@@ -47,6 +49,7 @@ def _run_epoch(model, loader, loss_fn, device, optimizer=None, accumulation_step
                 optimizer.zero_grad(set_to_none=True)
         losses.append(loss.item())
         dices.append(mean_foreground_dice(logits.detach(), masks))
+        progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
     return float(np.mean(losses)), float(np.nanmean(dices))
 
 
@@ -113,9 +116,17 @@ def main():
         writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice"])
         for epoch in range(1, cfg.epochs + 1):
             train_loss, train_dice = _run_epoch(
-                model, train_loader, loss_fn, device, optimizer, accumulation_steps
+                model,
+                train_loader,
+                loss_fn,
+                device,
+                optimizer,
+                accumulation_steps,
+                desc=f"epoch {epoch}/{cfg.epochs} train",
             )
-            val_loss, val_dice = _run_epoch(model, val_loader, loss_fn, device)
+            val_loss, val_dice = _run_epoch(
+                model, val_loader, loss_fn, device, desc=f"epoch {epoch}/{cfg.epochs} val"
+            )
             writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice])
             history_file.flush()
             print(

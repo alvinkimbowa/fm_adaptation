@@ -7,6 +7,7 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from .config import ExperimentConfig
 from .data import CachedFeatureDataset, NnUNet2DDataset, collate_cases, num_classes
@@ -36,9 +37,9 @@ def _cache_features(cfg, encoder, dataset, device):
     )
     encoder.to(device).eval()
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
-    completed = 0
     with torch.no_grad():
-        for images, masks, metadata in loader:
+        progress = tqdm(loader, desc="caching features", total=len(loader))
+        for images, masks, metadata in progress:
             with amp:
                 features = encoder(images.to(device))
             for feature, mask, meta in zip(features, masks, metadata):
@@ -46,8 +47,6 @@ def _cache_features(cfg, encoder, dataset, device):
                     {"feature": feature.half().cpu(), "mask": mask.to(torch.int8)},
                     cfg.feature_cache_dir / f"{meta['case_id']}.pt",
                 )
-            completed += len(images)
-            print(f"cached_features={completed}/{len(missing)}")
     encoder.cpu()
 
 
@@ -63,12 +62,13 @@ def _loader(cfg, raw_dataset, shuffle):
     )
 
 
-def _run_epoch(probe, loader, loss_fn, device, optimizer=None):
+def _run_epoch(probe, loader, loss_fn, device, optimizer=None, desc=""):
     training = optimizer is not None
     probe.train(training)
     losses, dices = [], []
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
-    for images, masks, _ in loader:
+    progress = tqdm(loader, desc=desc, leave=False)
+    for images, masks, _ in progress:
         images, masks = images.to(device), masks.to(device)
         if training:
             optimizer.zero_grad(set_to_none=True)
@@ -80,6 +80,7 @@ def _run_epoch(probe, loader, loss_fn, device, optimizer=None):
             optimizer.step()
         losses.append(loss.item())
         dices.append(mean_foreground_dice(logits.detach(), masks))
+        progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
     return float(np.mean(losses)), float(np.nanmean(dices))
 
 
@@ -118,12 +119,21 @@ def main():
         writer = csv.writer(history_file)
         writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice"])
         for epoch in range(1, cfg.epochs + 1):
-            train_loss, train_dice = _run_epoch(probe, train_loader, loss_fn, device, optimizer)
+            train_loss, train_dice = _run_epoch(
+                probe,
+                train_loader,
+                loss_fn,
+                device,
+                optimizer,
+                desc=f"epoch {epoch}/{cfg.epochs} train",
+            )
             if val_loader is None:
                 val_loss, val_dice = float("nan"), float("nan")
             else:
                 with torch.no_grad():
-                    val_loss, val_dice = _run_epoch(probe, val_loader, loss_fn, device)
+                    val_loss, val_dice = _run_epoch(
+                        probe, val_loader, loss_fn, device, desc=f"epoch {epoch}/{cfg.epochs} val"
+                    )
             writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice])
             history_file.flush()
             print(
