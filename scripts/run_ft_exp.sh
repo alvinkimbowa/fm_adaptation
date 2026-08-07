@@ -6,6 +6,7 @@ config="${1:-configs/sam3_linear.yaml}"
 finetune=1
 predict=1
 report=1
+checkpoint=final
 overwrite=false
 gpu_id=0
 
@@ -18,7 +19,7 @@ if [[ "$finetune" -eq 1 ]]; then
 fi
 
 if [[ "$predict" -eq 1 ]]; then
-    predict_args=(--config "$config")
+    predict_args=(--config "$config" --checkpoint "$checkpoint")
     if [[ "$overwrite" == true ]]; then
         predict_args+=(--overwrite)
     fi

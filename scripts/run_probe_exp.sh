@@ -5,7 +5,8 @@ config="${1:-configs/sam3_linear.yaml}"
 train=1
 predict=1
 report=1
-overwrite=false
+checkpoint=final
+overwrite=true
 gpu_id=0
 
 export PYTHONPATH="${PYTHONPATH:-}:src"
@@ -17,7 +18,7 @@ if [[ "$train" -eq 1 ]]; then
 fi
 
 if [[ "$predict" -eq 1 ]]; then
-    predict_args=(--config "$config")
+    predict_args=(--config "$config" --checkpoint "$checkpoint")
     if [[ "$overwrite" == true ]]; then
         predict_args+=(--overwrite)
     fi
