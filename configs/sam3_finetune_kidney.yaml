@@ -11,7 +11,7 @@ data:
 model:
   name: sam3
   probe: linear
-  run_name: finetune
+  run_name: linear_finetune
   checkpoint: null
 
 training:

@@ -30,7 +30,8 @@ PYTHONPATH=src python -m fm_adaptation.report \
     --nnunet-results-dir ../nnUNet_fork/data/nnUNet_results
 ```
 
-Full fine-tuning starts from the corresponding best linear probe:
+Full fine-tuning starts from the corresponding best linear probe and writes a
+`linear_finetune` run:
 
 ```bash
 PYTHONPATH=src python -m fm_adaptation.finetune --config configs/sam3_finetune_busbra.yaml

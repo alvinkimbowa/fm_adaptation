@@ -74,7 +74,7 @@ def _report_names(model, adaptation):
     adaptations = {
         "linear": "LP",
         "nonlinear": "NLP",
-        "finetune": "LP + FT",
+        "linear_finetune": "LP + FT",
         "nonlinear_finetune": "NLP + FT",
     }
     return models[model], adaptations[adaptation]
@@ -85,7 +85,7 @@ def _experiment_order(item):
     order = {
         "linear": 0,
         "nonlinear": 1,
-        "finetune": 2,
+        "linear_finetune": 2,
         "nonlinear_finetune": 3,
         "": 4,
     }
