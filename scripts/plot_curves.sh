@@ -6,6 +6,8 @@ export PYTHONPATH="${PYTHONPATH:-}:src"
 
 datasets=(
     Dataset080_BUSBRA_GE_Logiq_5
+    Dataset082_BUSBRA_Toshiba_Aplio_300
+    Dataset083_BUSBRA_U_Systems
     Dataset084_KidneyUS_Philips
     Dataset086_MMOTU_2D
 )
