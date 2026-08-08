@@ -1,7 +1,8 @@
 import argparse
 import csv
 import html
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -18,11 +19,11 @@ def _read_run(run_dir: Path):
     )
 
 
-def _read_metrics(path: Path):
+def _read_metrics(path: Path, dice_scale=1.0):
     with open(path, newline="") as f:
         rows = list(csv.DictReader(f))
     return {
-        "dice": np.array([float(row["dice"]) for row in rows]),
+        "dice": np.array([float(row["dice"]) for row in rows]) * dice_scale,
         "masd": np.array([float(row["masd"]) for row in rows]),
     }
 
@@ -43,23 +44,90 @@ def _add_nnunet_records(records, results_dir):
         )
 
 
+MONOUNET_NAMES = {
+    "MonoUNetE123V2GatedDA": "MonoUNet-t",
+    "MonoUNetE123V2GatedS8DA": "MonoUNet-B",
+    "MonoUNetE123V2GatedS32DA": "MonoUNet-L",
+}
+
+
+def _add_monounet_records(records, results_dir, model="MonoUNet"):
+    """MonoUNet stores per-case rows as `test/image_wise_..._<Dataset>.csv`, dice in percent."""
+    results_dir = Path(results_dir)
+    prefix = "image_wise_results_largest_component_"
+    metrics_paths = sorted(results_dir.glob(f"Dataset*/fold_*/test/{prefix}Dataset*.csv"))
+    if not metrics_paths:
+        raise RuntimeError(f"No MonoUNet metrics found under {results_dir}")
+    for metrics_path in metrics_paths:
+        fold_dir = metrics_path.parents[1]
+        trained_on = fold_dir.parent.name
+        fold = fold_dir.name.removeprefix("fold_")
+        tested_on = metrics_path.stem.removeprefix(prefix)
+        records[(model, "", trained_on, fold)][tested_on] = _read_metrics(
+            metrics_path, dice_scale=0.01
+        )
+
+
+def _pool_folds(records, folds):
+    """Keeps the requested folds and pools their per-case metrics into a single row."""
+    pooled = defaultdict(dict)
+    label = ",".join(folds)
+    for (model, adaptation, trained_on, fold), results in records.items():
+        if fold not in folds:
+            continue
+        target = pooled[(model, adaptation, trained_on, label)]
+        for tested_on, metrics in results.items():
+            if tested_on not in target:
+                target[tested_on] = metrics
+                continue
+            target[tested_on] = {
+                name: np.concatenate([target[tested_on][name], values])
+                for name, values in metrics.items()
+            }
+    return pooled
+
+
+def _finite(values, scale=1.0):
+    """Splits off the nan/inf cases (empty prediction, missing surface) from the usable ones."""
+    values = np.asarray(values, dtype=float) * scale
+    finite = values[np.isfinite(values)]
+    return finite, len(values) - len(finite)
+
+
+def _reduce(values, reducer):
+    finite, _ = _finite(values)
+    return reducer(finite) if len(finite) else float("nan")
+
+
+def _annotate(text, undefined):
+    if not undefined:
+        return text
+    return f"{text}<div class='undef'>({undefined} undef.)</div>"
+
+
 def _mean_sd(values, scale=1.0):
-    values = values[~np.isnan(values)] * scale
-    if np.isinf(values).any():
-        return "∞"
-    ddof = 1 if len(values) > 1 else 0
-    return f"{values.mean():.2f} ± {values.std(ddof=ddof):.2f}"
+    finite, undefined = _finite(values, scale)
+    if not len(finite):
+        return _annotate("—", undefined)
+    ddof = 1 if len(finite) > 1 else 0
+    return _annotate(f"{finite.mean():.2f} ± {finite.std(ddof=ddof):.2f}", undefined)
 
 
 def _median_iqr(values, scale=1.0):
-    values = values[~np.isnan(values)] * scale
-    q1, median, q3 = np.percentile(values, [25, 50, 75])
-    fmt = lambda value: "∞" if np.isinf(value) else f"{value:.2f}"
-    return f"{fmt(median)} ({fmt(q1)}–{fmt(q3)})"
+    finite, undefined = _finite(values, scale)
+    if not len(finite):
+        return _annotate("—", undefined)
+    q1, median, q3 = np.percentile(finite, [25, 50, 75])
+    return _annotate(f"{median:.2f} ({q1:.2f}–{q3:.2f})", undefined)
 
 
 def _dataset_family(dataset):
     return dataset.split("_", maxsplit=2)[1]
+
+
+def _dataset_label(dataset):
+    """Drops the `Dataset0xx_` prefix for display."""
+    return re.sub(r"^Dataset\d+_", "", dataset)
 
 
 def _config_label(model, adaptation):
@@ -76,6 +144,10 @@ ADAPTATIONS = {
 }
 
 
+# Adaptations shown in the main tables; the rest go to the ablation report.
+MAIN_ADAPTATIONS = {"linear", "linear_finetune", ""}
+
+
 def _split_adaptation(adaptation):
     """Split a run name into its known base and any sweep suffix (e.g. `_wd1.0`)."""
     for base in sorted(ADAPTATIONS, key=len, reverse=True):
@@ -87,7 +159,7 @@ def _split_adaptation(adaptation):
 
 
 def _report_names(model, adaptation):
-    if model == "nnU-Net":
+    if not adaptation:
         return model, ""
     models = {"sam3": "SAM3"}
     base, suffix = _split_adaptation(adaptation)
@@ -97,54 +169,100 @@ def _report_names(model, adaptation):
     return models[model], label
 
 
+MODEL_ORDER = {"nnU-Net": 0, "MonoUNet-L": 1, "MonoUNet-B": 2, "MonoUNet-t": 3}
+
+
 def _experiment_order(item):
     model, adaptation, trained_on, fold = item[0]
     base, suffix = _split_adaptation(adaptation)
-    return trained_on, ADAPTATIONS[base][1], suffix, fold, model
+    return (
+        trained_on,
+        ADAPTATIONS[base][1],
+        suffix,
+        fold,
+        MODEL_ORDER.get(model, len(MODEL_ORDER)),
+        model,
+    )
 
 
 def _best_values(records, datasets, reducer):
-    best = {}
+    """Maps each column of a trained-on group to its (best, second best) values."""
+    seen = defaultdict(list)
+    rows_per_group = Counter(trained_on for _, _, trained_on, _ in records)
     for (_, _, trained_on, _), results in records.items():
+        if rows_per_group[trained_on] < 2:
+            continue  # Nothing to compare against, so nothing is "best".
         cross = {"dice": [], "masd": []}
         for dataset in datasets:
             metrics = results.get(dataset)
             if metrics is None:
                 continue
             for metric in ("dice", "masd"):
-                value = reducer(metrics[metric])
-                key = trained_on, dataset, metric
-                choose = max if metric == "dice" else min
-                best[key] = choose(best.get(key, value), value)
+                value = _reduce(metrics[metric], reducer)
+                if np.isnan(value):
+                    continue
+                seen[(trained_on, dataset, metric)].append(value)
                 if dataset != trained_on:
                     cross[metric].append(value)
         for metric, values in cross.items():
             if not values:
                 continue
-            value = reducer(values)
-            key = trained_on, "cross", metric
-            choose = max if metric == "dice" else min
-            best[key] = choose(best.get(key, value), value)
-    return best
+            value = _reduce(values, reducer)
+            if not np.isnan(value):
+                seen[(trained_on, "cross", metric)].append(value)
+    ranked = {}
+    for key, values in seen.items():
+        ordered = sorted(set(values), reverse=key[2] == "dice")
+        ranked[key] = (ordered[0], ordered[1] if len(ordered) > 1 else None)
+    return ranked
 
 
-def _metric_cell(text, value, best):
-    if np.isclose(value, best, equal_nan=False):
-        text = f"<strong>{text}</strong>"
-    return f"<td>{text}</td>"
+def _metric_cell(text, value, ranking, separator=False):
+    # `ranking` is None for groups with a single row, where there is nothing to win against.
+    best, second = ranking if ranking else (None, None)
+    tag = ""
+    if best is not None and np.isclose(value, best, equal_nan=False):
+        tag = "strong"
+    elif second is not None and np.isclose(value, second, equal_nan=False):
+        tag = "u"
+    if tag:
+        head, marker, tail = text.partition("<div")  # Mark the value, not the undef. note.
+        text = f"<{tag}>{head}</{tag}>{marker}{tail}"
+    return f"<td{_sep(separator)}>{text}</td>"
+
+
+def _sep(separator):
+    """Marks the last column of a table section (setup | per-dataset results | average)."""
+    return " class='sep'" if separator else ""
 
 
 def _render_table(records, datasets, statistic):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
     best = _best_values(records, datasets, reducer)
+    # Averaging one external dataset just repeats its column, so only show it when there are more.
+    show_average = (
+        max(
+            (
+                sum(1 for dataset in datasets if dataset != trained_on and dataset in results)
+                for (_, _, trained_on, _), results in records.items()
+            ),
+            default=0,
+        )
+        > 1
+    )
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Trained on", "Fold"):
-        parts.append(f"<th rowspan='2'>{heading}</th>")
-    for dataset in datasets:
-        parts.append(f"<th colspan='2'>{html.escape(dataset)}</th>")
-    parts.append("<th colspan='2'>Cross-dataset average</th></tr><tr>")
-    parts.extend("<th>Dice ↑</th><th>MASD (px) ↓</th>" for _ in range(len(datasets) + 1))
+        parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
+    for index, dataset in enumerate(datasets):
+        last = index == len(datasets) - 1 and show_average
+        parts.append(f"<th colspan='2'{_sep(last)}>{html.escape(_dataset_label(dataset))}</th>")
+    if show_average:
+        parts.append("<th colspan='2'>Cross-dataset average</th>")
+    parts.append("</tr><tr>")
+    for index in range(len(datasets) + show_average):
+        last = index == len(datasets) - 1 and show_average
+        parts.append(f"<th>Dice ↑</th><th{_sep(last)}>MASD (px) ↓</th>")
     parts.append("</tr></thead><tbody>")
     previous_trained_on = None
     for key, results in sorted(records.items(), key=_experiment_order):
@@ -153,49 +271,54 @@ def _render_table(records, datasets, statistic):
         row_class = " class='group-start'" if previous_trained_on not in (None, trained_on) else ""
         parts.append(
             f"<tr{row_class}><td>{html.escape(config)}</td>"
-            f"<td>{html.escape(trained_on)}</td><td>{html.escape(fold)}</td>"
+            f"<td>{html.escape(_dataset_label(trained_on))}</td>"
+            f"<td class='sep'>{html.escape(fold)}</td>"
         )
         previous_trained_on = trained_on
         cross_dice, cross_masd = [], []
-        for dataset in datasets:
+        for index, dataset in enumerate(datasets):
+            last = index == len(datasets) - 1 and show_average
             metrics = results.get(dataset)
             if metrics is None:
-                parts.append("<td>—</td><td>—</td>")
+                parts.append(f"<td>—</td><td{_sep(last)}>—</td>")
                 continue
-            dice_value = reducer(metrics["dice"])
-            masd_value = reducer(metrics["masd"])
+            dice_value = _reduce(metrics["dice"], reducer)
+            masd_value = _reduce(metrics["masd"], reducer)
             parts.append(
                 _metric_cell(
                     fmt(metrics["dice"], 100),
                     dice_value,
-                    best[(trained_on, dataset, "dice")],
+                    best.get((trained_on, dataset, "dice")),
                 )
             )
             parts.append(
                 _metric_cell(
                     fmt(metrics["masd"]),
                     masd_value,
-                    best[(trained_on, dataset, "masd")],
+                    best.get((trained_on, dataset, "masd")),
+                    separator=last,
                 )
             )
             if dataset != trained_on:
                 cross_dice.append(dice_value)
                 cross_masd.append(masd_value)
-        if cross_dice:
-            cross_dice_value = reducer(cross_dice)
-            cross_masd_value = reducer(cross_masd)
+        if not show_average:
+            pass
+        elif cross_dice:
+            cross_dice_value = _reduce(cross_dice, reducer)
+            cross_masd_value = _reduce(cross_masd, reducer)
             parts.append(
                 _metric_cell(
                     fmt(np.asarray(cross_dice), 100),
                     cross_dice_value,
-                    best[(trained_on, "cross", "dice")],
+                    best.get((trained_on, "cross", "dice")),
                 )
             )
             parts.append(
                 _metric_cell(
                     fmt(np.asarray(cross_masd)),
                     cross_masd_value,
-                    best[(trained_on, "cross", "masd")],
+                    best.get((trained_on, "cross", "masd")),
                 )
             )
         else:
@@ -257,6 +380,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
     parser.add_argument("--nnunet-results-dir")
+    parser.add_argument("--monounet-results-dir", nargs="*", default=[])
+    parser.add_argument(
+        "--folds",
+        default="0",
+        help="Comma-separated folds to compile, pooled into one row (e.g. '0,1'); '' keeps each fold separate",
+    )
     parser.add_argument("--output", default="models/cross_dataset_report.html")
     args = parser.parse_args()
     records = defaultdict(dict)
@@ -268,16 +397,27 @@ def main():
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
     if args.nnunet_results_dir:
         _add_nnunet_records(records, args.nnunet_results_dir)
+    for results_dir in args.monounet_results_dir:
+        name = Path(results_dir).name
+        _add_monounet_records(records, results_dir, MONOUNET_NAMES.get(name, name))
+    if args.folds:
+        records = _pool_folds(records, [fold.strip() for fold in args.folds.split(",")])
     if not records:
         raise RuntimeError(f"No cross-dataset metrics found under {args.results_dir}")
     style = """
-    body{background:#111;color:#bbb;font-family:system-ui;margin:16px}table{border-collapse:collapse;width:100%}
-    th,td{padding:7px 10px;text-align:right}th{background:#292929}td{background:#191919;border-bottom:1px solid #222}
+    body{background:#111;color:#bbb;font-family:system-ui;margin:16px}table{border-collapse:collapse;width:auto;max-width:100%}
+    th,td{padding:7px 10px;text-align:center}th{background:#292929}td{background:#191919;border-bottom:1px solid #222}
     tr.group-start td{border-top:3px solid #777}strong{color:#eee;font-weight:700}
-    th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+    th.sep,td.sep{border-right:2px solid #777}
+    .undef{color:#777;font-size:11px;font-weight:400;margin-top:2px}
+    u{color:#ddd;text-decoration:underline;text-underline-offset:3px}
+    tbody td:first-child,tbody td:nth-child(2),
+    thead tr:first-child th:first-child,thead tr:first-child th:nth-child(2){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
-    body = ""
+    # One page per (table kind, statistic); `suffix` becomes part of the file name.
+    statistics = {"mean_sd": "Mean ± SD", "median_iqr": "Median (Q1–Q3)"}
+    bodies = {(kind, suffix): "" for kind in ("main", "ablation") for suffix in statistics}
     families = sorted({_dataset_family(trained_on) for _, _, trained_on, _ in records})
     for family in families:
         family_records = {
@@ -293,15 +433,46 @@ def main():
                 if _dataset_family(tested_on) == family
             }
         )
-        body += f"<section><h1>{html.escape(family)}</h1>"
-        body += _render_table(family_records, family_datasets, "Mean ± SD")
-        body += _render_table(family_records, family_datasets, "Median (Q1–Q3)")
-        body += "</section>"
+        swept_bases = {
+            _split_adaptation(key[1])[0]
+            for key in family_records
+            if _split_adaptation(key[1])[1]
+        }
+        main_records = {
+            key: results
+            for key, results in family_records.items()
+            if _split_adaptation(key[1]) in {(base, "") for base in MAIN_ADAPTATIONS}
+        }
+        # Everything else — nonlinear probes and sweeps — plus the runs they vary from.
+        ablation_records = {
+            key: results
+            for key, results in family_records.items()
+            if key not in main_records or _split_adaptation(key[1])[0] in swept_bases
+        }
+
+        for suffix, statistic in statistics.items():
+            bodies[("main", suffix)] += (
+                f"<section><h1>{html.escape(family)}</h1>"
+                + _render_table(main_records, family_datasets, statistic)
+                + "</section>"
+            )
+            if ablation_records:
+                bodies[("ablation", suffix)] += (
+                    f"<section><h1>{html.escape(family)} — Ablation</h1>"
+                    + _render_table(ablation_records, family_datasets, statistic)
+                    + "</section>"
+                )
+
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(f"<!doctype html><meta charset='utf-8'><style>{style}</style>{body}")
     _write_summary_csv(records, output.with_suffix(".csv"))
-    print(f"Wrote {output}")
+    for (kind, suffix), page_body in bodies.items():
+        if not page_body:
+            continue
+        name = f"{output.stem}{'_ablation' if kind == 'ablation' else ''}_{suffix}{output.suffix}"
+        path = output.with_name(name)
+        path.write_text(f"<!doctype html><meta charset='utf-8'><style>{style}</style>{page_body}")
+        print(f"Wrote {path}")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,5 @@ if [[ "$predict" -eq 1 ]]; then
 fi
 
 if [[ "$report" -eq 1 ]]; then
-    python -m fm_adaptation.report \
-        --results-dir models \
-        --nnunet-results-dir ../nnUNet_fork/data/nnUNet_results
+    bash scripts/run_report.sh
 fi
