@@ -2,13 +2,14 @@ import argparse
 import csv
 import time
 from collections import defaultdict
-from fnmatch import fnmatch
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from .selection import matches as _matches
 
 
 def _read_history(path: Path):
@@ -23,16 +24,6 @@ def _read_history(path: Path):
         for key, value in values.items():
             history[key].append(value)
     return history
-
-
-def _matches(name, patterns):
-    """Empty means keep everything; entries match exactly, as a glob, or as a `_suffix` tag."""
-    if not patterns:
-        return True
-    return any(
-        name == pattern or fnmatch(name, pattern) or name.endswith(f"_{pattern}")
-        for pattern in patterns
-    )
 
 
 def _collect(results_dir: Path, datasets, experiments):

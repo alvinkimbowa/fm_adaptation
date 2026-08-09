@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
+export PYTHONPATH="${PYTHONPATH:-}:src"
+
+datasets=(
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    Dataset203_neurite_2px_scaleaug
+)
+experiments=(
+    linear
+    # nonlinear
+    linear_finetune
+    # nonlinear_finetune
+)
+splits=(
+    validation
+    test
+)
+
+rows=3
+cols=4          # image pairs per row
+
+# contour | overlay | centerline
+gt_style=contour
+pred_style=overlay
+gt_color=green
+pred_color=red
+gt_width=2
+pred_width=2
+alpha=0.4
+
+crop=auto       # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
+seed=0
+
+python -m fm_adaptation.plot_qualitative \
+    --datasets "${datasets[@]}" \
+    --experiments "${experiments[@]}" \
+    --splits "${splits[@]}" \
+    --rows "$rows" \
+    --cols "$cols" \
+    --gt-style "$gt_style" \
+    --pred-style "$pred_style" \
+    --gt-color "$gt_color" \
+    --pred-color "$pred_color" \
+    --gt-width "$gt_width" \
+    --pred-width "$pred_width" \
+    --alpha "$alpha" \
+    --crop "$crop" \
+    --seed "$seed"

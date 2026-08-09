@@ -18,7 +18,7 @@ from .data import _case_ids, load_dataset_json
 BLOCKS_PER_PATCH = 8
 
 
-def _open(path: Path) -> np.ndarray:
+def open_image(path: Path) -> np.ndarray:
     """Memory-mapped when the format allows it, eagerly decoded otherwise."""
     if path.suffix.lower() in {".tif", ".tiff"}:
         import tifffile
@@ -47,7 +47,7 @@ class CaseIndex:
         self._label = None
 
     def build(self, roi_threshold: int) -> None:
-        image = _open(self.image_path)
+        image = open_image(self.image_path)
         self.shape = (int(image.shape[0]), int(image.shape[1]))
         rows = self.shape[0] // self.block
         cols = self.shape[1] // self.block
@@ -71,13 +71,13 @@ class CaseIndex:
     @property
     def image(self) -> np.ndarray:
         if self._image is None:
-            self._image = _open(self.image_path)
+            self._image = open_image(self.image_path)
         return self._image
 
     @property
     def label(self) -> np.ndarray:
         if self._label is None:
-            self._label = _open(self.label_path)
+            self._label = open_image(self.label_path)
         return self._label
 
     def crop(self, y: int, x: int, patch_size: int):
