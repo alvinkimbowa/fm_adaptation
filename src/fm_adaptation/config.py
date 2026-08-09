@@ -5,6 +5,22 @@ import yaml
 
 
 @dataclass(frozen=True)
+class PatchConfig:
+    """Patchwise training and inference on images too large to resize to the encoder input."""
+
+    patch_size: int = 1008
+    patches_per_case: int = 16
+    min_roi_fraction: float = 0.05
+    roi_threshold: int = 0
+    overlap: float = 0.5
+    ignore_masked_out: bool = False
+
+    @property
+    def stride(self) -> int:
+        return max(1, round(self.patch_size * (1.0 - self.overlap)))
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     raw_data_dir: Path
     results_dir: Path
@@ -27,6 +43,7 @@ class ExperimentConfig:
     weight_decay: float
     seed: int
     device: str
+    patching: "PatchConfig | None"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -35,6 +52,7 @@ class ExperimentConfig:
         data = cfg["data"]
         model = cfg["model"]
         training = cfg["training"]
+        patching = cfg.get("patching") or {}
         return cls(
             raw_data_dir=Path(data["raw_data_dir"]),
             results_dir=Path(data.get("results_dir", "models")),
@@ -57,6 +75,18 @@ class ExperimentConfig:
             weight_decay=float(training.get("weight_decay", 0.0)),
             seed=int(training.get("seed", 0)),
             device=str(training.get("device", "cuda")),
+            patching=(
+                PatchConfig(
+                    patch_size=int(patching.get("patch_size", 1008)),
+                    patches_per_case=int(patching.get("patches_per_case", 16)),
+                    min_roi_fraction=float(patching.get("min_roi_fraction", 0.05)),
+                    roi_threshold=int(patching.get("roi_threshold", 0)),
+                    overlap=float(patching.get("overlap", 0.5)),
+                    ignore_masked_out=bool(patching.get("ignore_masked_out", False)),
+                )
+                if patching.get("enabled")
+                else None
+            ),
         )
 
     @property
@@ -72,3 +102,6 @@ class ExperimentConfig:
     @property
     def feature_cache_dir(self) -> Path:
         return self.results_dir / ".feature_cache" / self.model_name / self.train_dataset
+
+    def patch_cache_dir(self, dataset_name: str) -> Path:
+        return self.results_dir / ".patch_cache" / dataset_name

@@ -2,6 +2,7 @@ import argparse
 from contextlib import nullcontext
 
 import cv2
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -10,6 +11,33 @@ from .config import ExperimentConfig
 from .data import NnUNet2DDataset, collate_cases, num_classes
 from .metrics import CaseMetrics, compute_metrics, write_metrics
 from .models import build_model, restore_prediction
+from .patching import build_index, predict_case
+
+
+def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, overwrite):
+    """Overlapping-patch inference at native resolution, one case at a time."""
+    cases = build_index(
+        cfg.raw_data_dir,
+        dataset_name,
+        split,
+        cfg.fold,
+        subset,
+        cfg.patching,
+        cfg.patch_cache_dir(dataset_name),
+    )
+    prediction_dir = output_dir / "predictions"
+    prediction_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for case in tqdm(cases, desc=f"{output_dir.name} {dataset_name}"):
+        prediction = predict_case(
+            model, case, cfg.patching, classes, device, amp, cfg.batch_size, model.encoder.preprocess
+        )
+        output_path = prediction_dir / f"{case.case_id}.png"
+        if overwrite or not output_path.exists():
+            cv2.imwrite(str(output_path), prediction)
+        dice, masd = compute_metrics(prediction, np.asarray(case.label), classes)
+        rows.append(CaseMetrics(case.case_id, dice, masd))
+    return rows
 
 
 def main():
@@ -37,6 +65,14 @@ def main():
         subset = "val" if same_dataset else "eval"
         if same_dataset and cfg.fold == "all":
             continue
+        output_dir = cfg.run_dir / ("validation" if same_dataset else "test") / dataset_name
+        if cfg.patching is not None:
+            rows = _predict_patchwise(
+                cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, args.overwrite
+            )
+            write_metrics(rows, output_dir / "metrics.csv")
+            print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
+            continue
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess
         )
@@ -47,7 +83,6 @@ def main():
             collate_fn=collate_cases,
             pin_memory=True,
         )
-        output_dir = cfg.run_dir / ("validation" if same_dataset else "test") / dataset_name
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
         rows = []

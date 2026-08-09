@@ -13,9 +13,12 @@ from .config import ExperimentConfig
 from .data import NnUNet2DDataset, collate_cases, num_classes
 from .losses import DiceCrossEntropyLoss, mean_foreground_dice
 from .models import build_model
+from .patching import patch_loader
 
 
 def _loader(cfg, preprocess, subset, shuffle):
+    if cfg.patching is not None:
+        return patch_loader(cfg, preprocess, subset, shuffle)
     dataset = NnUNet2DDataset(
         cfg.raw_data_dir, cfg.train_dataset, "Tr", cfg.fold, subset, preprocess
     )

@@ -13,6 +13,7 @@ from .config import ExperimentConfig
 from .data import CachedFeatureDataset, NnUNet2DDataset, collate_cases, num_classes
 from .losses import DiceCrossEntropyLoss, mean_foreground_dice
 from .models import build_model
+from .patching import patch_loader as _patch_loader
 
 
 def _raw_dataset(cfg, preprocess, subset):
@@ -62,9 +63,13 @@ def _loader(cfg, raw_dataset, shuffle):
     )
 
 
-def _run_epoch(probe, loader, loss_fn, device, optimizer=None, desc=""):
+def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None):
     training = optimizer is not None
-    probe.train(training)
+    forward = forward or (lambda m, x, y: m(x, y.shape[-2:]))
+    module.train(training)
+    if getattr(module, "encoder", None) is not None and not module.encoder.trainable:
+        # The trunk carries stochastic depth; a frozen encoder must never leave eval mode.
+        module.encoder.eval()
     losses, dices = [], []
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
     progress = tqdm(loader, desc=desc, leave=False)
@@ -73,7 +78,7 @@ def _run_epoch(probe, loader, loss_fn, device, optimizer=None, desc=""):
         if training:
             optimizer.zero_grad(set_to_none=True)
         with amp:
-            logits = probe(images, masks.shape[-2:])
+            logits = forward(module, images, masks)
             loss = loss_fn(logits, masks)
         if training:
             loss.backward()
@@ -96,14 +101,24 @@ def main():
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
     model = build_model(cfg.model_name, cfg.probe_name, classes, cfg.checkpoint)
-    train_raw = _raw_dataset(cfg, model.encoder.preprocess, "train")
-    val_raw = None if cfg.fold == "all" else _raw_dataset(cfg, model.encoder.preprocess, "val")
-    _cache_features(cfg, model.encoder, train_raw, device)
-    if val_raw is not None:
-        _cache_features(cfg, model.encoder, val_raw, device)
-    probe = model.probe.to(device)
-    train_loader = _loader(cfg, train_raw, True)
-    val_loader = None if val_raw is None else _loader(cfg, val_raw, False)
+    if cfg.patching is not None:
+        # Patches are cut fresh every epoch, so there is nothing stable to cache: the frozen encoder
+        # runs inline under no_grad and the whole model is what gets stepped through.
+        module = model.to(device)
+        forward = lambda m, images, masks: m(images)  # noqa: E731
+        train_loader = _patch_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
+        val_loader = None if cfg.fold == "all" else _patch_loader(cfg, model.encoder.preprocess, "val")
+    else:
+        train_raw = _raw_dataset(cfg, model.encoder.preprocess, "train")
+        val_raw = None if cfg.fold == "all" else _raw_dataset(cfg, model.encoder.preprocess, "val")
+        _cache_features(cfg, model.encoder, train_raw, device)
+        if val_raw is not None:
+            _cache_features(cfg, model.encoder, val_raw, device)
+        module = model.probe.to(device)
+        forward = None
+        train_loader = _loader(cfg, train_raw, True)
+        val_loader = None if val_raw is None else _loader(cfg, val_raw, False)
+    probe = model.probe
     optimizer = torch.optim.AdamW(
         probe.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay
     )
@@ -120,19 +135,25 @@ def main():
         writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice"])
         for epoch in range(1, cfg.epochs + 1):
             train_loss, train_dice = _run_epoch(
-                probe,
+                module,
                 train_loader,
                 loss_fn,
                 device,
                 optimizer,
                 desc=f"epoch {epoch}/{cfg.epochs} train",
+                forward=forward,
             )
             if val_loader is None:
                 val_loss, val_dice = float("nan"), float("nan")
             else:
                 with torch.no_grad():
                     val_loss, val_dice = _run_epoch(
-                        probe, val_loader, loss_fn, device, desc=f"epoch {epoch}/{cfg.epochs} val"
+                        module,
+                        val_loader,
+                        loss_fn,
+                        device,
+                        desc=f"epoch {epoch}/{cfg.epochs} val",
+                        forward=forward,
                     )
             writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice])
             history_file.flush()
