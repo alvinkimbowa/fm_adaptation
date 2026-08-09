@@ -1,0 +1,35 @@
+data:
+  raw_data_dir: /home/ultrai/GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset203_neurite_2px_scaleaug
+  test_datasets:
+    - Dataset203_neurite_2px_scaleaug
+  test_split: Tr
+  fold: 0
+
+model:
+  name: sam3
+  probe: linear
+  # Null uses SAM3's official Hugging Face download and local cache.
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 8
+  encoder_batch_size: 8
+  num_workers: 4
+  learning_rate: 0.001
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
+
+# Whole slides are far too large to resize to 1008; train and predict on native-resolution patches.
+patching:
+  enabled: true
+  patch_size: 1008
+  patches_per_case: 16
+  min_roi_fraction: 0.05
+  overlap: 0.5

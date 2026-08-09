@@ -10,6 +10,7 @@ datasets=(
     Dataset083_BUSBRA_U_Systems
     Dataset084_KidneyUS_Philips
     Dataset086_MMOTU_2D
+    Dataset203_neurite_2px_scaleaug
 )
 experiments=(
     linear
