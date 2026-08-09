@@ -27,5 +27,4 @@ export PYTHONPATH="${PYTHONPATH:-}:src"
 python -m fm_adaptation.plot_history \
     --datasets "${datasets[@]}" \
     --experiments "${experiments[@]}" \
-    --watch \
     --interval "$interval"
