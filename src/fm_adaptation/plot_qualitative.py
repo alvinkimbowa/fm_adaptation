@@ -7,6 +7,8 @@ which images, labels and predictions belong to each run and where the figure sho
 import argparse
 from pathlib import Path
 
+from tqdm import tqdm
+
 from .config import ExperimentConfig
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .selection import matches as _matches
@@ -37,10 +39,18 @@ def main():
     parser.add_argument("--experiments", nargs="*", default=[])
     parser.add_argument("--splits", nargs="*", default=["validation", "test"])
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
+    parser.add_argument("--skip-unchanged", action="store_true",
+                        help="leave figures that are newer than their metrics alone. Only detects new "
+                             "results, never changed layout or style, so it is for the automatic "
+                             "post-run refresh; a deliberate run should always redraw.")
     add_style_arguments(parser)
     args = parser.parse_args()
     style = style_from_arguments(args)
+    drawn = skipped = 0
 
+    # Selecting the work up front means the progress bar knows its total, and a run that matches nothing
+    # says so immediately instead of after a silent walk of the results tree.
+    jobs = []
     for metrics_path in sorted(Path(args.results_dir).glob("*/Dataset*/*/fold_*/*/*/metrics.csv")):
         output_dir = metrics_path.parent
         fold_dir = output_dir.parents[1]
@@ -55,6 +65,23 @@ def main():
         if not config_path.exists():
             print(f"skipped {output_dir} (no config.yaml)")
             continue
+        figure_path = output_dir / "qualitative.png"
+        # Redrawing every run costs minutes; only the runs whose metrics moved need a new figure.
+        if args.skip_unchanged and figure_path.exists() and figure_path.stat().st_mtime >= metrics_path.stat().st_mtime:
+            skipped += 1
+            continue
+        jobs.append((metrics_path, output_dir, fold_dir, dataset_name, kind, config_path))
+
+    if not jobs:
+        print(f"nothing to draw ({skipped} up to date)")
+        return
+    print(f"drawing {len(jobs)} figure(s), {skipped} up to date")
+
+    progress = tqdm(jobs, desc="qualitative", unit="fig")
+    for metrics_path, output_dir, fold_dir, dataset_name, kind, config_path in progress:
+        # Each figure reads and crops rows x cols source images, so on the whole-slide datasets a single
+        # one takes a while; name the run being drawn rather than leaving a bare counter.
+        progress.set_postfix_str(f"{fold_dir.parents[1].name}/{fold_dir.parent.name} {kind}")
         cfg = ExperimentConfig.from_yaml(config_path)
         images, labels = _source_dirs(cfg, dataset_name, kind)
         path = render(
@@ -71,7 +98,11 @@ def main():
             style=style,
             title=f"{dataset_name} — {fold_dir.parent.name}/{fold_dir.name} ({kind})",
         )
-        print(f"wrote {path}" if path else f"skipped {output_dir} (no metrics)")
+        drawn += 1
+        progress.write(f"wrote {path}" if path else f"skipped {output_dir} (no metrics)")
+
+    # A silent no-op is indistinguishable from a filter that matched nothing, so always say what happened.
+    print(f"{drawn} figure(s) drawn, {skipped} up to date")
 
 
 if __name__ == "__main__":

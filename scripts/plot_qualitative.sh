@@ -48,7 +48,13 @@ alpha=0.4
 crop=auto       # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 seed=0
 
+# Running this script by hand always redraws, so edits to the options above take effect. The automatic
+# refresh in run_report.sh sets skip_unchanged=1 to leave figures whose results have not moved.
+args=()
+[[ "${skip_unchanged:-0}" -eq 1 ]] && args+=(--skip-unchanged)
+
 python -m fm_adaptation.plot_qualitative \
+    "${args[@]}" \
     --datasets "${datasets[@]}" \
     --experiments "${experiments[@]}" \
     --splits "${splits[@]}" \
