@@ -381,7 +381,7 @@ def _write_summary_csv(records, path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
-    parser.add_argument("--nnunet-results-dir")
+    parser.add_argument("--nnunet-results-dir", nargs="*", default=[])
     parser.add_argument("--monounet-results-dir", nargs="*", default=[])
     parser.add_argument(
         "--folds",
@@ -391,14 +391,20 @@ def main():
     parser.add_argument("--output", default="models/cross_dataset_report.html")
     args = parser.parse_args()
     records = defaultdict(dict)
-    for metrics_path in Path(args.results_dir).glob("*/*/*/fold_*/*/*/metrics.csv"):
+    for metrics_path in sorted(Path(args.results_dir).glob("*/*/*/fold_*/*/*/metrics.csv")):
         run_dir = metrics_path.parents[2]
         model, probe, trained_on = _read_run(run_dir)
         fold = run_dir.name.removeprefix("fold_")
         tested_on = metrics_path.parent.name
+        kind = metrics_path.parents[1].name
+        # The training dataset is reported once, in a single column: on its own imagesTs when the run
+        # produced one, otherwise on the fold's validation split.
+        if tested_on == trained_on and kind == "validation":
+            if (run_dir / "test" / tested_on / "metrics.csv").exists():
+                continue
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
-    if args.nnunet_results_dir:
-        _add_nnunet_records(records, args.nnunet_results_dir)
+    for results_dir in args.nnunet_results_dir:
+        _add_nnunet_records(records, results_dir)
     for results_dir in args.monounet_results_dir:
         name = Path(results_dir).name
         _add_monounet_records(records, results_dir, MONOUNET_NAMES.get(name, name))
