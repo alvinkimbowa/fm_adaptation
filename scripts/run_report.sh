@@ -21,3 +21,10 @@ python -m fm_adaptation.report \
     --folds "$folds" \
     --nnunet-results-dir "${nnunet_dirs[@]}" \
     --monounet-results-dir "${monounet_dirs[@]}"
+
+# Training curves and qualitative figures alongside the tables. Both only redraw what has changed,
+# so this stays cheap enough to run after every experiment.
+if [[ "${figures:-1}" -eq 1 ]]; then
+    bash scripts/plot_curves.sh
+    skip_unchanged=1 bash scripts/plot_qualitative.sh
+fi
