@@ -18,8 +18,13 @@ def _read_history(path: Path):
     history = defaultdict(list)
     for row in rows:
         try:
-            values = {key: float(row[key]) for key in row}
+            # Runs that validate every few epochs leave blanks, as do the columns mmseg never logs;
+            # keep them as NaN so every column stays the same length as the epoch axis. `_series`
+            # drops them again at plot time.
+            values = {key: float(value) if value else float("nan") for key, value in row.items()}
         except (TypeError, ValueError):
+            break
+        if not values.get("epoch") == values.get("epoch"):  # epoch itself must be a number
             break
         for key, value in values.items():
             history[key].append(value)
@@ -42,6 +47,15 @@ def _collect(results_dir: Path, datasets, experiments):
     return runs
 
 
+def _series(ax, epochs, values, **style):
+    """Drop the gaps left by runs that validate every few epochs, so the points still join up."""
+    points = [(x, y) for x, y in zip(epochs, values) if y == y]
+    if not points:
+        return
+    marker = "o" if len(points) < len(epochs) else None
+    ax.plot(*zip(*points), marker=marker, markersize=3, **style)
+
+
 def _plot(curves, title, out_path):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     colors = plt.get_cmap("tab10")
@@ -49,8 +63,8 @@ def _plot(curves, title, out_path):
         color = colors(index % 10)
         epochs = history["epoch"]
         for ax, metric in zip(axes, ("loss", "dice")):
-            ax.plot(epochs, history[f"train_{metric}"], color=color, ls="--", alpha=0.6)
-            ax.plot(epochs, history[f"val_{metric}"], color=color, label=label)
+            _series(ax, epochs, history[f"train_{metric}"], color=color, ls="--", alpha=0.6)
+            _series(ax, epochs, history[f"val_{metric}"], color=color, label=label)
     for ax, metric in zip(axes, ("loss", "dice")):
         ax.set_xlabel("epoch")
         ax.set_ylabel(metric)
