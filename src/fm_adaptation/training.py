@@ -181,6 +181,11 @@ def main():
                 print(f"early_stopping epoch={epoch} best_val_dice={best_dice:.4f}")
                 break
 
+    # The cache only feeds probe training; finetuning and prediction recompute features from the images.
+    if cfg.patching is None and cfg.feature_cache_dir.exists():
+        shutil.rmtree(cfg.feature_cache_dir)
+        print(f"removed feature cache {cfg.feature_cache_dir}")
+
 
 if __name__ == "__main__":
     main()

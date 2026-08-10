@@ -90,8 +90,9 @@ def main():
         / cfg.train_dataset
         / finetuning["initial_probe"]
         / f"fold_{cfg.fold}"
-        / "best.pt"
+        / f"{finetuning.get('initial_probe_checkpoint', 'final')}.pt"
     )
+    print(f"initialising probe from {probe_checkpoint}")
     state = torch.load(probe_checkpoint, map_location="cpu", weights_only=True)
     model.probe.load_state_dict(state["probe"])
     model.to(device)
