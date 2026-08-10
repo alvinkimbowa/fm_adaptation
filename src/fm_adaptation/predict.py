@@ -40,6 +40,25 @@ def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device,
     return rows
 
 
+def _jobs(cfg, datasets):
+    """Each evaluation to run, as (dataset, split, subset, validation|test).
+
+    The training dataset contributes its fold's validation cases and, when it ships one, its held-out
+    `imagesTs`; every other dataset is evaluated whole on `test_split`.
+    """
+    jobs = []
+    for dataset_name in datasets:
+        if dataset_name != cfg.train_dataset:
+            jobs.append((dataset_name, cfg.test_split, "eval", "test"))
+            continue
+        if cfg.fold != "all":
+            jobs.append((dataset_name, "Tr", "val", "validation"))
+        held_out = cfg.raw_data_dir / dataset_name / "imagesTs"
+        if held_out.is_dir() and any(held_out.iterdir()):
+            jobs.append((dataset_name, "Ts", "eval", "test"))
+    return jobs
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -59,13 +78,8 @@ def main():
     datasets = cfg.test_datasets or (cfg.train_dataset,)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
 
-    for dataset_name in datasets:
-        same_dataset = dataset_name == cfg.train_dataset
-        split = "Tr" if same_dataset else cfg.test_split
-        subset = "val" if same_dataset else "eval"
-        if same_dataset and cfg.fold == "all":
-            continue
-        output_dir = cfg.run_dir / ("validation" if same_dataset else "test") / dataset_name
+    for dataset_name, split, subset, kind in _jobs(cfg, datasets):
+        output_dir = cfg.run_dir / kind / dataset_name
         if cfg.patching is not None:
             rows = _predict_patchwise(
                 cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, args.overwrite
@@ -86,7 +100,7 @@ def main():
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
         rows = []
-        progress = tqdm(loader, desc=f"{'validation' if same_dataset else 'test'} {dataset_name}")
+        progress = tqdm(loader, desc=f"{kind} {dataset_name}")
         with torch.no_grad():
             for images, masks, metadata in progress:
                 with amp:
