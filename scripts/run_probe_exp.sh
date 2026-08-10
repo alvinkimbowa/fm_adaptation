@@ -2,12 +2,12 @@
 set -euo pipefail
 
 config="${1:-configs/sam3_linear.yaml}"
-train=1
-predict=1
-report=1
+train=${train:-1}
+predict=${predict:-1}
+report=${report:-1}
 checkpoint=final
 overwrite=true
-gpu_id=0
+gpu_id=${gpu_id:-0}
 
 export PYTHONPATH="${PYTHONPATH:-}:src"
 export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
