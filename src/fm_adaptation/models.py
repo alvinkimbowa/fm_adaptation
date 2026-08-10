@@ -1,5 +1,6 @@
 import sys
 import types
+from contextlib import nullcontext
 from pathlib import Path
 
 import cv2
@@ -42,6 +43,30 @@ class NonlinearProbe(nn.Module):
         return F.interpolate(self.classifier(x), size=output_size, mode="bilinear", align_corners=False)
 
 
+def _resize_and_pad(image: np.ndarray, mask: np.ndarray, input_size: int):
+    """Aspect-preserving resize onto a square canvas; the label pad is -1 so the loss ignores it."""
+    height, width = mask.shape
+    scale = input_size / max(height, width)
+    resized_h, resized_w = round(height * scale), round(width * scale)
+    image = cv2.resize(image, (resized_w, resized_h), interpolation=cv2.INTER_CUBIC)
+    mask = cv2.resize(mask, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST).astype(np.int64)
+    pad_top = (input_size - resized_h) // 2
+    pad_left = (input_size - resized_w) // 2
+    pad_bottom = input_size - resized_h - pad_top
+    pad_right = input_size - resized_w - pad_left
+    image = np.pad(image, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)))
+    mask = np.pad(mask, ((pad_top, pad_bottom), (pad_left, pad_right)), constant_values=-1)
+    geometry = {
+        "original_height": height,
+        "original_width": width,
+        "resized_height": resized_h,
+        "resized_width": resized_w,
+        "pad_top": pad_top,
+        "pad_left": pad_left,
+    }
+    return image, torch.from_numpy(mask.copy()).long(), geometry
+
+
 class PEEncoder(nn.Module):
     name = "sam3"
     feature_channels = 1024
@@ -68,31 +93,8 @@ class PEEncoder(nn.Module):
         self.trunk.requires_grad_(trainable)
 
     def preprocess(self, image: np.ndarray, mask: np.ndarray):
-        height, width = mask.shape
-        scale = self.input_size / max(height, width)
-        resized_h, resized_w = round(height * scale), round(width * scale)
-        image = cv2.resize(image, (resized_w, resized_h), interpolation=cv2.INTER_CUBIC)
-        mask = cv2.resize(mask, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST).astype(np.int64)
-        pad_top = (self.input_size - resized_h) // 2
-        pad_left = (self.input_size - resized_w) // 2
-        pad_bottom = self.input_size - resized_h - pad_top
-        pad_right = self.input_size - resized_w - pad_left
-        image = np.pad(image, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)))
-        mask = np.pad(
-            mask,
-            ((pad_top, pad_bottom), (pad_left, pad_right)),
-            constant_values=-1,
-        )
+        image, mask_t, geometry = _resize_and_pad(image, mask, self.input_size)
         image_t = torch.from_numpy(image.transpose(2, 0, 1).copy()).float().div_(127.5).sub_(1.0)
-        mask_t = torch.from_numpy(mask.copy()).long()
-        geometry = {
-            "original_height": height,
-            "original_width": width,
-            "resized_height": resized_h,
-            "resized_width": resized_w,
-            "pad_top": pad_top,
-            "pad_left": pad_left,
-        }
         return image_t, mask_t, geometry
 
     def forward(self, images):
@@ -102,6 +104,45 @@ class PEEncoder(nn.Module):
             with torch.no_grad():
                 features = self.trunk(images)[-1]
         return features
+
+
+class DINOv3Encoder(nn.Module):
+    """DINOv3 ViT-L/16 patch tokens, at the 896 resolution DINOv3 uses for dense adaptation."""
+
+    name = "dinov3"
+    feature_channels = 1024
+    input_size = 896
+    last_layer = 23
+    mean = (0.485, 0.456, 0.406)
+    std = (0.229, 0.224, 0.225)
+
+    def __init__(self, checkpoint: str | None, trainable: bool = False):
+        super().__init__()
+        root = Path(__file__).resolve().parents[2] / "foundational_models" / "dinov3"
+        sys.path.insert(0, str(root))
+        from dinov3.hub.backbones import dinov3_vitl16
+
+        if checkpoint is None:
+            checkpoint = root / "ckpts" / "dinov3_vitl16_pretrain_lvd1689m.pth"
+        # The hub loader derives a config flag from an 8-char hash in the filename, which local
+        # checkpoints do not carry; the LVD-1689M defaults are what `pretrained=False` already builds.
+        self.trunk = dinov3_vitl16(pretrained=False)
+        state = torch.load(Path(checkpoint).resolve(), map_location="cpu", weights_only=True)
+        missing, unexpected = self.trunk.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            raise RuntimeError(f"DINOv3 checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
+        self.trainable = trainable
+        self.trunk.requires_grad_(trainable)
+
+    def preprocess(self, image: np.ndarray, mask: np.ndarray):
+        image, mask_t, geometry = _resize_and_pad(image, mask, self.input_size)
+        image_t = torch.from_numpy(image.transpose(2, 0, 1).copy()).float().div_(255.0)
+        image_t = (image_t - torch.tensor(self.mean)[:, None, None]) / torch.tensor(self.std)[:, None, None]
+        return image_t, mask_t, geometry
+
+    def forward(self, images):
+        with torch.no_grad() if not self.trainable else nullcontext():
+            return self.trunk.get_intermediate_layers(images, n=[self.last_layer], reshape=True)[0]
 
 
 def _trainable_sam3_mlp_forward(mlp, x):
@@ -131,9 +172,10 @@ def build_model(
     checkpoint: str | None,
     train_encoder: bool = False,
 ):
-    if model_name != "sam3":
-        raise ValueError(f"Unknown foundation model: {model_name}")
-    encoder = PEEncoder(checkpoint, trainable=train_encoder)
+    encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
+    if model_name not in encoders:
+        raise ValueError(f"Unknown foundation model: {model_name} (expected one of {sorted(encoders)})")
+    encoder = encoders[model_name](checkpoint, trainable=train_encoder)
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe}
     if probe_name not in probes:
         raise ValueError(f"Unknown probe: {probe_name}")

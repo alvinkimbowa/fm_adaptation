@@ -140,12 +140,14 @@ ADAPTATIONS = {
     "nonlinear": ("NLP", 1),
     "linear_finetune": ("LP + FT", 2),
     "nonlinear_finetune": ("NLP + FT", 3),
-    "": ("", 4),
+    "upernet": ("Adapter + UperNet", 4),
+    "m2f": ("Adapter + Mask2Former", 5),
+    "": ("", 6),
 }
 
 
 # Adaptations shown in the main tables; the rest go to the ablation report.
-MAIN_ADAPTATIONS = {"linear", "linear_finetune", ""}
+MAIN_ADAPTATIONS = {"linear", "linear_finetune", "upernet", "m2f", ""}
 
 
 def _split_adaptation(adaptation):
@@ -161,12 +163,12 @@ def _split_adaptation(adaptation):
 def _report_names(model, adaptation):
     if not adaptation:
         return model, ""
-    models = {"sam3": "SAM3"}
+    models = {"sam3": "SAM3", "dinov3": "DINOv3"}
     base, suffix = _split_adaptation(adaptation)
     label = ADAPTATIONS[base][0]
     if suffix:
         label = f"{label} ({suffix})" if label else suffix
-    return models[model], label
+    return models.get(model, model), label
 
 
 MODEL_ORDER = {"nnU-Net": 0, "MonoUNet-L": 1, "MonoUNet-B": 2, "MonoUNet-t": 3}

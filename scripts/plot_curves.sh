@@ -16,6 +16,8 @@ datasets=(
 )
 experiments=(
     linear
+    upernet
+    m2f
     # nonlinear
     linear_finetune
     # nonlinear_finetune
