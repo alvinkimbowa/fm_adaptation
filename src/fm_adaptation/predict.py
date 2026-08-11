@@ -62,7 +62,7 @@ def _jobs(cfg, datasets):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--checkpoint", choices=("best", "final"), default="best")
+    parser.add_argument("--checkpoint", choices=("best", "final", "last"), default="best")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
@@ -70,7 +70,12 @@ def main():
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
     model = build_model(cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, injector=cfg.injector)
     checkpoint_name = "final" if cfg.fold == "all" else args.checkpoint
-    state = torch.load(cfg.run_dir / f"{checkpoint_name}.pt", map_location="cpu", weights_only=True)
+    checkpoint_path = cfg.run_dir / f"{checkpoint_name}.pt"
+    if checkpoint_name == "last":
+        # `last.pt` also carries optimiser and RNG state, which the safe loader cannot unpickle.
+        state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    else:
+        state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     model.probe.load_state_dict(state["probe"])
     if "encoder" in state:
         model.encoder.trunk.load_state_dict(state["encoder"])

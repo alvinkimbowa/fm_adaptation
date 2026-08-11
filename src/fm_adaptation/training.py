@@ -88,15 +88,14 @@ def _rng_state():
     }
 
 
-def _resume(checkpoint_path, model, optimizer, encoder_trains):
-    """Restore weights, optimiser and bookkeeping from a run's own `final.pt`."""
-    if not checkpoint_path.exists():
-        raise SystemExit(f"--resume given but there is no checkpoint at {checkpoint_path}")
-    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if "optimizer" not in state:
+def _resume(run_dir, model, optimizer, encoder_trains):
+    """Pick a run back up from `last.pt`, which a completed run no longer has."""
+    path = run_dir / "last.pt"
+    if not path.exists():
         raise SystemExit(
-            f"{checkpoint_path} predates resume support (no optimiser state); rerun without --resume"
+            f"--resume given but there is no {path}. A finished run keeps weights only, in final.pt."
         )
+    state = torch.load(path, map_location="cpu", weights_only=False)
     model.probe.load_state_dict(state["probe"])
     if encoder_trains:
         missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
@@ -155,7 +154,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--resume", action="store_true",
-                        help="continue this run from its own final.pt instead of training from scratch")
+                        help="continue this run from its own last.pt instead of training from scratch")
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
 
@@ -209,7 +208,7 @@ def main():
     epochs_without_improvement = 0
     start_epoch = 1
     if args.resume:
-        resumed = _resume(cfg.run_dir / "final.pt", model, optimizer, encoder_trains)
+        resumed = _resume(cfg.run_dir, model, optimizer, encoder_trains)
         start_epoch = resumed["epoch"] + 1
         best_dice = resumed["best_dice"]
         stopping_reference_dice = resumed["stopping_reference_dice"]
@@ -259,29 +258,30 @@ def main():
                     epochs_without_improvement = 0
                 else:
                     epochs_without_improvement += 1
-            state = {
-                "probe": probe.state_dict(),
-                "epoch": epoch,
-                "val_dice": val_dice,
-                # Everything `--resume` needs to carry on as if the run had never stopped. `predict.py`
-                # ignores these keys, so an interrupted run stays usable for inference either way.
-                "optimizer": optimizer.state_dict(),
-                "best_dice": best_dice,
-                "stopping_reference_dice": stopping_reference_dice,
-                "epochs_without_improvement": epochs_without_improvement,
-                "rng": _rng_state(),
-            }
+            weights = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
             if encoder_trains:
                 # Only what trains: the frozen trunk is 300M parameters and is rebuilt from its own
                 # checkpoint. `encoder` is reserved for the finetuning runs, which store the whole trunk.
-                state["adapter"] = {
+                weights["adapter"] = {
                     key: value
                     for key, value in model.encoder.adapter.state_dict().items()
                     if not key.startswith("backbone.")
                 }
-            torch.save(state, cfg.run_dir / "final.pt")
+            # `last.pt` carries the training state as well, so an interrupted run can be picked up; the
+            # checkpoints meant for inference hold weights alone.
+            torch.save(
+                {
+                    **weights,
+                    "optimizer": optimizer.state_dict(),
+                    "best_dice": best_dice,
+                    "stopping_reference_dice": stopping_reference_dice,
+                    "epochs_without_improvement": epochs_without_improvement,
+                    "rng": _rng_state(),
+                },
+                cfg.run_dir / "last.pt",
+            )
             if improved:
-                torch.save(state, cfg.run_dir / "best.pt")
+                torch.save(weights, cfg.run_dir / "best.pt")
             if (
                 val_loader is not None
                 and epoch >= cfg.min_epochs
@@ -290,6 +290,11 @@ def main():
             ):
                 print(f"early_stopping epoch={epoch} best_val_dice={best_dice:.4f}")
                 break
+
+    # Training finished: `final.pt` keeps the last epoch's weights for inference, and `last.pt` goes --
+    # it only exists so an interrupted run can be picked up again.
+    torch.save(weights, cfg.run_dir / "final.pt")
+    (cfg.run_dir / "last.pt").unlink(missing_ok=True)
 
     # The cache only feeds probe training; finetuning and prediction recompute features from the images.
     if cfg.patching is None and cfg.feature_cache_dir.exists():

@@ -5,7 +5,7 @@ config="${1:-configs/sam3_linear.yaml}"
 train=${train:-1}
 predict=${predict:-1}
 report=${report:-1}
-checkpoint=final
+checkpoint=${checkpoint:-final}   # final | best | last
 overwrite=true
 gpu_id=${gpu_id:-0}
 # The adapter decoders need mmseg's UPerHead and DINOv3's compiled deformable attention, which only
