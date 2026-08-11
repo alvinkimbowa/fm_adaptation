@@ -178,7 +178,16 @@ def _report_names(model, adaptation):
     return models.get(model, model), label
 
 
-MODEL_ORDER = {"nnU-Net": 0, "MonoUNet-L": 1, "MonoUNet-B": 2, "MonoUNet-t": 3}
+# Rows are grouped by model first: each foundation model's adaptations together, then the baselines.
+# Foundation models are keyed by their config name, baselines by the label their loader records.
+MODEL_ORDER = {
+    "sam3": 0,
+    "dinov3": 1,
+    "nnU-Net": 2,
+    "MonoUNet-L": 3,
+    "MonoUNet-B": 4,
+    "MonoUNet-t": 5,
+}
 
 
 def _experiment_order(item):
@@ -186,11 +195,11 @@ def _experiment_order(item):
     base, suffix = _split_adaptation(adaptation)
     return (
         trained_on,
+        MODEL_ORDER.get(model, len(MODEL_ORDER)),
+        model,
         ADAPTATIONS[base][1],
         suffix,
         fold,
-        MODEL_ORDER.get(model, len(MODEL_ORDER)),
-        model,
     )
 
 
