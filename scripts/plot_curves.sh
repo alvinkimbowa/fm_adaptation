@@ -17,6 +17,7 @@ datasets=(
 experiments=(
     linear
     upernet
+    upernet_inj
     m2f
     # nonlinear
     linear_finetune

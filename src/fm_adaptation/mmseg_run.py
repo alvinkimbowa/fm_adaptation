@@ -65,14 +65,14 @@ def _dataset(cfg, dataset_name, split, subset, pipeline, ending):
     }
 
 
-def _runner_cfg(cfg, head, crop_size, work_dir, epochs, batch_size, lr, amp_dtype):
+def _runner_cfg(cfg, head, crop_size, work_dir, epochs, batch_size, lr, amp_dtype, injector=False):
     dataset_dir = cfg.raw_data_dir / cfg.train_dataset
     ending = load_dataset_json(dataset_dir)["file_ending"]
     classes = num_classes(dataset_dir)
     train_pipeline, test_pipeline = _pipelines(cfg, crop_size, ending)
     n_train = len(_case_ids(dataset_dir, "Tr", cfg.fold, "train"))
     warmup = int(min(500, max(50, n_train // batch_size)))
-    model = head_cfg(head, classes, crop_size)
+    model = head_cfg(head, classes, crop_size, injector=injector)
     if cfg.patching is not None:
         stride = int(crop_size * (1 - cfg.patching.overlap))
         model["test_cfg"] = {"mode": "slide", "crop_size": (crop_size, crop_size), "stride": (stride, stride)}
@@ -192,6 +192,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--crop-size", type=int, default=896)
     parser.add_argument("--train", type=int, default=1)
+    parser.add_argument("--injector", type=int, default=0,
+                        help="restore ViT-Adapter's injector, so the adapter writes back into the ViT")
     args = parser.parse_args()
 
     init_default_scope("mmseg")
@@ -203,15 +205,18 @@ def main():
     _dataset_class()  # registers NnUNetSegDataset
 
     cfg = ExperimentConfig.from_yaml(args.config)
-    run_dir = cfg.results_dir / cfg.model_name / cfg.train_dataset / args.head / f"fold_{cfg.fold}"
+    # The injector variant is a separate run so it sits beside the extractor-only one in the tables
+    # instead of overwriting it.
+    run_name = f"{args.head}_inj" if args.injector else args.head
+    run_dir = cfg.results_dir / cfg.model_name / cfg.train_dataset / run_name / f"fold_{cfg.fold}"
     run_dir.mkdir(parents=True, exist_ok=True)
     # report.py identifies a run from its config, so the head has to be recorded there; copying the
     # probe config verbatim would make every head claim to be the linear probe.
-    _write_run_config(args.config, args.head, run_dir / "config.yaml")
+    _write_run_config(args.config, run_name, run_dir / "config.yaml")
     amp_dtype = None if args.head == "m2f" else "bfloat16"
 
     runner_cfg = _runner_cfg(cfg, args.head, args.crop_size, run_dir / "mm", args.epochs,
-                             args.batch_size, args.lr, amp_dtype)
+                             args.batch_size, args.lr, amp_dtype, injector=bool(args.injector))
     runner = Runner.from_cfg(runner_cfg)
     if args.train:
         runner.train()
@@ -220,6 +225,8 @@ def main():
         # mmengine's own checkpoints include the frozen backbone (~1.8 GB each); final.pt supersedes them.
         for checkpoint in (run_dir / "mm").glob("*.pth"):
             checkpoint.unlink()
+    else:
+        _load_trainable(runner.model, run_dir / "final.pt")
 
     ending = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["file_ending"]
     _, test_pipeline = _pipelines(cfg, args.crop_size, ending)
@@ -227,12 +234,12 @@ def main():
              num_classes(cfg.raw_data_dir / cfg.train_dataset), ending)
 
 
-def _write_run_config(source, head, destination):
+def _write_run_config(source, run_name, destination):
     import yaml
 
     with open(source) as f:
         cfg = yaml.safe_load(f)
-    cfg["model"]["run_name"] = head
+    cfg["model"]["run_name"] = run_name
     with open(destination, "w") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
 
@@ -242,6 +249,20 @@ def _save_trainable(model, path):
     state = {k: v for k, v in model.state_dict().items() if "adapter.backbone" not in k}
     torch.save({"state_dict": state}, path)
     print(f"saved {len(state)} trainable tensors to {path} ({path.stat().st_size / 1e6:.0f} MB)")
+
+
+def _load_trainable(model, path):
+    """Restore what `_save_trainable` kept. Predicting without training would otherwise run a freshly
+    initialised adapter and head, so a missing checkpoint has to be an error rather than a warning."""
+    if not path.exists():
+        raise SystemExit(f"No trained weights at {path}; run with --train 1 first")
+    state = torch.load(path, map_location="cpu", weights_only=True)["state_dict"]
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    # The frozen DINOv3 trunk is rebuilt from its own checkpoint, so it is legitimately absent here.
+    missing = [key for key in missing if "adapter.backbone" not in key]
+    if missing or unexpected:
+        raise RuntimeError(f"{path}: missing={missing[:5]} unexpected={unexpected[:5]}")
+    print(f"loaded {len(state)} trainable tensors from {path}")
 
 
 def _write_history(run_dir):

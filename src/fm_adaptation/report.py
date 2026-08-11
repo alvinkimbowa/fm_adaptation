@@ -141,13 +141,17 @@ ADAPTATIONS = {
     "linear_finetune": ("LP + FT", 2),
     "nonlinear_finetune": ("NLP + FT", 3),
     "upernet": ("Adapter + UperNet", 4),
-    "m2f": ("Adapter + Mask2Former", 5),
-    "": ("", 6),
+    "upernet_inj": ("Adapter + UperNet + Inj", 5),
+    "m2f": ("Adapter + Mask2Former", 6),
+    "m2f_inj": ("Adapter + Mask2Former + Inj", 7),
+    "": ("", 8),
 }
 
 
 # Adaptations shown in the main tables; the rest go to the ablation report.
-MAIN_ADAPTATIONS = {"linear", "linear_finetune", "upernet", "m2f", ""}
+# `upernet_inj` needs its own base: as a bare suffix of `upernet` it would read as a sweep and be sent to
+# the ablation page, away from the extractor-only row it exists to be compared against.
+MAIN_ADAPTATIONS = {"linear", "linear_finetune", "upernet", "upernet_inj", "m2f", "m2f_inj", ""}
 
 
 def _split_adaptation(adaptation):

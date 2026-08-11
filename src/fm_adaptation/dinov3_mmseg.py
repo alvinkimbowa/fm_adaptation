@@ -33,7 +33,7 @@ DECODE_LOSSES = [
 class DINOv3Adapter(BaseModule):
     """Frozen DINOv3 ViT-L/16 plus DINOv3's trainable adapter, emitting strides 4/8/16/32."""
 
-    def __init__(self, checkpoint=None, interaction_indexes=None, init_cfg=None):
+    def __init__(self, checkpoint=None, interaction_indexes=None, injector=False, init_cfg=None):
         super().__init__(init_cfg)
         sys.path.insert(0, str(DINOV3_ROOT))
         from dinov3.eval.segmentation.models.backbone.dinov3_adapter import DINOv3_Adapter
@@ -45,7 +45,12 @@ class DINOv3Adapter(BaseModule):
         if missing or unexpected:
             raise RuntimeError(f"DINOv3 checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
         backbone.requires_grad_(False)
-        self.adapter = DINOv3_Adapter(
+        self.injector = injector
+        if injector:
+            from .dinov3_injector import DINOv3AdapterWithInjector as adapter_cls
+        else:
+            adapter_cls = DINOv3_Adapter
+        self.adapter = adapter_cls(
             backbone, interaction_indexes=interaction_indexes or INTERACTION_INDEXES
         )
 
@@ -94,16 +99,20 @@ def _dataset_class():
     return NnUNetSegDataset
 
 
-def backbone_cfg(checkpoint=None):
-    return {"type": "DINOv3Adapter", "checkpoint": str(checkpoint) if checkpoint else None}
+def backbone_cfg(checkpoint=None, injector=False):
+    return {
+        "type": "DINOv3Adapter",
+        "checkpoint": str(checkpoint) if checkpoint else None,
+        "injector": injector,
+    }
 
 
-def upernet_cfg(num_classes, crop_size, checkpoint=None):
+def upernet_cfg(num_classes, crop_size, checkpoint=None, injector=False):
     """Stock mmseg UPerHead on the adapter's four scales."""
     return {
         "type": "EncoderDecoder",
         "data_preprocessor": _preprocessor(crop_size),
-        "backbone": backbone_cfg(checkpoint),
+        "backbone": backbone_cfg(checkpoint, injector),
         "decode_head": {
             "type": "UPerHead",
             "in_channels": [EMBED_DIM] * 4,
@@ -134,12 +143,12 @@ def upernet_cfg(num_classes, crop_size, checkpoint=None):
     }
 
 
-def mask2former_cfg(num_classes, crop_size, checkpoint=None):
+def mask2former_cfg(num_classes, crop_size, checkpoint=None, injector=False):
     """Stock mmseg Mask2FormerHead, which brings its own matcher and set criterion."""
     return {
         "type": "EncoderDecoder",
         "data_preprocessor": _preprocessor(crop_size),
-        "backbone": backbone_cfg(checkpoint),
+        "backbone": backbone_cfg(checkpoint, injector),
         "decode_head": {
             "type": "Mask2FormerHead",
             "in_channels": [EMBED_DIM] * 4,
@@ -258,14 +267,14 @@ def _preprocessor(crop_size):
     }
 
 
-def head_cfg(name, num_classes, crop_size, checkpoint=None):
+def head_cfg(name, num_classes, crop_size, checkpoint=None, injector=False):
     """mmdet reaches into the decoder config by attribute, so every nested dict must be a ConfigDict."""
     from mmengine.config import ConfigDict
 
     builders = {"upernet": upernet_cfg, "m2f": mask2former_cfg}
     if name not in builders:
         raise ValueError(f"Unknown head: {name} (expected one of {sorted(builders)})")
-    return ConfigDict(builders[name](num_classes, crop_size, checkpoint))
+    return ConfigDict(builders[name](num_classes, crop_size, checkpoint, injector))
 
 
 HEADS = {"upernet": upernet_cfg, "m2f": mask2former_cfg}
