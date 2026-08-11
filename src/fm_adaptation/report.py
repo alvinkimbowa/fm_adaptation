@@ -1,6 +1,7 @@
 import argparse
 import csv
 import html
+import json
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -123,6 +124,26 @@ def _median_iqr(values, scale=1.0):
 
 def _dataset_family(dataset):
     return dataset.split("_", maxsplit=2)[1]
+
+
+PARAMETER_COUNTS = {}
+
+
+def _load_parameter_counts(path):
+    """Counts are gathered by `count_params.py`; without that file the columns simply read '—'."""
+    path = Path(path)
+    if path.exists():
+        PARAMETER_COUNTS.update(json.loads(path.read_text()))
+
+
+def _parameter_counts(model, adaptation, trained_on):
+    """Foundation-model counts depend only on the architecture; baselines vary per dataset."""
+    entry = PARAMETER_COUNTS.get(f"{model}|{adaptation}|{trained_on}") or PARAMETER_COUNTS.get(
+        f"{model}|{adaptation}|"
+    )
+    if not entry:
+        return "—", "—"
+    return f"{entry['total'] / 1e6:.1f}", f"{entry['trainable'] / 1e6:.2f}"
 
 
 def _dataset_label(dataset):
@@ -270,7 +291,7 @@ def _render_table(records, datasets, statistic):
         > 1
     )
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
-    for heading in ("Config", "Trained on", "Fold"):
+    for heading in ("Config", "Params (M)", "Trainable (M)", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
     for index, dataset in enumerate(datasets):
         last = index == len(datasets) - 1 and show_average
@@ -287,8 +308,10 @@ def _render_table(records, datasets, statistic):
         model, probe, trained_on, fold = key
         config = _config_label(model, probe)
         row_class = " class='group-start'" if previous_trained_on not in (None, trained_on) else ""
+        total, trainable = _parameter_counts(model, probe, trained_on)
         parts.append(
             f"<tr{row_class}><td>{html.escape(config)}</td>"
+            f"<td>{total}</td><td>{trainable}</td>"
             f"<td>{html.escape(_dataset_label(trained_on))}</td>"
             f"<td class='sep'>{html.escape(fold)}</td>"
         )
@@ -405,7 +428,9 @@ def main():
         help="Comma-separated folds to compile, pooled into one row (e.g. '0,1'); '' keeps each fold separate",
     )
     parser.add_argument("--output", default="models/cross_dataset_report.html")
+    parser.add_argument("--parameter-counts", default="models/parameter_counts.json")
     args = parser.parse_args()
+    _load_parameter_counts(args.parameter_counts)
     records = defaultdict(dict)
     for metrics_path in sorted(Path(args.results_dir).glob("*/*/*/fold_*/*/*/metrics.csv")):
         run_dir = metrics_path.parents[2]
@@ -435,8 +460,10 @@ def main():
     th.sep,td.sep{border-right:2px solid #777}
     .undef{color:#777;font-size:11px;font-weight:400;margin-top:2px}
     u{color:#ddd;text-decoration:underline;text-underline-offset:3px}
-    tbody td:first-child,tbody td:nth-child(2),
-    thead tr:first-child th:first-child,thead tr:first-child th:nth-child(2){text-align:left}
+    /* Config and "Trained on" read as labels, so they stay left; everything else, the parameter
+       counts included, is centred like the metrics. */
+    tbody td:first-child,tbody td:nth-child(4),
+    thead tr:first-child th:first-child,thead tr:first-child th:nth-child(4){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
     # One page per (table kind, statistic); `suffix` becomes part of the file name.
