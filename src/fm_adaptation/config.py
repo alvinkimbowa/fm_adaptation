@@ -31,6 +31,7 @@ class ExperimentConfig:
     model_name: str
     checkpoint: str | None
     probe_name: str
+    injector: bool
     run_name: str
     epochs: int
     min_epochs: int
@@ -63,6 +64,8 @@ class ExperimentConfig:
             model_name=str(model["name"]),
             checkpoint=model.get("checkpoint"),
             probe_name=str(model["probe"]),
+            # Only meaningful for the adapter-based decoders; ignored by the probes.
+            injector=bool(model.get("injector", False)),
             run_name=str(model.get("run_name", model["probe"])),
             epochs=int(training["epochs"]),
             min_epochs=int(training.get("min_epochs", 1)),

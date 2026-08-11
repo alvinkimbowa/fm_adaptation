@@ -8,9 +8,12 @@ report=${report:-1}
 checkpoint=final
 overwrite=true
 gpu_id=${gpu_id:-0}
+# The adapter decoders need mmseg's UPerHead and DINOv3's compiled deformable attention, which only
+# .venv-mm has; every probe and finetune run stays on the SAM3 environment.
+venv=${venv:-~/UltrAi/projects/sam3/.venv}
 
 export PYTHONPATH="${PYTHONPATH:-}:src"
-export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
+export PATH="${venv/#\~/$HOME}/bin:$PATH"
 export CUDA_VISIBLE_DEVICES="$gpu_id"
 
 if [[ "$train" -eq 1 ]]; then

@@ -106,6 +106,29 @@ class PEEncoder(nn.Module):
         return features
 
 
+def _dinov3_root() -> Path:
+    root = Path(__file__).resolve().parents[2] / "foundational_models" / "dinov3"
+    sys.path.insert(0, str(root))
+    return root
+
+
+def _load_dinov3_backbone(checkpoint: str | None):
+    """DINOv3 ViT-L/16 with the local weights loaded."""
+    root = _dinov3_root()
+    from dinov3.hub.backbones import dinov3_vitl16
+
+    if checkpoint is None:
+        checkpoint = root / "ckpts" / "dinov3_vitl16_pretrain_lvd1689m.pth"
+    # The hub loader derives a config flag from an 8-char hash in the filename, which local
+    # checkpoints do not carry; the LVD-1689M defaults are what `pretrained=False` already builds.
+    trunk = dinov3_vitl16(pretrained=False)
+    state = torch.load(Path(checkpoint).resolve(), map_location="cpu", weights_only=True)
+    missing, unexpected = trunk.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        raise RuntimeError(f"DINOv3 checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
+    return trunk
+
+
 class DINOv3Encoder(nn.Module):
     """DINOv3 ViT-L/16 patch tokens, at the 896 resolution DINOv3 uses for dense adaptation."""
 
@@ -118,19 +141,7 @@ class DINOv3Encoder(nn.Module):
 
     def __init__(self, checkpoint: str | None, trainable: bool = False):
         super().__init__()
-        root = Path(__file__).resolve().parents[2] / "foundational_models" / "dinov3"
-        sys.path.insert(0, str(root))
-        from dinov3.hub.backbones import dinov3_vitl16
-
-        if checkpoint is None:
-            checkpoint = root / "ckpts" / "dinov3_vitl16_pretrain_lvd1689m.pth"
-        # The hub loader derives a config flag from an 8-char hash in the filename, which local
-        # checkpoints do not carry; the LVD-1689M defaults are what `pretrained=False` already builds.
-        self.trunk = dinov3_vitl16(pretrained=False)
-        state = torch.load(Path(checkpoint).resolve(), map_location="cpu", weights_only=True)
-        missing, unexpected = self.trunk.load_state_dict(state, strict=False)
-        if missing or unexpected:
-            raise RuntimeError(f"DINOv3 checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
+        self.trunk = _load_dinov3_backbone(checkpoint)
         self.trainable = trainable
         self.trunk.requires_grad_(trainable)
 
@@ -143,6 +154,77 @@ class DINOv3Encoder(nn.Module):
     def forward(self, images):
         with torch.no_grad() if not self.trainable else nullcontext():
             return self.trunk.get_intermediate_layers(images, n=[self.last_layer], reshape=True)[0]
+
+
+class DINOv3AdapterEncoder(DINOv3Encoder):
+    """Frozen DINOv3 ViT-L/16 behind DINOv3's ViT-Adapter, emitting strides 4/8/16/32.
+
+    The adapter trains while the trunk stays frozen, so unlike the plain encoder this one has parameters
+    of its own and its features cannot be cached between epochs.
+    """
+
+    # The four blocks DINOv3 taps for ViT-L/16, per its own segmentation config.
+    interaction_indexes = (4, 11, 17, 23)
+
+    def __init__(self, checkpoint: str | None, trainable: bool = False, injector: bool = False):
+        nn.Module.__init__(self)
+        _dinov3_root()
+        from mmengine.model import revert_sync_batchnorm
+
+        backbone = _load_dinov3_backbone(checkpoint)
+        backbone.requires_grad_(False)
+        if injector:
+            from .dinov3_injector import DINOv3AdapterWithInjector as adapter_cls
+        else:
+            from dinov3.eval.segmentation.models.backbone.dinov3_adapter import DINOv3_Adapter as adapter_cls
+        adapter = adapter_cls(backbone, interaction_indexes=list(self.interaction_indexes))
+        # The adapter is built with SyncBatchNorm, which needs a process group we do not have outside
+        # mmseg's distributed Runner; mmengine's helper swaps it for plain BatchNorm in place.
+        self.adapter = revert_sync_batchnorm(adapter)
+        # `trainable` means "do not force this module into eval" -- the adapter trains even though the
+        # trunk does not, so `train()` below keeps the trunk frozen in eval instead.
+        self.trainable = True
+
+    @property
+    def trunk(self):
+        return self.adapter.backbone
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.adapter.backbone.eval()  # the trunk carries stochastic depth and must stay in eval
+        return self
+
+    def forward(self, images):
+        features = self.adapter(images)
+        return tuple(features[key] for key in ("1", "2", "3", "4"))
+
+
+class UperNetDecoder(nn.Module):
+    """mmsegmentation's UPerHead over the adapter's four scales, driven directly as an nn.Module.
+
+    Only the head is used -- none of mmseg's loss, auxiliary head or `EncoderDecoder` machinery -- so the
+    run is identical to a probe run apart from the decoder itself.
+    """
+
+    def __init__(self, in_channels: int, num_classes: int):
+        super().__init__()
+        from mmseg.models.decode_heads import UPerHead
+
+        self.head = UPerHead(
+            in_channels=[in_channels] * 4,
+            in_index=[0, 1, 2, 3],
+            pool_scales=(1, 2, 3, 6),
+            channels=512,
+            dropout_ratio=0.1,
+            num_classes=num_classes,
+            norm_cfg={"type": "BN", "requires_grad": True},
+            align_corners=False,
+            # Required by the constructor, never called: we compute the loss ourselves.
+            loss_decode={"type": "CrossEntropyLoss"},
+        )
+
+    def forward(self, features, output_size):
+        return F.interpolate(self.head(features), size=output_size, mode="bilinear", align_corners=False)
 
 
 def _trainable_sam3_mlp_forward(mlp, x):
@@ -171,14 +253,21 @@ def build_model(
     classes: int,
     checkpoint: str | None,
     train_encoder: bool = False,
+    injector: bool = False,
 ):
     encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
+    probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe, "upernet": UperNetDecoder}
     if model_name not in encoders:
         raise ValueError(f"Unknown foundation model: {model_name} (expected one of {sorted(encoders)})")
-    encoder = encoders[model_name](checkpoint, trainable=train_encoder)
-    probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe}
     if probe_name not in probes:
-        raise ValueError(f"Unknown probe: {probe_name}")
+        raise ValueError(f"Unknown probe: {probe_name} (expected one of {sorted(probes)})")
+    if probe_name == "upernet":
+        # UperNet consumes a feature pyramid, which only the adapter produces.
+        if model_name != "dinov3":
+            raise ValueError("The upernet decoder is only wired for the DINOv3 adapter")
+        encoder = DINOv3AdapterEncoder(checkpoint, trainable=train_encoder, injector=injector)
+    else:
+        encoder = encoders[model_name](checkpoint, trainable=train_encoder)
     probe = probes[probe_name](encoder.feature_channels, classes)
     return SegmentationModel(encoder, probe)
 

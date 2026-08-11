@@ -51,6 +51,21 @@ def _cache_features(cfg, encoder, dataset, device):
     encoder.cpu()
 
 
+def _image_loader(cfg, preprocess, subset, shuffle=False):
+    """Whole images straight to the model, for runs whose encoder trains and so cannot be cached."""
+    dataset = _raw_dataset(cfg, preprocess, subset)
+    return DataLoader(
+        dataset,
+        batch_size=cfg.batch_size,
+        shuffle=shuffle,
+        num_workers=cfg.num_workers,
+        collate_fn=collate_cases,
+        pin_memory=True,
+        # UPerHead's pooling branch cannot BatchNorm a batch of one, which an odd case count would leave.
+        drop_last=shuffle and len(dataset) % cfg.batch_size == 1,
+    )
+
+
 def _loader(cfg, raw_dataset, shuffle):
     dataset = CachedFeatureDataset(cfg.feature_cache_dir, raw_dataset.ids)
     return DataLoader(
@@ -100,14 +115,23 @@ def main():
     torch.manual_seed(cfg.seed)
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
-    model = build_model(cfg.model_name, cfg.probe_name, classes, cfg.checkpoint)
-    if cfg.patching is not None:
-        # Patches are cut fresh every epoch, so there is nothing stable to cache: the frozen encoder
-        # runs inline under no_grad and the whole model is what gets stepped through.
+    model = build_model(cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, injector=cfg.injector)
+    # An encoder with parameters of its own -- the adapter -- produces different features every epoch, so
+    # like the patchwise case there is nothing stable to cache.
+    encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
+    if cfg.patching is not None or encoder_trains:
+        # Nothing stable to cache -- patches are cut fresh every epoch, and a training adapter changes
+        # the features it produces -- so the whole model is what gets stepped through.
         module = model.to(device)
         forward = lambda m, images, masks: m(images)  # noqa: E731
-        train_loader = _patch_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
-        val_loader = None if cfg.fold == "all" else _patch_loader(cfg, model.encoder.preprocess, "val")
+        if cfg.patching is not None:
+            train_loader = _patch_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
+            val_loader = None if cfg.fold == "all" else _patch_loader(cfg, model.encoder.preprocess, "val")
+        else:
+            train_loader = _image_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
+            val_loader = (
+                None if cfg.fold == "all" else _image_loader(cfg, model.encoder.preprocess, "val")
+            )
     else:
         train_raw = _raw_dataset(cfg, model.encoder.preprocess, "train")
         val_raw = None if cfg.fold == "all" else _raw_dataset(cfg, model.encoder.preprocess, "val")
@@ -119,8 +143,12 @@ def main():
         train_loader = _loader(cfg, train_raw, True)
         val_loader = None if val_raw is None else _loader(cfg, val_raw, False)
     probe = model.probe
+    # The adapter's parameters live on the encoder, so step everything that asks for a gradient rather
+    # than the probe alone. For a frozen encoder this is exactly `probe.parameters()`.
     optimizer = torch.optim.AdamW(
-        probe.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay
+        [p for p in model.parameters() if p.requires_grad],
+        lr=cfg.learning_rate,
+        weight_decay=cfg.weight_decay,
     )
     loss_fn = DiceCrossEntropyLoss()
 
@@ -162,6 +190,14 @@ def main():
                 f"val_loss={val_loss:.4f} val_dice={val_dice:.4f}"
             )
             state = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
+            if encoder_trains:
+                # Only what trains: the frozen trunk is 300M parameters and is rebuilt from its own
+                # checkpoint. `encoder` is reserved for the finetuning runs, which store the whole trunk.
+                state["adapter"] = {
+                    key: value
+                    for key, value in model.encoder.adapter.state_dict().items()
+                    if not key.startswith("backbone.")
+                }
             torch.save(state, cfg.run_dir / "final.pt")
             if val_loader is not None and val_dice > best_dice:
                 best_dice = val_dice
