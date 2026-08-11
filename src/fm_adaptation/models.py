@@ -199,6 +199,47 @@ class DINOv3AdapterEncoder(DINOv3Encoder):
         return tuple(features[key] for key in ("1", "2", "3", "4"))
 
 
+class SAM3AdapterEncoder(PEEncoder):
+    """Frozen SAM3 PE trunk behind the same ViT-Adapter, emitting strides 4/8/16/32.
+
+    Runs at 896 rather than SAM3's native 1008: the adapter's coarsest level needs the input to divide by
+    32, which 1008 does not, while 896 divides by both 32 and SAM3's patch size of 14.
+    """
+
+    input_size = 896
+
+    def __init__(self, checkpoint: str | None, trainable: bool = False, injector: bool = False):
+        nn.Module.__init__(self)
+        from mmengine.model import revert_sync_batchnorm
+
+        from .sam3_adapter import SAM3Adapter, load_sam3_trunk
+
+        backbone = load_sam3_trunk(checkpoint, image_size=self.input_size)
+        backbone.requires_grad_(False)
+        # SAM3's fused PE MLP is inference-only and casts to bfloat16 internally. The trunk's weights
+        # never update, but the injector's gradients have to flow back through these blocks, so the
+        # fused path is swapped for its differentiable equivalent exactly as finetuning does.
+        for block in backbone.blocks:
+            block.mlp.forward = types.MethodType(_trainable_sam3_mlp_forward, block.mlp)
+        adapter = SAM3Adapter(backbone, use_injector=injector)
+        # Built with SyncBatchNorm, which needs a process group we do not have outside mmseg's Runner.
+        self.adapter = revert_sync_batchnorm(adapter)
+        self.trainable = True
+
+    @property
+    def trunk(self):
+        return self.adapter.backbone
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.adapter.backbone.eval()  # the trunk carries stochastic depth and must stay in eval
+        return self
+
+    def forward(self, images):
+        features = self.adapter(images)
+        return tuple(features[key] for key in ("1", "2", "3", "4"))
+
+
 class UperNetDecoder(nn.Module):
     """mmsegmentation's UPerHead over the adapter's four scales, driven directly as an nn.Module.
 
@@ -263,9 +304,8 @@ def build_model(
         raise ValueError(f"Unknown probe: {probe_name} (expected one of {sorted(probes)})")
     if probe_name == "upernet":
         # UperNet consumes a feature pyramid, which only the adapter produces.
-        if model_name != "dinov3":
-            raise ValueError("The upernet decoder is only wired for the DINOv3 adapter")
-        encoder = DINOv3AdapterEncoder(checkpoint, trainable=train_encoder, injector=injector)
+        adapters = {"dinov3": DINOv3AdapterEncoder, "sam3": SAM3AdapterEncoder}
+        encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector)
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder)
     probe = probes[probe_name](encoder.feature_channels, classes)
