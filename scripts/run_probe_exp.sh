@@ -17,7 +17,10 @@ export PATH="${venv/#\~/$HOME}/bin:$PATH"
 export CUDA_VISIBLE_DEVICES="$gpu_id"
 
 if [[ "$train" -eq 1 ]]; then
-    python -m fm_adaptation.training --config "$config"
+    train_args=(--config "$config")
+    # resume=1 continues the run from its own final.pt rather than starting over.
+    [[ "${resume:-0}" -eq 1 ]] && train_args+=(--resume)
+    python -m fm_adaptation.training "${train_args[@]}"
 fi
 
 if [[ "$predict" -eq 1 ]]; then

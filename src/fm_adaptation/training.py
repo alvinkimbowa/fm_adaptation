@@ -78,6 +78,53 @@ def _loader(cfg, raw_dataset, shuffle):
     )
 
 
+def _rng_state():
+    """Enough to keep shuffling and patch sampling on the same trajectory across a restart."""
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+    }
+
+
+def _resume(checkpoint_path, model, optimizer, encoder_trains):
+    """Restore weights, optimiser and bookkeeping from a run's own `final.pt`."""
+    if not checkpoint_path.exists():
+        raise SystemExit(f"--resume given but there is no checkpoint at {checkpoint_path}")
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if "optimizer" not in state:
+        raise SystemExit(
+            f"{checkpoint_path} predates resume support (no optimiser state); rerun without --resume"
+        )
+    model.probe.load_state_dict(state["probe"])
+    if encoder_trains:
+        missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
+        missing = [key for key in missing if not key.startswith("backbone.")]
+        if missing or unexpected:
+            raise RuntimeError(f"adapter mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
+    optimizer.load_state_dict(state["optimizer"])
+    rng = state.get("rng")
+    if rng:
+        random.setstate(rng["python"])
+        np.random.set_state(rng["numpy"])
+        torch.set_rng_state(rng["torch"])
+        if rng["cuda"] and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng["cuda"])
+    return state
+
+
+def _truncate_history(path, last_epoch):
+    """Drop any rows past the epoch we are resuming from, so the file matches the checkpoint."""
+    if not path.exists():
+        return
+    with open(path, newline="") as f:
+        rows = list(csv.reader(f))
+    header, body = rows[0], [r for r in rows[1:] if r and int(float(r[0])) <= last_epoch]
+    with open(path, "w", newline="") as f:
+        csv.writer(f).writerows([header, *body])
+
+
 def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None):
     training = optimizer is not None
     forward = forward or (lambda m, x, y: m(x, y.shape[-2:]))
@@ -107,6 +154,8 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--resume", action="store_true",
+                        help="continue this run from its own final.pt instead of training from scratch")
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
 
@@ -158,10 +207,20 @@ def main():
     best_dice = -1.0
     stopping_reference_dice = -1.0
     epochs_without_improvement = 0
-    with open(history_path, "w", newline="") as history_file:
+    start_epoch = 1
+    if args.resume:
+        resumed = _resume(cfg.run_dir / "final.pt", model, optimizer, encoder_trains)
+        start_epoch = resumed["epoch"] + 1
+        best_dice = resumed["best_dice"]
+        stopping_reference_dice = resumed["stopping_reference_dice"]
+        epochs_without_improvement = resumed["epochs_without_improvement"]
+        _truncate_history(history_path, resumed["epoch"])
+        print(f"resumed from epoch {resumed['epoch']} (best_val_dice={best_dice:.4f})")
+    with open(history_path, "a" if start_epoch > 1 else "w", newline="") as history_file:
         writer = csv.writer(history_file)
-        writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice"])
-        for epoch in range(1, cfg.epochs + 1):
+        if start_epoch == 1:
+            writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice"])
+        for epoch in range(start_epoch, cfg.epochs + 1):
             train_loss, train_dice = _run_epoch(
                 module,
                 train_loader,
@@ -189,7 +248,29 @@ def main():
                 f"epoch={epoch} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
                 f"val_loss={val_loss:.4f} val_dice={val_dice:.4f}"
             )
-            state = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
+            # The bookkeeping happens before the save so a resumed run picks up the counters as they
+            # stood at the end of this epoch, not as they were before it.
+            improved = val_loader is not None and val_dice > best_dice
+            if improved:
+                best_dice = val_dice
+            if val_loader is not None:
+                if val_dice > stopping_reference_dice + cfg.early_stopping_min_delta:
+                    stopping_reference_dice = val_dice
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
+            state = {
+                "probe": probe.state_dict(),
+                "epoch": epoch,
+                "val_dice": val_dice,
+                # Everything `--resume` needs to carry on as if the run had never stopped. `predict.py`
+                # ignores these keys, so an interrupted run stays usable for inference either way.
+                "optimizer": optimizer.state_dict(),
+                "best_dice": best_dice,
+                "stopping_reference_dice": stopping_reference_dice,
+                "epochs_without_improvement": epochs_without_improvement,
+                "rng": _rng_state(),
+            }
             if encoder_trains:
                 # Only what trains: the frozen trunk is 300M parameters and is rebuilt from its own
                 # checkpoint. `encoder` is reserved for the finetuning runs, which store the whole trunk.
@@ -199,15 +280,8 @@ def main():
                     if not key.startswith("backbone.")
                 }
             torch.save(state, cfg.run_dir / "final.pt")
-            if val_loader is not None and val_dice > best_dice:
-                best_dice = val_dice
+            if improved:
                 torch.save(state, cfg.run_dir / "best.pt")
-            if val_loader is not None:
-                if val_dice > stopping_reference_dice + cfg.early_stopping_min_delta:
-                    stopping_reference_dice = val_dice
-                    epochs_without_improvement = 0
-                else:
-                    epochs_without_improvement += 1
             if (
                 val_loader is not None
                 and epoch >= cfg.min_epochs
