@@ -45,9 +45,9 @@ layout=mask_pair
 # contour | overlay | centerline
 gt_style=contour
 pred_style=overlay
-gt_color=green
+gt_color=white
 pred_color=red
-gt_width=1
+gt_width=1.5
 pred_width=2
 alpha=0.65
 

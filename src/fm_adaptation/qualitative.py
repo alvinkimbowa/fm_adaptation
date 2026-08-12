@@ -44,10 +44,16 @@ COLORS = {
     "white": (245, 245, 245),
 }
 # Multiclass masks colour by *class*, so ground truth and prediction can no longer be told apart by
-# colour; the styles do that instead (a contour against a fill). Indexed by class value - 1.
+# colour; the styles do that instead (a contour against a fill). Indexed by class value - 1. Brighter
+# than COLORS, which is tuned for lines over a bright image rather than fills over a dark one.
 CLASS_PALETTE = (
-    COLORS["red"], COLORS["blue"], COLORS["yellow"], COLORS["magenta"], COLORS["cyan"],
-    COLORS["green"], COLORS["white"],
+    (255, 75, 70),     # red
+    (90, 165, 255),    # blue
+    (255, 215, 65),    # yellow
+    (255, 100, 225),   # magenta
+    (80, 240, 240),    # cyan
+    (95, 240, 130),    # green
+    (245, 245, 245),   # white
 )
 IMAGE_SUFFIXES = (".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp")
 
@@ -63,11 +69,22 @@ def draw(canvas, mask, style, color, width=2, alpha=0.4):
         canvas[mask] = (1.0 - alpha) * canvas[mask] + alpha * color
     elif style == "contour":
         contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        cv2.drawContours(canvas, contours, -1, color.tolist(), max(1, width))
+        if width == int(width):
+            cv2.drawContours(canvas, contours, -1, color.tolist(), max(1, int(width)))
+        else:
+            # OpenCV strokes in whole pixels, so a half step is drawn at double scale and averaged
+            # back down; the coverage that falls out is the line's antialiasing.
+            scale = 2
+            height, wide = mask.shape[:2]
+            large = np.zeros((height * scale, wide * scale), dtype=np.float32)
+            cv2.drawContours(large, [c * scale for c in contours], -1, 1.0,
+                             max(1, round(width * scale)), lineType=cv2.LINE_AA)
+            coverage = cv2.resize(large, (wide, height), interpolation=cv2.INTER_AREA)[..., None]
+            canvas[:] = (1.0 - coverage) * canvas + coverage * color
     elif style == "centerline":
         line = skeletonize(mask)
         if width > 1:
-            line = binary_dilation(line, iterations=width // 2)
+            line = binary_dilation(line, iterations=int(width) // 2)
         canvas[line] = color
     else:
         raise ValueError(f"Unknown style: {style} (expected one of {STYLES})")
@@ -77,14 +94,17 @@ def mask_colors(classes, style):
     """The colour each class is painted in, as (ground truth, prediction) maps of value -> RGB.
 
     One foreground class is the binary case the styles were designed around, and keeps its two
-    configured colours. Beyond that, colour has to carry the class, so both maps share a palette and
-    ground truth and prediction are told apart by their styles alone.
+    configured colours. Beyond that the prediction's fill carries the class, and ground truth drawn
+    as a line takes the configured `gt_color` for all of them: an outline in the same colour as the
+    fill under it disappears wherever the two agree, which is most of the mask.
     """
     classes = [int(value) for value in classes if int(value) != 0]
     if len(classes) <= 1:
         value = classes[0] if classes else 1
         return {value: style["gt_color"]}, {value: style["pred_color"]}
     palette = {value: CLASS_PALETTE[(value - 1) % len(CLASS_PALETTE)] for value in classes}
+    if style["gt_style"] in ("contour", "centerline"):
+        return {value: style["gt_color"] for value in classes}, palette
     return palette, palette
 
 
@@ -322,8 +342,8 @@ def add_style_arguments(parser):
     parser.add_argument("--pred-style", choices=STYLES, default="overlay")
     parser.add_argument("--gt-color", default="green")
     parser.add_argument("--pred-color", default="red")
-    parser.add_argument("--gt-width", type=int, default=2)
-    parser.add_argument("--pred-width", type=int, default=2)
+    parser.add_argument("--gt-width", type=float, default=2)
+    parser.add_argument("--pred-width", type=float, default=2)
     parser.add_argument("--alpha", type=float, default=0.4)
     parser.add_argument("--seed", type=int, default=0)
     return parser
