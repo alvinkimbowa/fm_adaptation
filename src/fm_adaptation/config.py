@@ -33,6 +33,8 @@ class ExperimentConfig:
     probe_name: str
     injector: bool
     train_encoder: bool
+    init_from: str | None
+    init_from_checkpoint: str
     run_name: str
     epochs: int
     min_epochs: int
@@ -72,6 +74,10 @@ class ExperimentConfig:
             injector=bool(model.get("injector", False)),
             # Unfreeze the foundation-model trunk and train it along with the adapter and the head.
             train_encoder=bool(model.get("train_encoder", False)),
+            # Start from another run's weights instead of a fresh head, the way `LP + FT` starts from
+            # its own probe: the run name to seed from, within the same model, dataset and fold.
+            init_from=model.get("init_from"),
+            init_from_checkpoint=str(model.get("init_from_checkpoint", "final")),
             run_name=str(model.get("run_name", model["probe"])),
             epochs=int(training["epochs"]),
             min_epochs=int(training.get("min_epochs", 1)),

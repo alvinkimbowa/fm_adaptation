@@ -88,7 +88,32 @@ def _rng_state():
     }
 
 
-def _resume(run_dir, model, optimizer, encoder_trains):
+def _load_weights(model, state):
+    """Copy a checkpoint's trained parts into `model`, leaving the rest as built."""
+    model.probe.load_state_dict(state["probe"])
+    if "encoder" in state:
+        # A finetuned trunk; `adapter` carries no `backbone.*` keys, so it cannot undo this.
+        model.encoder.trunk.load_state_dict(state["encoder"])
+    if "adapter" in state:
+        missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
+        missing = [key for key in missing if not key.startswith("backbone.")]
+        if missing or unexpected:
+            raise RuntimeError(f"adapter mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
+
+
+def _initialise_from(cfg, model):
+    """Seed the adapter and head from a finished run, the way `LP + FT` seeds itself from its probe."""
+    path = (
+        cfg.results_dir / cfg.model_name / cfg.train_dataset / cfg.init_from
+        / f"fold_{cfg.fold}" / f"{cfg.init_from_checkpoint}.pt"
+    )
+    if not path.exists():
+        raise SystemExit(f"init_from given but there is no {path}")
+    _load_weights(model, torch.load(path, map_location="cpu", weights_only=True))
+    print(f"initialised from {path}")
+
+
+def _resume(run_dir, model, optimizer):
     """Pick a run back up from `last.pt`, which a completed run no longer has."""
     path = run_dir / "last.pt"
     if not path.exists():
@@ -96,15 +121,7 @@ def _resume(run_dir, model, optimizer, encoder_trains):
             f"--resume given but there is no {path}. A finished run keeps weights only, in final.pt."
         )
     state = torch.load(path, map_location="cpu", weights_only=False)
-    model.probe.load_state_dict(state["probe"])
-    if "encoder" in state:
-        # A finetuned trunk; the adapter entry below carries no `backbone.*` keys, so it cannot undo this.
-        model.encoder.trunk.load_state_dict(state["encoder"])
-    if encoder_trains:
-        missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
-        missing = [key for key in missing if not key.startswith("backbone.")]
-        if missing or unexpected:
-            raise RuntimeError(f"adapter mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
+    _load_weights(model, state)
     optimizer.load_state_dict(state["optimizer"])
     rng = state.get("rng")
     if rng:
@@ -218,6 +235,9 @@ def main():
         train_encoder=cfg.train_encoder,
         injector=cfg.injector,
     )
+    if cfg.init_from and not args.resume:
+        # A resume restores this run's own state; seeding on top of it would throw the run away.
+        _initialise_from(cfg, model)
     # An encoder with parameters of its own -- the adapter -- produces different features every epoch, so
     # like the patchwise case there is nothing stable to cache.
     encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
@@ -264,7 +284,7 @@ def main():
     epochs_without_improvement = 0
     start_epoch = 1
     if args.resume:
-        resumed = _resume(cfg.run_dir, model, optimizer, encoder_trains)
+        resumed = _resume(cfg.run_dir, model, optimizer)
         start_epoch = resumed["epoch"] + 1
         best_dice = resumed["best_dice"]
         stopping_reference_dice = resumed["stopping_reference_dice"]

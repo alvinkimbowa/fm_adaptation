@@ -165,9 +165,10 @@ ADAPTATIONS = {
     "upernet_inj": ("Adapter + UperNet + Inj", 5),
     "upernet_inj_ours": ("Adapter + UperNet + Inj ours", 6),
     "upernet_inj_ft_ours": ("Adapter + UperNet + Inj + FT ours", 7),
-    "m2f": ("Adapter + Mask2Former", 8),
-    "m2f_inj": ("Adapter + Mask2Former + Inj", 9),
-    "": ("", 10),
+    "upernet_inj_ft_init_ours": ("Adapter + UperNet + Inj + FT init ours", 8),
+    "m2f": ("Adapter + Mask2Former", 9),
+    "m2f_inj": ("Adapter + Mask2Former + Inj", 10),
+    "": ("", 11),
 }
 
 
@@ -176,7 +177,7 @@ ADAPTATIONS = {
 # the ablation page, away from the extractor-only row it exists to be compared against.
 MAIN_ADAPTATIONS = {
     "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_inj_ours", "upernet_inj_ft_ours",
-    "m2f", "m2f_inj", "",
+    "upernet_inj_ft_init_ours", "m2f", "m2f_inj", "",
 }
 
 
