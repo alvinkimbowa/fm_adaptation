@@ -172,7 +172,6 @@ class DINOv3AdapterEncoder(DINOv3Encoder):
         from mmengine.model import revert_sync_batchnorm
 
         backbone = _load_dinov3_backbone(checkpoint)
-        backbone.requires_grad_(False)
         if injector:
             from .dinov3_injector import DINOv3AdapterWithInjector as adapter_cls
         else:
@@ -181,9 +180,12 @@ class DINOv3AdapterEncoder(DINOv3Encoder):
         # The adapter is built with SyncBatchNorm, which needs a process group we do not have outside
         # mmseg's distributed Runner; mmengine's helper swaps it for plain BatchNorm in place.
         self.adapter = revert_sync_batchnorm(adapter)
-        # `trainable` means "do not force this module into eval" -- the adapter trains even though the
-        # trunk does not, so `train()` below keeps the trunk frozen in eval instead.
+        # `DINOv3_Adapter.__init__` freezes the trunk itself, so the say over it comes after, not before.
+        self.adapter.backbone.requires_grad_(trainable)
+        # `trainable` on the encoder means "do not force this module into eval" -- the adapter trains
+        # whether or not the trunk does, so this is always True; `trunk_trains` is the trunk's own say.
         self.trainable = True
+        self.trunk_trains = trainable
 
     @property
     def trunk(self):
@@ -191,7 +193,8 @@ class DINOv3AdapterEncoder(DINOv3Encoder):
 
     def train(self, mode: bool = True):
         super().train(mode)
-        self.adapter.backbone.eval()  # the trunk carries stochastic depth and must stay in eval
+        if not self.trunk_trains:
+            self.adapter.backbone.eval()  # a frozen trunk carries stochastic depth and stays in eval
         return self
 
     def forward(self, images):
@@ -215,16 +218,19 @@ class SAM3AdapterEncoder(PEEncoder):
         from .sam3_adapter import SAM3Adapter, load_sam3_trunk
 
         backbone = load_sam3_trunk(checkpoint, image_size=self.input_size)
-        backbone.requires_grad_(False)
-        # SAM3's fused PE MLP is inference-only and casts to bfloat16 internally. The trunk's weights
-        # never update, but the injector's gradients have to flow back through these blocks, so the
+        # SAM3's fused PE MLP is inference-only and casts to bfloat16 internally. When the trunk is
+        # frozen its weights never update, but the injector's gradients still flow back through these
+        # blocks, so the
         # fused path is swapped for its differentiable equivalent exactly as finetuning does.
         for block in backbone.blocks:
             block.mlp.forward = types.MethodType(_trainable_sam3_mlp_forward, block.mlp)
         adapter = SAM3Adapter(backbone, use_injector=injector)
         # Built with SyncBatchNorm, which needs a process group we do not have outside mmseg's Runner.
         self.adapter = revert_sync_batchnorm(adapter)
+        # The adapter freezes the trunk on construction, so the say over it comes after, not before.
+        self.adapter.backbone.requires_grad_(trainable)
         self.trainable = True
+        self.trunk_trains = trainable
 
     @property
     def trunk(self):
@@ -232,7 +238,8 @@ class SAM3AdapterEncoder(PEEncoder):
 
     def train(self, mode: bool = True):
         super().train(mode)
-        self.adapter.backbone.eval()  # the trunk carries stochastic depth and must stay in eval
+        if not self.trunk_trains:
+            self.adapter.backbone.eval()  # a frozen trunk carries stochastic depth and stays in eval
         return self
 
     def forward(self, images):

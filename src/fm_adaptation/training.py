@@ -97,6 +97,9 @@ def _resume(run_dir, model, optimizer, encoder_trains):
         )
     state = torch.load(path, map_location="cpu", weights_only=False)
     model.probe.load_state_dict(state["probe"])
+    if "encoder" in state:
+        # A finetuned trunk; the adapter entry below carries no `backbone.*` keys, so it cannot undo this.
+        model.encoder.trunk.load_state_dict(state["encoder"])
     if encoder_trains:
         missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
         missing = [key for key in missing if not key.startswith("backbone.")]
@@ -124,7 +127,48 @@ def _truncate_history(path, last_epoch):
         csv.writer(f).writerows([header, *body])
 
 
-def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None):
+def _layer_id(name: str, blocks: int) -> int:
+    """Which layer a trunk parameter belongs to, for layer-wise learning-rate decay.
+
+    0 is the embedding, 1..blocks are the transformer blocks and blocks+1 is everything after them --
+    the same partition ViT-Adapter's `LayerDecayOptimizerConstructor` uses.
+    """
+    if name.startswith("blocks."):
+        return int(name.split(".")[1]) + 1
+    embedding = ("patch_embed", "pos_embed", "cls_token", "storage_tokens", "mask_token", "rope_embed")
+    return 0 if name.startswith(embedding) else blocks + 1
+
+
+def _param_groups(model, cfg):
+    """Optimiser groups: the head and adapter at the config rate, the trunk layer-decayed beneath it.
+
+    Without `encoder_learning_rate` this is exactly the flat list of trainable parameters it always was.
+    """
+    if cfg.encoder_learning_rate is None:
+        return [p for p in model.parameters() if p.requires_grad]
+    trunk = model.encoder.trunk
+    trunk_params = {id(p) for p in trunk.parameters()}
+    blocks = len(trunk.blocks)
+    groups = {}
+    for name, param in trunk.named_parameters():
+        if not param.requires_grad:
+            continue
+        layer = _layer_id(name, blocks)
+        # `encoder_learning_rate` is the rate of the *last* block; everything below it decays away.
+        lr = cfg.encoder_learning_rate * cfg.encoder_layer_decay ** max(0, blocks - layer)
+        # Biases and one-dimensional parameters (norms, gammas, tokens) are left undecayed, as upstream.
+        decay = 0.0 if param.ndim <= 1 else cfg.weight_decay
+        groups.setdefault((lr, decay), []).append(param)
+    rest = [
+        p for p in model.parameters() if p.requires_grad and id(p) not in trunk_params
+    ]
+    return [
+        *({"params": params, "lr": lr, "weight_decay": decay} for (lr, decay), params in groups.items()),
+        {"params": rest, "lr": cfg.learning_rate, "weight_decay": cfg.weight_decay},
+    ]
+
+
+def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None, accumulation_steps=1):
     training = optimizer is not None
     forward = forward or (lambda m, x, y: m(x, y.shape[-2:]))
     module.train(training)
@@ -134,16 +178,19 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
     losses, dices = [], []
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
     progress = tqdm(loader, desc=desc, leave=False)
-    for images, masks, _ in progress:
+    if training:
+        optimizer.zero_grad(set_to_none=True)
+    for step, (images, masks, _) in enumerate(progress, start=1):
         images, masks = images.to(device), masks.to(device)
-        if training:
-            optimizer.zero_grad(set_to_none=True)
         with amp:
             logits = forward(module, images, masks)
             loss = loss_fn(logits, masks)
         if training:
-            loss.backward()
-            optimizer.step()
+            # Accumulation keeps the effective batch where the memory does not allow the real one.
+            (loss / accumulation_steps).backward()
+            if step % accumulation_steps == 0 or step == len(loader):
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
         losses.append(loss.item())
         dices.append(mean_foreground_dice(logits.detach(), masks))
         progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
@@ -163,7 +210,14 @@ def main():
     torch.manual_seed(cfg.seed)
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
-    model = build_model(cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, injector=cfg.injector)
+    model = build_model(
+        cfg.model_name,
+        cfg.probe_name,
+        classes,
+        cfg.checkpoint,
+        train_encoder=cfg.train_encoder,
+        injector=cfg.injector,
+    )
     # An encoder with parameters of its own -- the adapter -- produces different features every epoch, so
     # like the patchwise case there is nothing stable to cache.
     encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
@@ -194,9 +248,11 @@ def main():
     # The adapter's parameters live on the encoder, so step everything that asks for a gradient rather
     # than the probe alone. For a frozen encoder this is exactly `probe.parameters()`.
     optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad],
+        _param_groups(model, cfg),
         lr=cfg.learning_rate,
         weight_decay=cfg.weight_decay,
+        # A trainable trunk is 300M parameters; the fused path would hold a second copy of them.
+        foreach=False if cfg.train_encoder else None,
     )
     loss_fn = DiceCrossEntropyLoss()
 
@@ -228,6 +284,7 @@ def main():
                 optimizer,
                 desc=f"epoch {epoch}/{cfg.epochs} train",
                 forward=forward,
+                accumulation_steps=cfg.accumulation_steps,
             )
             if val_loader is None:
                 val_loss, val_dice = float("nan"), float("nan")
@@ -259,6 +316,10 @@ def main():
                 else:
                     epochs_without_improvement += 1
             weights = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
+            if cfg.train_encoder:
+                # A trunk that trains is no longer recoverable from its pretrained checkpoint, so it is
+                # stored whole under the key the finetuning runs already use.
+                weights["encoder"] = model.encoder.trunk.state_dict()
             if encoder_trains:
                 # Only what trains: the frozen trunk is 300M parameters and is rebuilt from its own
                 # checkpoint. `encoder` is reserved for the finetuning runs, which store the whole trunk.

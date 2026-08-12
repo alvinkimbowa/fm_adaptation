@@ -68,7 +68,14 @@ def main():
     cfg = ExperimentConfig.from_yaml(args.config)
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
-    model = build_model(cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, injector=cfg.injector)
+    model = build_model(
+        cfg.model_name,
+        cfg.probe_name,
+        classes,
+        cfg.checkpoint,
+        train_encoder=cfg.train_encoder,
+        injector=cfg.injector,
+    )
     checkpoint_name = "final" if cfg.fold == "all" else args.checkpoint
     checkpoint_path = cfg.run_dir / f"{checkpoint_name}.pt"
     if checkpoint_name == "last":

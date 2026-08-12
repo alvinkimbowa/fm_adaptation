@@ -164,9 +164,10 @@ ADAPTATIONS = {
     "upernet": ("Adapter + UperNet", 4),
     "upernet_inj": ("Adapter + UperNet + Inj", 5),
     "upernet_inj_ours": ("Adapter + UperNet + Inj ours", 6),
-    "m2f": ("Adapter + Mask2Former", 7),
-    "m2f_inj": ("Adapter + Mask2Former + Inj", 8),
-    "": ("", 9),
+    "upernet_inj_ft_ours": ("Adapter + UperNet + Inj + FT ours", 7),
+    "m2f": ("Adapter + Mask2Former", 8),
+    "m2f_inj": ("Adapter + Mask2Former + Inj", 9),
+    "": ("", 10),
 }
 
 
@@ -174,7 +175,8 @@ ADAPTATIONS = {
 # `upernet_inj` needs its own base: as a bare suffix of `upernet` it would read as a sweep and be sent to
 # the ablation page, away from the extractor-only row it exists to be compared against.
 MAIN_ADAPTATIONS = {
-    "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_inj_ours", "m2f", "m2f_inj", "",
+    "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_inj_ours", "upernet_inj_ft_ours",
+    "m2f", "m2f_inj", "",
 }
 
 

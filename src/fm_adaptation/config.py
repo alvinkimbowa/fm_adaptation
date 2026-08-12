@@ -32,6 +32,7 @@ class ExperimentConfig:
     checkpoint: str | None
     probe_name: str
     injector: bool
+    train_encoder: bool
     run_name: str
     epochs: int
     min_epochs: int
@@ -41,6 +42,9 @@ class ExperimentConfig:
     encoder_batch_size: int
     num_workers: int
     learning_rate: float
+    encoder_learning_rate: float | None
+    encoder_layer_decay: float
+    accumulation_steps: int
     weight_decay: float
     seed: int
     device: str
@@ -66,6 +70,8 @@ class ExperimentConfig:
             probe_name=str(model["probe"]),
             # Only meaningful for the adapter-based decoders; ignored by the probes.
             injector=bool(model.get("injector", False)),
+            # Unfreeze the foundation-model trunk and train it along with the adapter and the head.
+            train_encoder=bool(model.get("train_encoder", False)),
             run_name=str(model.get("run_name", model["probe"])),
             epochs=int(training["epochs"]),
             min_epochs=int(training.get("min_epochs", 1)),
@@ -75,6 +81,15 @@ class ExperimentConfig:
             encoder_batch_size=int(training.get("encoder_batch_size", 4)),
             num_workers=int(training.get("num_workers", 4)),
             learning_rate=float(training["learning_rate"]),
+            # A pretrained trunk cannot take the head's learning rate; when it trains it gets its own.
+            encoder_learning_rate=(
+                float(training["encoder_learning_rate"])
+                if training.get("encoder_learning_rate") is not None
+                else None
+            ),
+            # Layer-wise decay of that rate down the trunk, as ViT-Adapter does; 1.0 is a flat rate.
+            encoder_layer_decay=float(training.get("encoder_layer_decay", 1.0)),
+            accumulation_steps=int(training.get("accumulation_steps", 1)),
             weight_decay=float(training.get("weight_decay", 0.0)),
             seed=int(training.get("seed", 0)),
             device=str(training.get("device", "cuda")),
