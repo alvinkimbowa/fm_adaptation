@@ -19,6 +19,7 @@ experiments=(
     upernet
     upernet_inj
     upernet_inj_ours
+    upernet_inj_ft_ours
     m2f
     # nonlinear
     linear_finetune
