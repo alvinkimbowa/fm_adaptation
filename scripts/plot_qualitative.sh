@@ -37,9 +37,10 @@ cols=4          # samples per row
 
 # overlay  : image + pred overlay + gt contour        (1 panel per sample)
 # pair     : image, image + gt + pred                 (2 panels)
+# mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=pair
+layout=mask_pair
 
 # contour | overlay | centerline
 gt_style=contour

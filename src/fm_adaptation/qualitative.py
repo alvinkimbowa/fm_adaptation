@@ -30,6 +30,7 @@ STYLES = ("contour", "overlay", "centerline")
 LAYOUTS = {
     "overlay": ("both",),
     "pair": ("image", "both"),
+    "mask_pair": ("image", "both_mask"),
     "split": ("image", "gt", "prediction"),
     "masks": ("image", "gt_mask", "prediction_mask"),
 }
@@ -104,16 +105,20 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
             for value, color in colors.items():
                 panel[source == value] = color
         else:
-            panel = plain.copy()
+            # `both_mask` is the same drawing without the image under it, so the masks are read on
+            # their own; nothing shows through, so a fill there is painted solid.
+            bare = slot == "both_mask"
+            panel = np.zeros_like(plain) if bare else plain.copy()
+            alpha = 1.0 if bare else style["alpha"]
             # Prediction first so a ground-truth contour stays legible on top of a filled overlay.
-            if slot in ("both", "prediction"):
+            if slot in ("both", "both_mask", "prediction"):
                 for value, color in pred_colors.items():
                     draw(panel, prediction == value, style["pred_style"], color,
-                         style["pred_width"], style["alpha"])
-            if slot in ("both", "gt"):
+                         style["pred_width"], alpha)
+            if slot in ("both", "both_mask", "gt"):
                 for value, color in gt_colors.items():
                     draw(panel, gt == value, style["gt_style"], color,
-                         style["gt_width"], style["alpha"])
+                         style["gt_width"], alpha)
         out.append((slot, panel.clip(0, 255).astype(np.uint8)))
     return out
 
