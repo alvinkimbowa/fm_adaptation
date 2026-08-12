@@ -92,12 +92,20 @@ def main():
     parser.add_argument("--nnunet-results-dir", nargs="*", default=[])
     parser.add_argument("--monounet-results-dir", nargs="*", default=[])
     parser.add_argument("--output", default="models/parameter_counts.json")
+    parser.add_argument(
+        "--only-missing",
+        action="store_true",
+        help="Keep the counts already written and build only the runs the file does not cover.",
+    )
     args = parser.parse_args()
 
     from .report import MONOUNET_NAMES
 
+    output = Path(args.output)
     counts = {}
-    seen = {}
+    if args.only_missing and output.exists():
+        counts = json.loads(output.read_text())
+    seen = dict(counts)
     for config_path in sorted(Path(args.results_dir).glob("*/Dataset*/*/fold_*/config.yaml")):
         cfg = yaml.safe_load(config_path.read_text())
         model_name = cfg["model"]["name"]
@@ -120,7 +128,6 @@ def main():
     counts.update(_nnunet_counts(args.nnunet_results_dir))
     counts.update(_monounet_counts(args.monounet_results_dir, MONOUNET_NAMES))
 
-    output = Path(args.output)
     output.write_text(json.dumps(counts, indent=2, sort_keys=True))
     print(f"wrote {output} ({len(counts)} entries)")
 
