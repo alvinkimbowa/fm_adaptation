@@ -10,8 +10,20 @@ from pathlib import Path
 from tqdm import tqdm
 
 from .config import ExperimentConfig
+from .data import load_dataset_json
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .selection import matches as _matches
+
+
+def _classes(cfg, dataset_name):
+    """The foreground classes and their names, from the dataset the run was *trained* on.
+
+    Taking them from the training dataset rather than the one being drawn keeps a class in the same
+    colour across every figure a run produces, including a transfer set that happens to lack one.
+    """
+    labels = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
+    names = {int(value): name for name, value in labels.items() if int(value) != 0}
+    return sorted(names), names
 
 
 def _source_dirs(cfg, dataset_name, kind):
@@ -84,6 +96,7 @@ def main():
         progress.set_postfix_str(f"{fold_dir.parents[1].name}/{fold_dir.parent.name} {kind}")
         cfg = ExperimentConfig.from_yaml(config_path)
         images, labels = _source_dirs(cfg, dataset_name, kind)
+        classes, class_names = _classes(cfg, dataset_name)
         path = render(
             images,
             labels,
@@ -97,6 +110,8 @@ def main():
             seed=args.seed,
             style=style,
             title=f"{dataset_name} — {fold_dir.parent.name}/{fold_dir.name} ({kind})",
+            classes=classes,
+            class_names=class_names,
         )
         drawn += 1
         progress.write(f"wrote {path}" if path else f"skipped {output_dir} (no metrics)")

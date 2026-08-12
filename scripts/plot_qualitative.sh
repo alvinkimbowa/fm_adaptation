@@ -5,15 +5,15 @@ export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 export PYTHONPATH="${PYTHONPATH:-}:src"
 
 datasets=(
-    Dataset080_BUSBRA_GE_Logiq_5
-    Dataset082_BUSBRA_Toshiba_Aplio_300
-    Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
     Dataset090_Echo_EchoCP
-    Dataset203_neurite_2px_scaleaug
-    Dataset204_lesion_czi_B
-    Dataset205_neurite_2px_scaleaug_red
+    # Dataset203_neurite_2px_scaleaug
+    # Dataset204_lesion_czi_B
+    # Dataset205_neurite_2px_scaleaug_red
 )
 experiments=(
     linear
@@ -39,14 +39,14 @@ cols=4          # samples per row
 # pair     : image, image + gt + pred                 (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=masks
+layout=pair
 
 # contour | overlay | centerline
 gt_style=contour
 pred_style=overlay
 gt_color=green
 pred_color=red
-gt_width=2
+gt_width=1
 pred_width=2
 alpha=0.4
 
