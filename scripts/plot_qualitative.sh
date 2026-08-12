@@ -48,7 +48,7 @@ gt_color=green
 pred_color=red
 gt_width=1
 pred_width=2
-alpha=0.4
+alpha=0.65
 
 crop=auto       # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 seed=0
