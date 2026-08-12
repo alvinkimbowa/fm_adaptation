@@ -17,6 +17,8 @@ datasets=(
 experiments=(
     linear
     upernet
+    upernet_inj
+    upernet_inj_ours
     m2f
     # nonlinear
     linear_finetune
@@ -34,7 +36,7 @@ cols=4          # samples per row
 # pair     : image, image + gt + pred                 (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=pair
+layout=masks
 
 # contour | overlay | centerline
 gt_style=contour
