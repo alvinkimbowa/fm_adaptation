@@ -10,6 +10,7 @@ datasets=(
     Dataset083_BUSBRA_U_Systems
     Dataset084_KidneyUS_Philips
     Dataset086_MMOTU_2D
+    Dataset090_Echo_EchoCP
     Dataset203_neurite_2px_scaleaug
     Dataset204_lesion_czi_B
     Dataset205_neurite_2px_scaleaug_red
