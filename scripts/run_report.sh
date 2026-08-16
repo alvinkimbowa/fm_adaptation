@@ -4,10 +4,21 @@ set -euo pipefail
 results_dir=models
 folds=0
 
-# Which rows to tabulate. Leave both empty for the whole study; otherwise list them the way
-# plot_curves.sh and plot_qualitative.sh do -- exact names, globs, or a `_suffix` tag. `datasets`
-# selects what a run was trained on. `experiments` narrows the foundation-model rows only; nnU-Net and
-# MonoUNet stay in as the comparison, so drop those by emptying the directory lists below.
+# Which rows to tabulate. Leave a list empty to keep everything it selects; otherwise list entries the
+# way plot_curves.sh and plot_qualitative.sh do -- exact names, globs, or a `_suffix` tag. `models`
+# picks the models to compare, `datasets` what a run was trained on, and `experiments` the adaptation.
+# `experiments` narrows the foundation-model rows only, so the baselines stay in as the comparison;
+# use `models` to drop those.
+models=(
+    dinov3
+    sam3
+    nnU-Net       # case, hyphens and underscores are ignored, so `nnunet` works too
+    # MonoUNet-t
+    # MonoUNet-B
+    # MonoUNet-L
+    monounet*     # all three MonoUNets
+)
+
 datasets=(
     Dataset080_BUSBRA_GE_Logiq_5
     Dataset082_BUSBRA_Toshiba_Aplio_300
@@ -21,18 +32,18 @@ datasets=(
 )
 
 experiments=(
-    # linear
+    linear
     # linear_finetune
     # linear_finetune_wd*    # every weight-decay sweep of the linear finetune
     # nonlinear
     # nonlinear_finetune
-    upernet
-    upernet_inj
+    # upernet
+    # upernet_inj
     upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
-    upernet_inj_ft_init_ours
-    upernet_inj_ft_vits_ours
+    # upernet_inj_ft_init_ours
+    # upernet_inj_ft_vits_ours
     # m2f
 )
 
@@ -64,6 +75,7 @@ export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 
 # `set -u` makes an empty array expansion an error, so each selection is only passed when it has one.
 report_args=()
+[[ ${#models[@]} -gt 0 ]] && report_args+=(--models "${models[@]}")
 [[ ${#datasets[@]} -gt 0 ]] && report_args+=(--datasets "${datasets[@]}")
 [[ ${#experiments[@]} -gt 0 ]] && report_args+=(--experiments "${experiments[@]}")
 

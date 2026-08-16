@@ -189,6 +189,21 @@ MAIN_ADAPTATIONS = {
 }
 
 
+def _model_matches(model, patterns):
+    """`--models` matched leniently, since the internal keys are not what anyone types.
+
+    Case, hyphens and underscores are ignored, so `nnunet`, `nnU-Net` and `nnu_net` all name the same
+    rows and `monounet-b` finds `MonoUNet-B`. Globs still work: `monounet*` takes all three MonoUNets.
+    """
+    if not patterns:
+        return True
+
+    def normalise(name):
+        return re.sub(r"[-_]", "", name).lower()
+
+    return matches(normalise(model), [normalise(pattern) for pattern in patterns])
+
+
 def _split_adaptation(adaptation):
     """Split a run name into its known base and any sweep suffix (e.g. `_wd1.0`)."""
     for base in sorted(ADAPTATIONS, key=len, reverse=True):
@@ -452,6 +467,13 @@ def main():
         default=[],
         help="Run names to tabulate, matched exactly, as a glob or as a `_suffix` tag; empty keeps all",
     )
+    parser.add_argument(
+        "--models",
+        nargs="*",
+        default=[],
+        help="Models to compare (dinov3, sam3, nnU-Net, MonoUNet-t/B/L), ignoring case and hyphens; "
+        "empty keeps every one",
+    )
     args = parser.parse_args()
     _load_parameter_counts(args.parameter_counts)
     records = defaultdict(dict)
@@ -477,13 +499,17 @@ def main():
         for key, results in records.items()
         # `key` is (model, adaptation, trained_on, fold). The baselines carry no adaptation name, so
         # `--experiments` narrows the foundation-model rows and leaves nnU-Net and MonoUNet standing as
-        # the comparison; drop them with `--datasets` or by not passing their results directories.
-        if matches(key[2], args.datasets) and (not key[1] or matches(key[1], args.experiments))
+        # the comparison; drop those with `--models`.
+        if _model_matches(key[0], args.models)
+        and matches(key[2], args.datasets)
+        and (not key[1] or matches(key[1], args.experiments))
     }
     if args.folds:
         records = _pool_folds(records, [fold.strip() for fold in args.folds.split(",")])
     if not records:
-        selection = ", ".join(filter(None, (" ".join(args.datasets), " ".join(args.experiments))))
+        selection = ", ".join(
+            filter(None, (" ".join(args.models), " ".join(args.datasets), " ".join(args.experiments)))
+        )
         raise RuntimeError(
             f"No cross-dataset metrics found under {args.results_dir}"
             + (f" for {selection}" if selection else "")
