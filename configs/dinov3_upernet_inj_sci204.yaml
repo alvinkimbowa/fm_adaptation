@@ -4,6 +4,7 @@ data:
   train_dataset: Dataset204_lesion_czi_B
   test_datasets:
     - Dataset204_lesion_czi_B
+    - Dataset206_lesion_120_czi_B
   test_split: Tr
   fold: 0
 
