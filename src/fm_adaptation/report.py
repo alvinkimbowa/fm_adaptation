@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from .selection import matches
+
 
 def _read_run(run_dir: Path):
     with open(run_dir / "config.yaml") as f:
@@ -438,6 +440,18 @@ def main():
     )
     parser.add_argument("--output", default="models/cross_dataset_report.html")
     parser.add_argument("--parameter-counts", default="models/parameter_counts.json")
+    parser.add_argument(
+        "--datasets",
+        nargs="*",
+        default=[],
+        help="Training datasets to tabulate; empty keeps every one, as in the plotting scripts",
+    )
+    parser.add_argument(
+        "--experiments",
+        nargs="*",
+        default=[],
+        help="Run names to tabulate, matched exactly, as a glob or as a `_suffix` tag; empty keeps all",
+    )
     args = parser.parse_args()
     _load_parameter_counts(args.parameter_counts)
     records = defaultdict(dict)
@@ -458,10 +472,22 @@ def main():
     for results_dir in args.monounet_results_dir:
         name = Path(results_dir).name
         _add_monounet_records(records, results_dir, MONOUNET_NAMES.get(name, name))
+    records = {
+        key: results
+        for key, results in records.items()
+        # `key` is (model, adaptation, trained_on, fold). The baselines carry no adaptation name, so
+        # `--experiments` narrows the foundation-model rows and leaves nnU-Net and MonoUNet standing as
+        # the comparison; drop them with `--datasets` or by not passing their results directories.
+        if matches(key[2], args.datasets) and (not key[1] or matches(key[1], args.experiments))
+    }
     if args.folds:
         records = _pool_folds(records, [fold.strip() for fold in args.folds.split(",")])
     if not records:
-        raise RuntimeError(f"No cross-dataset metrics found under {args.results_dir}")
+        selection = ", ".join(filter(None, (" ".join(args.datasets), " ".join(args.experiments))))
+        raise RuntimeError(
+            f"No cross-dataset metrics found under {args.results_dir}"
+            + (f" for {selection}" if selection else "")
+        )
     style = """
     body{background:#111;color:#bbb;font-family:system-ui;margin:16px}table{border-collapse:collapse;width:auto;max-width:100%}
     th,td{padding:7px 10px;text-align:center}th{background:#292929}td{background:#191919;border-bottom:1px solid #222}

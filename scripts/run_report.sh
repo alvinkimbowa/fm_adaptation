@@ -3,6 +3,39 @@ set -euo pipefail
 
 results_dir=models
 folds=0
+
+# Which rows to tabulate. Leave both empty for the whole study; otherwise list them the way
+# plot_curves.sh and plot_qualitative.sh do -- exact names, globs, or a `_suffix` tag. `datasets`
+# selects what a run was trained on. `experiments` narrows the foundation-model rows only; nnU-Net and
+# MonoUNet stay in as the comparison, so drop those by emptying the directory lists below.
+datasets=(
+    Dataset080_BUSBRA_GE_Logiq_5
+    Dataset082_BUSBRA_Toshiba_Aplio_300
+    Dataset083_BUSBRA_U_Systems
+    Dataset084_KidneyUS_Philips
+    Dataset086_MMOTU_2D
+    Dataset090_Echo_EchoCP
+    Dataset203_neurite_2px_scaleaug
+    Dataset204_lesion_czi_B
+    Dataset205_neurite_2px_scaleaug_red
+)
+
+experiments=(
+    # linear
+    # linear_finetune
+    # linear_finetune_wd*    # every weight-decay sweep of the linear finetune
+    # nonlinear
+    # nonlinear_finetune
+    upernet
+    upernet_inj
+    upernet_ours
+    upernet_inj_ours
+    upernet_inj_ft_ours
+    upernet_inj_ft_init_ours
+    upernet_inj_ft_vits_ours
+    # m2f
+)
+
 # For comparison with MonoUNet and nnUNet
 nnunet_dirs=(
     ../nnUNet_fork/data/nnUNet_results
@@ -29,11 +62,17 @@ fi
 
 export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 
+# `set -u` makes an empty array expansion an error, so each selection is only passed when it has one.
+report_args=()
+[[ ${#datasets[@]} -gt 0 ]] && report_args+=(--datasets "${datasets[@]}")
+[[ ${#experiments[@]} -gt 0 ]] && report_args+=(--experiments "${experiments[@]}")
+
 python -m fm_adaptation.report \
     --results-dir "$results_dir" \
     --folds "$folds" \
     --nnunet-results-dir "${nnunet_dirs[@]}" \
-    --monounet-results-dir "${monounet_dirs[@]}"
+    --monounet-results-dir "${monounet_dirs[@]}" \
+    ${report_args[@]+"${report_args[@]}"}
 
 # Training curves and qualitative figures alongside the tables. Both only redraw what has changed,
 # so this stays cheap enough to run after every experiment.
