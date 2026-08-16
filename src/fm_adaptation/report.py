@@ -173,19 +173,20 @@ ADAPTATIONS = {
     "m2f_inj": ("Adapter + Mask2Former + Inj", 11),
     # The same adaptation on the small trunk, sorted last so it closes out each model's block of rows.
     "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 12),
-    "": ("", 13),
+    "upernet_inj_ft_vitb_ours": ("Adapter + UperNet + Inj + FT ViT-B ours", 13),
+    "": ("", 14),
 }
 
 
 # Adaptations shown in the main tables; the rest go to the ablation report.
-# `upernet_inj`, `upernet_ours` and `upernet_inj_ft_vits_ours` each need their own base: as bare
-# suffixes of a shorter name they would read as sweeps and be sent to the ablation page, away from the
-# rows they exist to be compared against -- the extractor-only one for `upernet_inj`, the injector one
-# for `upernet_ours`, the ViT-L one for the ViT-S run.
+# `upernet_inj`, `upernet_ours` and the two trunk-size runs each need their own base: as bare suffixes
+# of a shorter name they would read as sweeps and be sent to the ablation page, away from the rows they
+# exist to be compared against -- the extractor-only one for `upernet_inj`, the injector one for
+# `upernet_ours`, the ViT-L one for the ViT-S and ViT-B runs.
 MAIN_ADAPTATIONS = {
     "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_ours", "upernet_inj_ours",
     "upernet_inj_ft_ours", "upernet_inj_ft_init_ours", "m2f", "m2f_inj",
-    "upernet_inj_ft_vits_ours", "",
+    "upernet_inj_ft_vits_ours", "upernet_inj_ft_vitb_ours", "",
 }
 
 

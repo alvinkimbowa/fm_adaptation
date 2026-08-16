@@ -39,11 +39,12 @@ experiments=(
     # nonlinear_finetune
     # upernet
     # upernet_inj
-    upernet_ours
-    upernet_inj_ours
-    upernet_inj_ft_ours
+    # upernet_ours
+    # upernet_inj_ours
+    # upernet_inj_ft_ours
     # upernet_inj_ft_init_ours
-    # upernet_inj_ft_vits_ours
+    upernet_inj_ft_vits_ours
+    upernet_inj_ft_vitb_ours
     # m2f
 )
 

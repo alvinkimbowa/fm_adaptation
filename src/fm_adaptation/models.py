@@ -126,6 +126,14 @@ DINOV3_VARIANTS = {
         "interaction_indexes": (4, 11, 17, 23),
         "deform_num_heads": 16,
     },
+    "vitb16": {
+        "hub": "dinov3_vitb16",
+        "checkpoint": "dinov3_vitb16_pretrain_lvd1689m.pth",
+        "feature_channels": 768,
+        "last_layer": 11,
+        "interaction_indexes": (2, 5, 8, 11),
+        "deform_num_heads": 12,
+    },
     "vits16": {
         "hub": "dinov3_vits16",
         "checkpoint": "dinov3_vits16_pretrain_lvd1689m.pth",
