@@ -75,6 +75,7 @@ def main():
         cfg.checkpoint,
         train_encoder=cfg.train_encoder,
         injector=cfg.injector,
+        variant=cfg.variant,
     )
     checkpoint_name = "final" if cfg.fold == "all" else args.checkpoint
     checkpoint_path = cfg.run_dir / f"{checkpoint_name}.pt"

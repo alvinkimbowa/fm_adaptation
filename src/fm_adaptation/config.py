@@ -30,6 +30,7 @@ class ExperimentConfig:
     fold: str
     model_name: str
     checkpoint: str | None
+    variant: str
     probe_name: str
     injector: bool
     train_encoder: bool
@@ -69,6 +70,8 @@ class ExperimentConfig:
             fold=str(data["fold"]),
             model_name=str(model["name"]),
             checkpoint=model.get("checkpoint"),
+            # Which DINOv3 trunk size to build; the default is the ViT-L every existing run used.
+            variant=str(model.get("variant", "vitl16")),
             probe_name=str(model["probe"]),
             # Only meaningful for the adapter-based decoders; ignored by the probes.
             injector=bool(model.get("injector", False)),

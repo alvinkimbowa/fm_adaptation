@@ -234,6 +234,7 @@ def main():
         cfg.checkpoint,
         train_encoder=cfg.train_encoder,
         injector=cfg.injector,
+        variant=cfg.variant,
     )
     if cfg.init_from and not args.resume:
         # A resume restores this run's own state; seeding on top of it would throw the run away.

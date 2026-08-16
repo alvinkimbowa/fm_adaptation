@@ -23,7 +23,8 @@ experiments=(
     upernet_inj_ours
     upernet_inj_ft_ours
     upernet_inj_ft_init_ours
-    m2f
+    upernet_inj_ft_vits_ours
+    # m2f
     # nonlinear
     linear_finetune
     # nonlinear_finetune

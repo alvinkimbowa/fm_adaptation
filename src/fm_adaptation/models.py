@@ -112,16 +112,49 @@ def _dinov3_root() -> Path:
     return root
 
 
-def _load_dinov3_backbone(checkpoint: str | None):
-    """DINOv3 ViT-L/16 with the local weights loaded."""
-    root = _dinov3_root()
-    from dinov3.hub.backbones import dinov3_vitl16
+# The DINOv3 sizes the study can run, and everything about them that is not readable off the trunk.
+# `interaction_indexes` names the last block of each quarter of the trunk, as DINOv3's own segmentation
+# config does for ViT-L. `deform_num_heads` has to keep the deformable attention's channels-per-head a
+# power of two -- at 384 dim with `deform_ratio=0.5`, 16 heads gives 24 and takes `MSDeformAttn`'s slow
+# path, while 6 gives 32.
+DINOV3_VARIANTS = {
+    "vitl16": {
+        "hub": "dinov3_vitl16",
+        "checkpoint": "dinov3_vitl16_pretrain_lvd1689m.pth",
+        "feature_channels": 1024,
+        "last_layer": 23,
+        "interaction_indexes": (4, 11, 17, 23),
+        "deform_num_heads": 16,
+    },
+    "vits16": {
+        "hub": "dinov3_vits16",
+        "checkpoint": "dinov3_vits16_pretrain_lvd1689m.pth",
+        "feature_channels": 384,
+        "last_layer": 11,
+        "interaction_indexes": (2, 5, 8, 11),
+        "deform_num_heads": 6,
+    },
+}
+DEFAULT_DINOV3_VARIANT = "vitl16"
 
+
+def _dinov3_variant(variant: str) -> dict:
+    if variant not in DINOV3_VARIANTS:
+        raise ValueError(f"Unknown DINOv3 variant: {variant} (expected one of {sorted(DINOV3_VARIANTS)})")
+    return DINOV3_VARIANTS[variant]
+
+
+def _load_dinov3_backbone(checkpoint: str | None, variant: str = DEFAULT_DINOV3_VARIANT):
+    """A DINOv3 ViT with the local weights loaded; the size comes from `variant`."""
+    root = _dinov3_root()
+    import dinov3.hub.backbones as backbones
+
+    spec = _dinov3_variant(variant)
     if checkpoint is None:
-        checkpoint = root / "ckpts" / "dinov3_vitl16_pretrain_lvd1689m.pth"
+        checkpoint = root / "ckpts" / spec["checkpoint"]
     # The hub loader derives a config flag from an 8-char hash in the filename, which local
     # checkpoints do not carry; the LVD-1689M defaults are what `pretrained=False` already builds.
-    trunk = dinov3_vitl16(pretrained=False)
+    trunk = getattr(backbones, spec["hub"])(pretrained=False)
     state = torch.load(Path(checkpoint).resolve(), map_location="cpu", weights_only=True)
     missing, unexpected = trunk.load_state_dict(state, strict=False)
     if missing or unexpected:
@@ -130,7 +163,11 @@ def _load_dinov3_backbone(checkpoint: str | None):
 
 
 class DINOv3Encoder(nn.Module):
-    """DINOv3 ViT-L/16 patch tokens, at the 896 resolution DINOv3 uses for dense adaptation."""
+    """DINOv3 patch tokens, at the 896 resolution DINOv3 uses for dense adaptation.
+
+    The class attributes describe the default ViT-L/16; a different `variant` overrides the ones that
+    depend on the trunk's size, per instance.
+    """
 
     name = "dinov3"
     feature_channels = 1024
@@ -139,9 +176,18 @@ class DINOv3Encoder(nn.Module):
     mean = (0.485, 0.456, 0.406)
     std = (0.229, 0.224, 0.225)
 
-    def __init__(self, checkpoint: str | None, trainable: bool = False):
+    def __init__(
+        self,
+        checkpoint: str | None,
+        trainable: bool = False,
+        variant: str = DEFAULT_DINOV3_VARIANT,
+    ):
         super().__init__()
-        self.trunk = _load_dinov3_backbone(checkpoint)
+        spec = _dinov3_variant(variant)
+        self.variant = variant
+        self.feature_channels = spec["feature_channels"]
+        self.last_layer = spec["last_layer"]
+        self.trunk = _load_dinov3_backbone(checkpoint, variant)
         self.trainable = trainable
         self.trunk.requires_grad_(trainable)
 
@@ -157,26 +203,38 @@ class DINOv3Encoder(nn.Module):
 
 
 class DINOv3AdapterEncoder(DINOv3Encoder):
-    """Frozen DINOv3 ViT-L/16 behind DINOv3's ViT-Adapter, emitting strides 4/8/16/32.
+    """Frozen DINOv3 trunk behind DINOv3's ViT-Adapter, emitting strides 4/8/16/32.
 
     The adapter trains while the trunk stays frozen, so unlike the plain encoder this one has parameters
     of its own and its features cannot be cached between epochs.
     """
 
-    # The four blocks DINOv3 taps for ViT-L/16, per its own segmentation config.
-    interaction_indexes = (4, 11, 17, 23)
-
-    def __init__(self, checkpoint: str | None, trainable: bool = False, injector: bool = False):
+    def __init__(
+        self,
+        checkpoint: str | None,
+        trainable: bool = False,
+        injector: bool = False,
+        variant: str = DEFAULT_DINOV3_VARIANT,
+    ):
         nn.Module.__init__(self)
         _dinov3_root()
         from mmengine.model import revert_sync_batchnorm
 
-        backbone = _load_dinov3_backbone(checkpoint)
+        spec = _dinov3_variant(variant)
+        self.variant = variant
+        self.feature_channels = spec["feature_channels"]
+        self.last_layer = spec["last_layer"]
+        self.interaction_indexes = spec["interaction_indexes"]
+        backbone = _load_dinov3_backbone(checkpoint, variant)
         if injector:
             from .dinov3_injector import DINOv3AdapterWithInjector as adapter_cls
         else:
             from dinov3.eval.segmentation.models.backbone.dinov3_adapter import DINOv3_Adapter as adapter_cls
-        adapter = adapter_cls(backbone, interaction_indexes=list(self.interaction_indexes))
+        adapter = adapter_cls(
+            backbone,
+            interaction_indexes=list(self.interaction_indexes),
+            deform_num_heads=spec["deform_num_heads"],
+        )
         # The adapter is built with SyncBatchNorm, which needs a process group we do not have outside
         # mmseg's distributed Runner; mmengine's helper swaps it for plain BatchNorm in place.
         self.adapter = revert_sync_batchnorm(adapter)
@@ -302,6 +360,7 @@ def build_model(
     checkpoint: str | None,
     train_encoder: bool = False,
     injector: bool = False,
+    variant: str = DEFAULT_DINOV3_VARIANT,
 ):
     encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe, "upernet": UperNetDecoder}
@@ -309,12 +368,17 @@ def build_model(
         raise ValueError(f"Unknown foundation model: {model_name} (expected one of {sorted(encoders)})")
     if probe_name not in probes:
         raise ValueError(f"Unknown probe: {probe_name} (expected one of {sorted(probes)})")
+    # `variant` names a DINOv3 trunk size; SAM3 has only the one trunk, so asking for a size there is a
+    # mistake in the config rather than something to ignore.
+    if model_name != "dinov3" and variant != DEFAULT_DINOV3_VARIANT:
+        raise ValueError(f"model.variant is only meaningful for dinov3, not {model_name}")
+    extra = {"variant": variant} if model_name == "dinov3" else {}
     if probe_name == "upernet":
         # UperNet consumes a feature pyramid, which only the adapter produces.
         adapters = {"dinov3": DINOv3AdapterEncoder, "sam3": SAM3AdapterEncoder}
-        encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector)
+        encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
     else:
-        encoder = encoders[model_name](checkpoint, trainable=train_encoder)
+        encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
     probe = probes[probe_name](encoder.feature_channels, classes)
     return SegmentationModel(encoder, probe)
 

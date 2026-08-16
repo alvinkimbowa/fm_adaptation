@@ -30,7 +30,7 @@ def _counts(module):
     return {"total": total, "trainable": trainable}
 
 
-def _foundation_counts(model_name, run_name, probe, injector, train_encoder=False):
+def _foundation_counts(model_name, run_name, probe, injector, train_encoder=False, variant="vitl16"):
     from .models import build_model
 
     if run_name in MMSEG_RUNS:
@@ -50,7 +50,7 @@ def _foundation_counts(model_name, run_name, probe, injector, train_encoder=Fals
     model = build_model(
         model_name, probe, NUM_CLASSES, None,
         # The two-stage finetuning runs say so in their name; the adapter runs say so in their config.
-        train_encoder=train_encoder or "finetune" in run_name, injector=injector,
+        train_encoder=train_encoder or "finetune" in run_name, injector=injector, variant=variant,
     )
     return _counts(model)
 
@@ -116,9 +116,10 @@ def main():
         probe = cfg["model"]["probe"]
         injector = bool(cfg["model"].get("injector", False))
         train_encoder = bool(cfg["model"].get("train_encoder", False))
+        variant = str(cfg["model"].get("variant", "vitl16"))
         print(f"counting {model_name}/{run_name} ...", flush=True)
         try:
-            seen[key] = _foundation_counts(model_name, run_name, probe, injector, train_encoder)
+            seen[key] = _foundation_counts(model_name, run_name, probe, injector, train_encoder, variant)
         except Exception as error:  # a missing optional dependency should not lose the rest
             print(f"  skipped: {type(error).__name__}: {error}")
             continue

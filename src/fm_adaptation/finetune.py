@@ -82,7 +82,8 @@ def main():
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
     model = build_model(
-        cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, train_encoder=True
+        cfg.model_name, cfg.probe_name, classes, cfg.checkpoint, train_encoder=True,
+        variant=cfg.variant,
     )
     probe_checkpoint = (
         cfg.results_dir
