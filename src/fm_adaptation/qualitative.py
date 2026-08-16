@@ -93,19 +93,20 @@ def draw(canvas, mask, style, color, width=2, alpha=0.4):
 def mask_colors(classes, style):
     """The colour each class is painted in, as (ground truth, prediction) maps of value -> RGB.
 
-    One foreground class is the binary case the styles were designed around, and keeps its two
-    configured colours. Beyond that the prediction's fill carries the class, and ground truth drawn
-    as a line takes the configured `gt_color` for all of them: an outline in the same colour as the
-    fill under it disappears wherever the two agree, which is most of the mask.
+    A binary dataset keeps the two configured colours. With more than one class the prediction's
+    fill carries the class, so ground truth drawn as a line takes one colour for all of them --
+    an outline in the same colour as the fill beneath it is invisible wherever the two agree, which
+    is most of the mask. `gt_color="auto"` asks for the class colours there regardless.
     """
-    classes = [int(value) for value in classes if int(value) != 0]
-    if len(classes) <= 1:
-        value = classes[0] if classes else 1
-        return {value: style["gt_color"]}, {value: style["pred_color"]}
+    classes = [int(value) for value in classes if int(value) != 0] or [1]
     palette = {value: CLASS_PALETTE[(value - 1) % len(CLASS_PALETTE)] for value in classes}
-    if style["gt_style"] in ("contour", "centerline"):
-        return {value: style["gt_color"] for value in classes}, palette
-    return palette, palette
+    auto = style["gt_color"] == "auto"
+    if len(classes) == 1:
+        value = classes[0]
+        return {value: palette[value] if auto else style["gt_color"]}, {value: style["pred_color"]}
+    if auto or style["gt_style"] not in ("contour", "centerline"):
+        return palette, palette
+    return {value: style["gt_color"] for value in classes}, palette
 
 
 def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
@@ -126,19 +127,17 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
                 panel[source == value] = color
         else:
             # `both_mask` is the same drawing without the image under it, so the masks are read on
-            # their own; nothing shows through, so a fill there is painted solid.
-            bare = slot == "both_mask"
-            panel = np.zeros_like(plain) if bare else plain.copy()
-            alpha = 1.0 if bare else style["alpha"]
+            # their own. Alpha applies here too, against the black rather than against the image.
+            panel = np.zeros_like(plain) if slot == "both_mask" else plain.copy()
             # Prediction first so a ground-truth contour stays legible on top of a filled overlay.
             if slot in ("both", "both_mask", "prediction"):
                 for value, color in pred_colors.items():
                     draw(panel, prediction == value, style["pred_style"], color,
-                         style["pred_width"], alpha)
+                         style["pred_width"], style["alpha"])
             if slot in ("both", "both_mask", "gt"):
                 for value, color in gt_colors.items():
                     draw(panel, gt == value, style["gt_style"], color,
-                         style["gt_width"], alpha)
+                         style["gt_width"], style["alpha"])
         out.append((slot, panel.clip(0, 255).astype(np.uint8)))
     return out
 
@@ -312,9 +311,12 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
         else:
             handles.append(mpatches.Patch(color="none", label=f"{labels_[0]} vs {labels_[1]}"))
     else:
+        # The resolved colours, not the configured ones: `gt_color` may be "auto", which only
+        # `mask_colors` knows how to turn into an RGB. One entry each, on this branch.
+        (gt_color,), (pred_color,) = gt_colors.values(), pred_colors.values()
         handles = [
-            mpatches.Patch(color=np.array(style["gt_color"]) / 255, label=labels_[0]),
-            mpatches.Patch(color=np.array(style["pred_color"]) / 255, label=labels_[1]),
+            mpatches.Patch(color=np.array(gt_color) / 255, label=labels_[0]),
+            mpatches.Patch(color=np.array(pred_color) / 255, label=labels_[1]),
         ]
     figure.legend(handles=handles, loc="lower center", ncol=min(len(handles), 6),
                   frameon=False, fontsize=9)
@@ -340,8 +342,9 @@ def add_style_arguments(parser):
     parser.add_argument("--cols", type=int, default=2, help="samples per row")
     parser.add_argument("--gt-style", choices=STYLES, default="contour")
     parser.add_argument("--pred-style", choices=STYLES, default="overlay")
-    parser.add_argument("--gt-color", default="green")
-    parser.add_argument("--pred-color", default="red")
+    parser.add_argument("--gt-color", default="green",
+                        help=f"{'|'.join(COLORS)}, or auto to follow each class's own colour")
+    parser.add_argument("--pred-color", default="red", help="|".join(COLORS))
     parser.add_argument("--gt-width", type=float, default=2)
     parser.add_argument("--pred-width", type=float, default=2)
     parser.add_argument("--alpha", type=float, default=0.4)
@@ -353,7 +356,8 @@ def style_from_arguments(args):
     return default_style(
         gt_style=args.gt_style,
         pred_style=args.pred_style,
-        gt_color=COLORS.get(args.gt_color, COLORS["green"]),
+        # "auto" is not a colour but a request to follow the class palette, so it passes through.
+        gt_color="auto" if args.gt_color == "auto" else COLORS.get(args.gt_color, COLORS["green"]),
         pred_color=COLORS.get(args.pred_color, COLORS["red"]),
         gt_width=args.gt_width,
         pred_width=args.pred_width,

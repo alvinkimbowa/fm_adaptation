@@ -45,11 +45,12 @@ layout=mask_pair
 # contour | overlay | centerline
 gt_style=contour
 pred_style=overlay
-gt_color=white
+# red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
+gt_color=auto
 pred_color=red
-gt_width=1.5
+gt_width=1
 pred_width=2
-alpha=0.65
+alpha=0.5
 
 crop=auto       # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 seed=0
