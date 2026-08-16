@@ -1,0 +1,34 @@
+data:
+  raw_data_dir: ../monounetv2/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset080_BUSBRA_GE_Logiq_5
+  test_datasets:
+    - Dataset080_BUSBRA_GE_Logiq_5
+    - Dataset081_BUSBRA_GE_Logiq_7
+    - Dataset082_BUSBRA_Toshiba_Aplio_300
+    - Dataset083_BUSBRA_U_Systems
+  test_split: Tr
+  fold: 0
+
+model:
+  name: dinov3
+  probe: upernet
+  # The ablation: DINOv3's own extractor-only adapter, so the trunk runs once under `no_grad` and the
+  # SPM's features never reach the transformer. Everything else matches `upernet_inj_ours`.
+  injector: false
+  run_name: upernet_ours
+  # Null uses SAM3's official Hugging Face download and local cache.
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 8
+  num_workers: 4
+  learning_rate: 0.001
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
