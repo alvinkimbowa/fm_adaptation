@@ -19,6 +19,7 @@ experiments=(
     linear
     upernet
     upernet_inj
+    upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
     upernet_inj_ft_init_ours
