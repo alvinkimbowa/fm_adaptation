@@ -31,6 +31,33 @@ def _read_metrics(path: Path, dice_scale=1.0):
     }
 
 
+# How each plans variant is written in the tables, where the directory name reads badly.
+NNUNET_VARIANT_NAMES = {"ResEncUNetM": "Res Enc M"}
+# Configurations that are their own network rather than a flavour of nnU-Net, so they carry no nnU-Net
+# prefix. The xtiny widths (`xtiny8`, `xtiny32`) share one name: no dataset was trained with more than
+# one of them, and the Params column already separates them.
+NNUNET_MODEL_NAMES = {r"xtiny\d*": "XTinyUNet"}
+
+
+def nnunet_label(trainer_dir_name):
+    """`nnUNetTrainer__nnUNetResEncUNetMPlans__2d` -> `nnU-Net (Res Enc M)`.
+
+    Each plans/configuration pair is a different network -- the Res Enc M and the xtiny plans differ by
+    two orders of magnitude in size -- so each earns its own row. Whatever distinguishes the directory
+    from the default `nnUNetPlans__2d` becomes the label, and the stock 2d plan stays plain `nnU-Net`.
+    """
+    _, _, rest = trainer_dir_name.partition("__")
+    plans, _, configuration = rest.partition("__")
+    variant = plans.removeprefix("nnUNet").removesuffix("Plans")
+    variant = NNUNET_VARIANT_NAMES.get(variant, variant)
+    configuration = configuration.removeprefix("2d").lstrip("_")
+    for pattern, name in NNUNET_MODEL_NAMES.items():
+        if re.fullmatch(pattern, configuration):
+            return name
+    suffix = " ".join(filter(None, (variant, configuration)))
+    return f"nnU-Net ({suffix})" if suffix else "nnU-Net"
+
+
 def _add_nnunet_records(records, results_dir):
     metrics_paths = sorted(
         Path(results_dir).glob("nnunet/Dataset*/*/fold_*/test/Dataset*/metrics.csv")
@@ -42,9 +69,8 @@ def _add_nnunet_records(records, results_dir):
         trained_on = fold_dir.parents[1].name
         fold = fold_dir.name.removeprefix("fold_")
         tested_on = metrics_path.parent.name
-        records[("nnU-Net", "", trained_on, fold)][tested_on] = _read_metrics(
-            metrics_path
-        )
+        model = nnunet_label(fold_dir.parent.name)
+        records[(model, "", trained_on, fold)][tested_on] = _read_metrics(metrics_path)
 
 
 MONOUNET_NAMES = {
@@ -195,6 +221,8 @@ def _model_matches(model, patterns):
 
     Case, hyphens and underscores are ignored, so `nnunet`, `nnU-Net` and `nnu_net` all name the same
     rows and `monounet-b` finds `MonoUNet-B`. Globs still work: `monounet*` takes all three MonoUNets.
+    A model carrying a parenthesised variant is matched on its base name too, so `nnU-Net` still takes
+    every plans variant while `nnU-Net (xtiny32)` or `*xtiny*` narrows it to one.
     """
     if not patterns:
         return True
@@ -202,7 +230,9 @@ def _model_matches(model, patterns):
     def normalise(name):
         return re.sub(r"[-_]", "", name).lower()
 
-    return matches(normalise(model), [normalise(pattern) for pattern in patterns])
+    patterns = [normalise(pattern) for pattern in patterns]
+    names = {normalise(model), normalise(model.split(" (")[0])}
+    return any(matches(name, patterns) for name in names)
 
 
 def _split_adaptation(adaptation):
@@ -232,10 +262,19 @@ MODEL_ORDER = {
     "sam3": 0,
     "dinov3": 1,
     "nnU-Net": 2,
-    "MonoUNet-L": 3,
-    "MonoUNet-B": 4,
-    "MonoUNet-t": 5,
+    "XTinyUNet": 3,
+    "MonoUNet-L": 4,
+    "MonoUNet-B": 5,
+    "MonoUNet-t": 6,
 }
+
+
+def _model_rank(model):
+    """nnU-Net's plans variants are named `nnU-Net (...)`, so they rank where plain nnU-Net does."""
+    if model in MODEL_ORDER:
+        return MODEL_ORDER[model]
+    base = model.split(" (")[0]
+    return MODEL_ORDER.get(base, len(MODEL_ORDER))
 
 
 def _experiment_order(item):
@@ -243,7 +282,7 @@ def _experiment_order(item):
     base, suffix = _split_adaptation(adaptation)
     return (
         trained_on,
-        MODEL_ORDER.get(model, len(MODEL_ORDER)),
+        _model_rank(model),
         model,
         ADAPTATIONS[base][1],
         suffix,

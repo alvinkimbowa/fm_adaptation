@@ -13,6 +13,7 @@ models=(
     dinov3
     sam3
     nnU-Net       # case, hyphens and underscores are ignored, so `nnunet` works too
+    XTinyUNet     # its own model, so `nnU-Net` above does not select it
     # MonoUNet-t
     # MonoUNet-B
     # MonoUNet-L
@@ -32,7 +33,7 @@ datasets=(
 )
 
 experiments=(
-    linear
+    # linear
     # linear_finetune
     # linear_finetune_wd*    # every weight-decay sweep of the linear finetune
     # nonlinear

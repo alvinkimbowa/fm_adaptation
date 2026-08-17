@@ -56,12 +56,14 @@ def _foundation_counts(model_name, run_name, probe, injector, train_encoder=Fals
 
 
 def _nnunet_counts(results_dirs):
-    """nnU-Net records its own stats per trainer; keep the plan that the report actually reads."""
+    """nnU-Net records its own stats per trainer, and each plans variant is a row of its own."""
+    from .report import nnunet_label
+
     found = {}
     for results_dir in results_dirs:
         for path in sorted(Path(results_dir).glob("nnunet/Dataset*/*/model_stats.json")):
             stats = json.loads(path.read_text())
-            key = f"nnU-Net||{path.parents[1].name}"
+            key = f"{nnunet_label(path.parent.name)}||{path.parents[1].name}"
             found[key] = {
                 "total": stats["num_parameters"],
                 "trainable": stats["num_parameters_trainable"],
