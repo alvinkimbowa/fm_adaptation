@@ -23,7 +23,7 @@ training:
   encoder_batch_size: 1
   num_workers: 4
   learning_rate: 0.0001
-  weight_decay: 10.0
+  weight_decay: 100.0
   seed: 0
   device: cuda
 
