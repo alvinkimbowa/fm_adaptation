@@ -210,12 +210,12 @@ ADAPTATIONS = {
     "m2f": ("Adapter + Mask2Former", 10),
     "m2f_inj": ("Adapter + Mask2Former + Inj", 11),
     # The same adaptation on the smaller trunks, sorted last so they close out each model's block of
-    # rows, and largest trunk first so the rows read down in decreasing size from the ViT-L above.
+    # rows, largest trunk first so the rows read down in decreasing size from the ViT-L above. Each
+    # trunk keeps its two schedules together -- constant rate with early stopping, then the full-length
+    # warmup + poly run -- so that comparison is between adjacent rows rather than across the block.
     "upernet_inj_ft_vitb_ours": ("Adapter + UperNet + Inj + FT ViT-B ours", 12),
-    "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 13),
-    # The same two trunks again, trained the full length on a warmup + poly schedule instead of
-    # stopping early at a constant rate.
-    "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 14),
+    "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 13),
+    "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 14),
     "upernet_inj_ft_vits_poly_ours": ("Adapter + UperNet + Inj + FT ViT-S poly ours", 15),
     "": ("", 16),
 }
@@ -230,8 +230,8 @@ ADAPTATIONS = {
 MAIN_ADAPTATIONS = {
     "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_ours", "upernet_inj_ours",
     "upernet_inj_ft_ours", "upernet_inj_ft_init_ours", "m2f", "m2f_inj",
-    "upernet_inj_ft_vitb_ours", "upernet_inj_ft_vits_ours",
-    "upernet_inj_ft_vitb_poly_ours", "upernet_inj_ft_vits_poly_ours", "",
+    "upernet_inj_ft_vitb_ours", "upernet_inj_ft_vitb_poly_ours",
+    "upernet_inj_ft_vits_ours", "upernet_inj_ft_vits_poly_ours", "",
 }
 
 
