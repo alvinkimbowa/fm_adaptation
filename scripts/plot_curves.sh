@@ -26,9 +26,12 @@ experiments=(
     upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
+    upernet_inj_ft_poly_ours
     upernet_inj_ft_init_ours
+    upernet_inj_ft_vitb_ours
+    upernet_inj_ft_vitb_poly_ours
     upernet_inj_ft_vits_ours
-    # upernet_inj_ft_vitb_ours
+    upernet_inj_ft_vits_poly_ours
     # m2f   # Mask2Former
 )
 

@@ -1,0 +1,37 @@
+data:
+  # Relative to the project directory rather than absolute, so it resolves to the same place under
+  # either machine's home and the run can go to whichever GPU is free.
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset204_lesion_czi_B
+  test_datasets:
+    - Dataset204_lesion_czi_B
+    - Dataset206_lesion_120_czi_B
+  test_split: Tr
+  fold: 0
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  # ViT-B/16, the trunk size that puts the whole model in nnU-Net's parameter range.
+  variant: vitb16
+  train_encoder: true
+  run_name: upernet_inj_ft_vitb_ours
+  # Null uses SAM3's official Hugging Face download and local cache.
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
