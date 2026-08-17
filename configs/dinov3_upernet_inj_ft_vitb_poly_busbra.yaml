@@ -1,0 +1,39 @@
+data:
+  raw_data_dir: ../monounetv2/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset080_BUSBRA_GE_Logiq_5
+  test_datasets:
+    - Dataset080_BUSBRA_GE_Logiq_5
+    - Dataset081_BUSBRA_GE_Logiq_7
+    - Dataset082_BUSBRA_Toshiba_Aplio_300
+    - Dataset083_BUSBRA_U_Systems
+  test_split: Tr
+  fold: 0
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  # ViT-B/16, the trunk size that puts the whole model in nnU-Net's parameter range.
+  variant: vitb16
+  train_encoder: true
+  run_name: upernet_inj_ft_vitb_poly_ours
+  # Null uses SAM3's official Hugging Face download and local cache.
+  checkpoint: null
+
+training:
+  epochs: 50
+  # No early stopping: the poly decay only pays off if it reaches the end of the run, and the whole
+  # point of the schedule is that the curve should flatten rather than turn over.
+  early_stopping_patience: 0
+  # ViT-Adapter's schedule -- one epoch of linear warmup, then a straight decay to zero.
+  lr_schedule: poly
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda

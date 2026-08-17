@@ -47,6 +47,10 @@ class ExperimentConfig:
     learning_rate: float
     encoder_learning_rate: float | None
     encoder_layer_decay: float
+    lr_schedule: str
+    lr_warmup_iters: int | None
+    lr_warmup_start_factor: float
+    lr_power: float
     accumulation_steps: int
     weight_decay: float
     seed: int
@@ -98,6 +102,19 @@ class ExperimentConfig:
             ),
             # Layer-wise decay of that rate down the trunk, as ViT-Adapter does; 1.0 is a flat rate.
             encoder_layer_decay=float(training.get("encoder_layer_decay", 1.0)),
+            # `poly` is ViT-Adapter's schedule: a linear warmup, then a decay to zero over the run.
+            # `none`, the default, is the constant rate every run before this one trained at.
+            lr_schedule=str(training.get("lr_schedule", "none")),
+            # Length of the warmup in optimiser steps; unset is roughly one epoch, clamped to [50, 500].
+            lr_warmup_iters=(
+                int(training["lr_warmup_iters"])
+                if training.get("lr_warmup_iters") is not None
+                else None
+            ),
+            # A multiplier on each group's own rate, not a rate: the first step runs at base * this.
+            lr_warmup_start_factor=float(training.get("lr_warmup_start_factor", 1e-3)),
+            # Exponent of the poly decay; 1.0 is a straight line to zero.
+            lr_power=float(training.get("lr_power", 1.0)),
             accumulation_steps=int(training.get("accumulation_steps", 1)),
             weight_decay=float(training.get("weight_decay", 0.0)),
             seed=int(training.get("seed", 0)),

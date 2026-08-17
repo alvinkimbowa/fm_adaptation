@@ -113,7 +113,7 @@ def _initialise_from(cfg, model):
     print(f"initialised from {path}")
 
 
-def _resume(run_dir, model, optimizer):
+def _resume(run_dir, model, optimizer, scheduler=None):
     """Pick a run back up from `last.pt`, which a completed run no longer has."""
     path = run_dir / "last.pt"
     if not path.exists():
@@ -123,6 +123,9 @@ def _resume(run_dir, model, optimizer):
     state = torch.load(path, map_location="cpu", weights_only=False)
     _load_weights(model, state)
     optimizer.load_state_dict(state["optimizer"])
+    # `.get`: a checkpoint written before the schedule existed, or by an unscheduled run, has no entry.
+    if scheduler is not None and state.get("scheduler") is not None:
+        scheduler.load_state_dict(state["scheduler"])
     rng = state.get("rng")
     if rng:
         random.setstate(rng["python"])
@@ -185,7 +188,42 @@ def _param_groups(model, cfg):
     ]
 
 
-def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None, accumulation_steps=1):
+def _lr_scheduler(optimizer, cfg, steps_per_epoch):
+    """ViT-Adapter's schedule: a linear warmup, then a poly decay to zero across the whole run.
+
+    Returns None for `lr_schedule: none`, the constant rate everything trained at before this existed.
+
+    The factor multiplies each parameter group's own rate, so the layer-wise decay set up by
+    `_param_groups` is preserved -- the head and every trunk layer come down together, as upstream.
+    Stepped once per optimiser step, not per batch and not per epoch.
+    """
+    if cfg.lr_schedule == "none":
+        return None
+    if cfg.lr_schedule != "poly":
+        raise SystemExit(f"unknown lr_schedule {cfg.lr_schedule!r}; expected 'none' or 'poly'")
+    total_steps = max(1, steps_per_epoch * cfg.epochs)
+    # Roughly one epoch of warmup by default. A fixed count is far too short on the larger datasets and
+    # most of the run on the smallest, so it follows the dataset the way the mmseg runs' does.
+    warmup = cfg.lr_warmup_iters
+    if warmup is None:
+        warmup = int(min(500, max(50, steps_per_epoch)))
+    warmup = min(warmup, total_steps)
+    start = cfg.lr_warmup_start_factor
+
+    def factor(step):
+        # `step` is the count of steps already taken, so the first one is 0 and lands on `start`.
+        ramp = 1.0 if step >= warmup else start + (1.0 - start) * (step / max(1, warmup))
+        return ramp * (1.0 - step / total_steps) ** cfg.lr_power
+
+    print(
+        f"lr_schedule=poly total_steps={total_steps} warmup={warmup} "
+        f"start_factor={start} power={cfg.lr_power}"
+    )
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
+
+
+def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None, accumulation_steps=1,
+               scheduler=None):
     training = optimizer is not None
     forward = forward or (lambda m, x, y: m(x, y.shape[-2:]))
     module.train(training)
@@ -208,6 +246,8 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
             if step % accumulation_steps == 0 or step == len(loader):
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+                if scheduler is not None:
+                    scheduler.step()
         losses.append(loss.item())
         dices.append(mean_foreground_dice(logits.detach(), masks))
         progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
@@ -275,6 +315,9 @@ def main():
         # A trainable trunk is 300M parameters; the fused path would hold a second copy of them.
         foreach=False if cfg.train_encoder else None,
     )
+    # Optimiser steps, not batches: accumulation folds several batches into one step.
+    steps_per_epoch = -(-len(train_loader) // cfg.accumulation_steps)
+    scheduler = _lr_scheduler(optimizer, cfg, steps_per_epoch)
     loss_fn = DiceCrossEntropyLoss()
 
     cfg.run_dir.mkdir(parents=True, exist_ok=True)
@@ -285,7 +328,7 @@ def main():
     epochs_without_improvement = 0
     start_epoch = 1
     if args.resume:
-        resumed = _resume(cfg.run_dir, model, optimizer)
+        resumed = _resume(cfg.run_dir, model, optimizer, scheduler)
         start_epoch = resumed["epoch"] + 1
         best_dice = resumed["best_dice"]
         stopping_reference_dice = resumed["stopping_reference_dice"]
@@ -295,8 +338,12 @@ def main():
     with open(history_path, "a" if start_epoch > 1 else "w", newline="") as history_file:
         writer = csv.writer(history_file)
         if start_epoch == 1:
-            writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice"])
+            writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr"])
         for epoch in range(start_epoch, cfg.epochs + 1):
+            # The head's rate, which is the last group `_param_groups` appends, as this epoch starts.
+            # Under a schedule this is the only place the decay is visible, and a schedule you cannot
+            # see is one you cannot debug.
+            learning_rate = optimizer.param_groups[-1]["lr"]
             train_loss, train_dice = _run_epoch(
                 module,
                 train_loader,
@@ -306,6 +353,7 @@ def main():
                 desc=f"epoch {epoch}/{cfg.epochs} train",
                 forward=forward,
                 accumulation_steps=cfg.accumulation_steps,
+                scheduler=scheduler,
             )
             if val_loader is None:
                 val_loss, val_dice = float("nan"), float("nan")
@@ -319,11 +367,11 @@ def main():
                         desc=f"epoch {epoch}/{cfg.epochs} val",
                         forward=forward,
                     )
-            writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice])
+            writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice, learning_rate])
             history_file.flush()
             print(
                 f"epoch={epoch} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
-                f"val_loss={val_loss:.4f} val_dice={val_dice:.4f}"
+                f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} lr={learning_rate:.3g}"
             )
             # The bookkeeping happens before the save so a resumed run picks up the counters as they
             # stood at the end of this epoch, not as they were before it.
@@ -355,6 +403,7 @@ def main():
                 {
                     **weights,
                     "optimizer": optimizer.state_dict(),
+                    "scheduler": None if scheduler is None else scheduler.state_dict(),
                     "best_dice": best_dice,
                     "stopping_reference_dice": stopping_reference_dice,
                     "epochs_without_improvement": epochs_without_improvement,
