@@ -164,6 +164,18 @@ def _load_parameter_counts(path):
         PARAMETER_COUNTS.update(json.loads(path.read_text()))
 
 
+def _format_count(count):
+    """A parameter count in its own unit, so a linear probe and a fine-tuned trunk are both readable.
+
+    Fixing every row in millions puts three orders of magnitude on one scale: MonoUNet-t's 1697
+    parameters and a probe's few tens of thousands both round to 0.0, which reads as nothing at all.
+    """
+    for scale, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if count >= scale:
+            return f"{count / scale:.1f}{suffix}"
+    return str(count)
+
+
 def _parameter_counts(model, adaptation, trained_on):
     """Foundation-model counts depend only on the architecture; baselines vary per dataset."""
     entry = PARAMETER_COUNTS.get(f"{model}|{adaptation}|{trained_on}") or PARAMETER_COUNTS.get(
@@ -171,7 +183,7 @@ def _parameter_counts(model, adaptation, trained_on):
     )
     if not entry:
         return "—", "—"
-    return f"{entry['total'] / 1e6:.1f}", f"{entry['trainable'] / 1e6:.2f}"
+    return _format_count(entry["total"]), _format_count(entry["trainable"])
 
 
 def _dataset_label(dataset):
@@ -364,7 +376,7 @@ def _render_table(records, datasets, statistic):
         > 1
     )
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
-    for heading in ("Config", "Params (M)", "Trainable (M)", "Trained on", "Fold"):
+    for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
     for index, dataset in enumerate(datasets):
         last = index == len(datasets) - 1 and show_average
