@@ -28,7 +28,9 @@ push() {
 }
 
 pull() {
-    args=(-av)
+    # The caches are rebuilt from whatever machine a run happens on and are never read here, so they
+    # stay out even when the checkpoints are asked for.
+    args=(-av --exclude='.feature_cache' --exclude='.teacher_cache')
     [[ "${weights:-0}" -eq 1 ]] || args+=(--exclude='*.pt')
     echo "<- $remote:$remote_dir/$results_dir/"
     rsync "${args[@]}" "$remote:$remote_dir/$results_dir/" "$results_dir/"
