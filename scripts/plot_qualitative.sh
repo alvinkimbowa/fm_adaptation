@@ -11,10 +11,10 @@ datasets=(
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
-    # Dataset203_neurite_2px_scaleaug
     Dataset204_lesion_czi_B
-    # Dataset205_neurite_2px_scaleaug_red
     Dataset206_lesion_120_czi_B
+    # Dataset203_neurite_2px_scaleaug
+    # Dataset205_neurite_2px_scaleaug_red
 )
 experiments=(
     linear

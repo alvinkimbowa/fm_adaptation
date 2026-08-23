@@ -5,16 +5,16 @@ export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 export PYTHONPATH="${PYTHONPATH:-}:src"
 
 datasets=(
-    Dataset080_BUSBRA_GE_Logiq_5
-    Dataset082_BUSBRA_Toshiba_Aplio_300
-    Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
-    Dataset090_Echo_EchoCP
-    Dataset203_neurite_2px_scaleaug
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    # Dataset090_Echo_EchoCP
     Dataset204_lesion_czi_B
     Dataset206_lesion_120_czi_B
-    Dataset205_neurite_2px_scaleaug_red
+    # Dataset203_neurite_2px_scaleaug
+    # Dataset205_neurite_2px_scaleaug_red
 )
 experiments=(
     linear

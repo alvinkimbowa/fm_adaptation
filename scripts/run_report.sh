@@ -21,16 +21,16 @@ models=(
 )
 
 datasets=(
-    Dataset080_BUSBRA_GE_Logiq_5
-    Dataset082_BUSBRA_Toshiba_Aplio_300
-    Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
-    Dataset090_Echo_EchoCP
-    Dataset203_neurite_2px_scaleaug
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    # Dataset090_Echo_EchoCP
     Dataset204_lesion_czi_B
     Dataset206_lesion_120_czi_B
-    Dataset205_neurite_2px_scaleaug_red
+    # Dataset203_neurite_2px_scaleaug
+    # Dataset205_neurite_2px_scaleaug_red
 )
 
 experiments=(
@@ -41,15 +41,15 @@ experiments=(
     # nonlinear_finetune
     # upernet
     # upernet_inj
-    # upernet_ours
-    # upernet_inj_ours
-    # upernet_inj_ft_ours
-    upernet_inj_ft_poly_ours
+    upernet_ours
+    upernet_inj_ours
+    upernet_inj_ft_ours
+    # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
-    upernet_inj_ft_vitb_ours
-    upernet_inj_ft_vits_ours
-    upernet_inj_ft_vitb_poly_ours
-    upernet_inj_ft_vits_poly_ours
+    # upernet_inj_ft_vitb_ours
+    # upernet_inj_ft_vits_ours
+    # upernet_inj_ft_vitb_poly_ours
+    # upernet_inj_ft_vits_poly_ours
     # m2f
 )
 
