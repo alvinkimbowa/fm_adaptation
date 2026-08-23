@@ -29,6 +29,7 @@ datasets=(
     Dataset090_Echo_EchoCP
     Dataset203_neurite_2px_scaleaug
     Dataset204_lesion_czi_B
+    Dataset206_lesion_120_czi_B
     Dataset205_neurite_2px_scaleaug_red
 )
 
