@@ -60,11 +60,34 @@ class Injector(nn.Module):
         return _inner_forward(query, feat)
 
 
+def _block_schedule(depth, repeat_mode, repeat_times):
+    """The order the trunk's blocks are executed in, as indices into `backbone.blocks`.
+
+    Running a block more than once buys depth without buying parameters: the computation graph gets
+    longer while the weights stay exactly as many as before. The two modes differ in what is repeated.
+
+    * `adjacent` -- `0 0 1 1 2 2 ...`, each block applied twice in a row, so a stage refines its own
+      output at one level of abstraction before handing on.
+    * `stack` -- `0 1 2 ... 0 1 2 ...`, the whole trunk run over its own output, so the second pass
+      sees features the first pass already built.
+
+    `None` is the ordinary one-pass order, which is what every run before this used.
+    """
+    if repeat_mode is None or repeat_times == 1:
+        return list(range(depth))
+    if repeat_mode == "adjacent":
+        return [index for index in range(depth) for _ in range(repeat_times)]
+    if repeat_mode == "stack":
+        return list(range(depth)) * repeat_times
+    raise ValueError(f"unknown block_repeat_mode {repeat_mode!r}; expected 'adjacent' or 'stack'")
+
+
 class DINOv3AdapterWithInjector(DINOv3_Adapter):
     """`DINOv3_Adapter` plus one injector per interaction."""
 
     def __init__(self, backbone, interaction_indexes, deform_num_heads=16, n_points=4,
-                 deform_ratio=0.5, injector_init_values=1e-6, checkpoint_backbone=True, **kwargs):
+                 deform_ratio=0.5, injector_init_values=1e-6, checkpoint_backbone=True,
+                 adapter_dim=None, block_repeat_mode=None, block_repeat_times=1, **kwargs):
         # `init_values` is deliberately left at the base class's default so the extractors stay exactly as
         # they were in the existing runs; only the injector takes upstream's 1e-6.
         super().__init__(
@@ -76,14 +99,35 @@ class DINOv3AdapterWithInjector(DINOv3_Adapter):
             **kwargs,
         )
         self.checkpoint_backbone = checkpoint_backbone
+        # Which blocks run, in what order. Without a repeat this is `range(depth)` and everything below
+        # behaves exactly as it did when the trunk was executed straight through.
+        self.block_schedule = _block_schedule(
+            len(self.backbone.blocks), block_repeat_mode, block_repeat_times
+        )
         # The taps name the last block of each interaction; the injector needs the whole range, since it
-        # writes into the tokens that those blocks then consume.
-        self.block_ranges = list(zip([0] + [i + 1 for i in interaction_indexes[:-1]], interaction_indexes))
+        # writes into the tokens that those blocks then consume. Under a repeat the taps are indices into
+        # the schedule rather than into `blocks`, spread evenly over it so the interactions still divide
+        # the trunk's computation into equal stages -- and so their count, and the adapter's parameter
+        # count with it, does not change.
+        taps = list(interaction_indexes)
+        if len(self.block_schedule) != len(self.backbone.blocks):
+            count = len(taps)
+            length = len(self.block_schedule)
+            taps = [round(length * (i + 1) / count) - 1 for i in range(count)]
+        self.block_ranges = list(zip([0] + [i + 1 for i in taps[:-1]], taps))
         embed_dim = self.backbone.embed_dim
+        # The adapter runs at the trunk's width unless told otherwise. A student that narrows it pays a
+        # projection at every crossing between the two streams, which is why `_narrow` exists.
+        self.adapter_dim = embed_dim if adapter_dim is None else adapter_dim
+        self.narrow = self.adapter_dim != embed_dim
+        if self.narrow:
+            self._narrow(
+                embed_dim, interaction_indexes, deform_num_heads, n_points, deform_ratio, kwargs
+            )
         self.injectors = nn.ModuleList(
             [
                 Injector(
-                    dim=embed_dim,
+                    dim=self.adapter_dim,
                     num_heads=deform_num_heads,
                     n_points=n_points,
                     n_levels=3,
@@ -99,8 +143,80 @@ class DINOv3AdapterWithInjector(DINOv3_Adapter):
         self.injectors.apply(self._init_weights)
         self.injectors.apply(self._init_deform_weights)
 
+    def _narrow(self, embed_dim, interaction_indexes, deform_num_heads, n_points, deform_ratio,
+                base_kwargs):
+        """Rebuild the adapter at `self.adapter_dim` and add the projections it needs to reach the trunk.
+
+        The base class sizes everything off `backbone.embed_dim`, because upstream's adapter is always as
+        wide as the ViT it wraps. At the sizes the distillation students use that is the wrong default:
+        the adapter would be most of the model. Everything with a width of its own is rebuilt narrower
+        here, and the two streams are bridged explicitly.
+
+        The output norms are deliberately *not* rebuilt. `_assemble` lifts the pyramid back to the
+        trunk's width before them, because `add_vit_feature` adds the ViT's own features to it.
+        """
+        from functools import partial
+
+        from dinov3.eval.segmentation.models.backbone.dinov3_adapter import (
+            InteractionBlockWithCls,
+            SpatialPriorModule,
+        )
+
+        dim = self.adapter_dim
+        count = len(interaction_indexes)
+        # Every one of these has to be taken from the same place the base class takes it, defaults
+        # included. Rebuilding the interactions with a bare constructor silently drops the base's
+        # `drop_path_rate=0.3` -- the adapter's stochastic depth, and the students' main regulariser
+        # against a training set of a few hundred images.
+        drop_path_rate = base_kwargs.get("drop_path_rate", 0.3)
+        init_values = base_kwargs.get("init_values", 0.0)
+        with_cffn = base_kwargs.get("with_cffn", True)
+        cffn_ratio = base_kwargs.get("cffn_ratio", 0.25)
+        with_cp = base_kwargs.get("with_cp", True)
+        use_extra_extractor = base_kwargs.get("use_extra_extractor", True)
+        self.level_embed = nn.Parameter(torch.zeros(3, dim))
+        self.spm = SpatialPriorModule(
+            inplanes=base_kwargs.get("conv_inplane", 64), embed_dim=dim, with_cp=False
+        )
+        self.interactions = nn.Sequential(
+            *[
+                InteractionBlockWithCls(
+                    dim=dim,
+                    num_heads=deform_num_heads,
+                    n_points=n_points,
+                    init_values=init_values,
+                    drop_path=drop_path_rate,
+                    norm_layer=partial(nn.LayerNorm, eps=1e-6),
+                    with_cffn=with_cffn,
+                    cffn_ratio=cffn_ratio,
+                    deform_ratio=deform_ratio,
+                    extra_extractor=((i == count - 1) and use_extra_extractor),
+                    with_cp=with_cp,
+                )
+                for i in range(count)
+            ]
+        )
+        self.up = nn.ConvTranspose2d(dim, dim, 2, 2)
+        # One pair per interaction: `token_down` lets the injector read the trunk's tokens, `token_up`
+        # carries its answer back, and `feat_down` lets the extractor read them. The pyramid is lifted
+        # back to the trunk's width by `out_proj`.
+        self.token_down = nn.ModuleList([nn.Linear(embed_dim, dim) for _ in range(count)])
+        self.token_up = nn.ModuleList([nn.Linear(dim, embed_dim) for _ in range(count)])
+        self.feat_down = nn.ModuleList([nn.Linear(embed_dim, dim) for _ in range(count)])
+        self.out_proj = nn.ModuleList([nn.Conv2d(dim, embed_dim, 1) for _ in range(4)])
+
+        self.up.apply(self._init_weights)
+        self.spm.apply(self._init_weights)
+        self.interactions.apply(self._init_weights)
+        for projections in (self.token_down, self.token_up, self.feat_down, self.out_proj):
+            projections.apply(self._init_weights)
+        self.interactions.apply(self._init_deform_weights)
+        torch.nn.init.normal_(self.level_embed)
+
     def _run_blocks(self, x, start, stop, rope_sincos):
-        for block in self.backbone.blocks[start : stop + 1]:
+        # `start`/`stop` index the schedule, so a repeated block is simply visited more than once.
+        for index in self.block_schedule[start : stop + 1]:
+            block = self.backbone.blocks[index]
             if self.checkpoint_backbone and self.training:
                 x = cp.checkpoint(block, x, rope_sincos, use_reentrant=False)
             else:
@@ -129,21 +245,39 @@ class DINOv3AdapterWithInjector(DINOv3_Adapter):
             # The injector is spatial: it only touches patch tokens, and `deform_inputs1`'s reference
             # points are laid out over patch positions alone.
             prefix, patches = tokens[:, :n_prefix], tokens[:, n_prefix:]
-            patches = injector(
-                query=patches,
-                reference_points=deform_inputs1[0],
-                feat=c,
-                spatial_shapes=deform_inputs1[1],
-                level_start_index=deform_inputs1[2],
-            )
+            if self.narrow:
+                # The injector runs in the adapter's stream, so the tokens come down to its width and
+                # only its *contribution* goes back up. Adding the injector's whole output would replace
+                # the trunk's full-width tokens with a rank-`adapter_dim` reconstruction of themselves,
+                # which throws away most of what the blocks below it computed.
+                query = self.token_down[i](patches)
+                injected = injector(
+                    query=query,
+                    reference_points=deform_inputs1[0],
+                    feat=c,
+                    spatial_shapes=deform_inputs1[1],
+                    level_start_index=deform_inputs1[2],
+                )
+                patches = patches + self.token_up[i](injected - query)
+            else:
+                patches = injector(
+                    query=patches,
+                    reference_points=deform_inputs1[0],
+                    feat=c,
+                    spatial_shapes=deform_inputs1[1],
+                    level_start_index=deform_inputs1[2],
+                )
             tokens = torch.cat([prefix, patches], dim=1)
             tokens = self._run_blocks(tokens, start, stop, rope_sincos)
             # `get_intermediate_layers(norm=True)` is what the extractor used to be fed, so normalise
             # here too and keep the only difference to the injector itself.
             normed = backbone.norm(tokens)
             x_i, cls = normed[:, n_prefix:], normed[:, 0]
+            # `cls` is passed through the interaction untouched, so only the features it reads need
+            # bringing down to the adapter's width.
+            feat = self.feat_down[i](x_i) if self.narrow else x_i
             _, c, _ = self.interactions[i](
-                x_i, c, cls, deform_inputs1, deform_inputs2, H_c, W_c, H_toks, W_toks
+                feat, c, cls, deform_inputs1, deform_inputs2, H_c, W_c, H_toks, W_toks
             )
             outs.append(x_i.transpose(1, 2).view(bs, -1, H_toks, W_toks).contiguous())
 
@@ -163,6 +297,11 @@ class DINOv3AdapterWithInjector(DINOv3_Adapter):
         c3 = c3.transpose(1, 2).view(bs, dim, H_c, W_c).contiguous()
         c4 = c4.transpose(1, 2).view(bs, dim, H_c // 2, W_c // 2).contiguous()
         c1 = self.up(c2) + c1
+
+        if self.narrow:
+            # Back to the trunk's width, which is what `add_vit_feature`, the output norms and the
+            # decoder all expect.
+            c1, c2, c3, c4 = (proj(level) for proj, level in zip(self.out_proj, (c1, c2, c3, c4)))
 
         if self.add_vit_feature:
             x1, x2, x3, x4 = outs

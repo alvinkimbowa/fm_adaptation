@@ -21,6 +21,36 @@ class PatchConfig:
 
 
 @dataclass(frozen=True)
+class AugmentConfig:
+    """Spatial augmentation of the training set. Defaults follow nnU-Net's 2D spatial transform.
+
+    Spatial only, so a distillation run's cached teacher logits can be warped alongside the image
+    instead of the teacher having to run again; see `data.SpatialAugmentDataset`.
+    """
+
+    rotation_degrees: float = 180.0
+    scale_min: float = 0.7
+    scale_max: float = 1.4
+    flip: bool = True
+
+
+@dataclass(frozen=True)
+class DistillConfig:
+    """Train against a finished run's predictions as well as the labels.
+
+    The teacher is named by run alone: it is the same model, dataset and fold as the student, exactly
+    as `init_from` resolves its own source.
+    """
+
+    teacher_run: str
+    teacher_checkpoint: str = "final"
+    temperature: float = 2.0
+    # Weight on the teacher's term; 0.0 is an ordinary supervised run and is the control this is read
+    # against.
+    alpha: float = 0.5
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     raw_data_dir: Path
     results_dir: Path
@@ -56,6 +86,8 @@ class ExperimentConfig:
     seed: int
     device: str
     patching: "PatchConfig | None"
+    distill: "DistillConfig | None"
+    augment: "AugmentConfig | None"
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -65,6 +97,8 @@ class ExperimentConfig:
         model = cfg["model"]
         training = cfg["training"]
         patching = cfg.get("patching") or {}
+        distill = training.get("distill") or {}
+        augment = training.get("augment") or {}
         return cls(
             raw_data_dir=Path(data["raw_data_dir"]),
             results_dir=Path(data.get("results_dir", "models")),
@@ -131,6 +165,29 @@ class ExperimentConfig:
                 if patching.get("enabled")
                 else None
             ),
+            # Absent means no augmentation, which is what every run before this trained with -- the
+            # pipeline had none at all, and the pretrained trunks did not obviously need it.
+            augment=(
+                AugmentConfig(
+                    rotation_degrees=float(augment.get("rotation_degrees", 180.0)),
+                    scale_min=float(augment.get("scale_min", 0.7)),
+                    scale_max=float(augment.get("scale_max", 1.4)),
+                    flip=bool(augment.get("flip", True)),
+                )
+                if augment.get("enabled")
+                else None
+            ),
+            # Absent means an ordinary supervised run, which is every config written before this existed.
+            distill=(
+                DistillConfig(
+                    teacher_run=str(distill["teacher_run"]),
+                    teacher_checkpoint=str(distill.get("teacher_checkpoint", "final")),
+                    temperature=float(distill.get("temperature", 2.0)),
+                    alpha=float(distill.get("alpha", 0.5)),
+                )
+                if distill
+                else None
+            ),
         )
 
     @property
@@ -141,6 +198,16 @@ class ExperimentConfig:
             / self.train_dataset
             / self.run_name
             / f"fold_{self.fold}"
+        )
+
+    @property
+    def teacher_cache_dir(self) -> Path:
+        return (
+            self.results_dir
+            / ".teacher_cache"
+            / self.model_name
+            / self.train_dataset
+            / self.distill.teacher_run
         )
 
     @property

@@ -1,0 +1,60 @@
+data:
+  raw_data_dir: ../monounetv2/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset080_BUSBRA_GE_Logiq_5
+  test_datasets:
+    - Dataset080_BUSBRA_GE_Logiq_5
+    - Dataset081_BUSBRA_GE_Logiq_7
+    - Dataset082_BUSBRA_Toshiba_Aplio_300
+    - Dataset083_BUSBRA_U_Systems
+  test_split: Tr
+  fold: 0
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  # The trunk is trained, not finetuned: at this width no pretrained DINOv3 exists, so it starts random
+  # and everything it knows comes from the teacher and the labels.
+  train_encoder: true
+  # Narrow trunk, narrow adapter and a narrow head, all named by the variant -- cutting only the trunk
+  # would leave a 512-channel UperNet head many times larger than the model it decodes.
+  variant: student_d32
+  run_name: upernet_inj_kd_d32_aug_ours
+  checkpoint: null
+
+training:
+  # No early stopping and no pretrained weights to protect, so the poly schedule runs its full length.
+  # 500 epochs is ~81k updates at batch 4 on this dataset; nnU-Net gives XTinyUNet, the row this is
+  # read against, 250k. Poly decays to zero over `epochs`, so this cannot be extended afterwards.
+  epochs: 500
+  min_epochs: 20
+  early_stopping_patience: 0
+  early_stopping_min_delta: 0.001
+  batch_size: 4
+  # Only used for the one-off teacher pass, which is a 360M-parameter model at 896.
+  encoder_batch_size: 2
+  num_workers: 4
+  learning_rate: 0.001
+  # A single rate: there is no pretrained trunk here that needs a gentler one than the head.
+  weight_decay: 0.01
+  lr_schedule: poly
+  # A randomly initialised trunk needs a real warmup, not the one-epoch default: DINOv3's own
+  # pretraining ramps over 1500 iterations and this is the same trunk, only narrower.
+  lr_warmup_iters: 1500
+  # Spatial augmentation only: the teacher's cached logits are a spatial map, so the same flip,
+  # rotation and scale that move the image move them too, and one cached teacher pass stays
+  # valid. Rates follow nnU-Net's 2D spatial transform, which is what the XTinyUNet row got.
+  augment:
+    enabled: true
+    rotation_degrees: 180.0
+    scale_min: 0.7
+    scale_max: 1.4
+    flip: true
+  distill:
+    teacher_run: upernet_inj_ft_ours
+    teacher_checkpoint: final
+    temperature: 2.0
+    alpha: 0.5
+  seed: 0
+  device: cuda

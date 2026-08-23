@@ -10,8 +10,16 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import CachedFeatureDataset, NnUNet2DDataset, collate_cases, num_classes
-from .losses import DiceCrossEntropyLoss, mean_foreground_dice
+from .data import (
+    CachedFeatureDataset,
+    NnUNet2DDataset,
+    SpatialAugmentDataset,
+    TeacherLogitDataset,
+    collate_cases,
+    collate_teacher_cases,
+    num_classes,
+)
+from .losses import DiceCrossEntropyLoss, DistillationLoss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader as _patch_loader
 
@@ -51,18 +59,97 @@ def _cache_features(cfg, encoder, dataset, device):
     encoder.cpu()
 
 
-def _image_loader(cfg, preprocess, subset, shuffle=False):
+def _cache_teacher_logits(cfg, datasets, device):
+    """Run the teacher once over every case the student will see, and keep its logits.
+
+    Stored at the head's own stride-4 resolution rather than at image size: `UperNetDecoder` only
+    upsamples that, so this is what the teacher actually predicted and is 16x smaller. `NnUNet2DDataset`
+    is deterministic, so one pass covers every epoch and the teacher is never resident during student
+    training -- and spatial augmentation keeps it that way, warping these logits alongside the image
+    rather than asking the teacher what it would have said about the augmented one.
+    """
+    from .config import ExperimentConfig
+
+    teacher_dir = (
+        cfg.results_dir / cfg.model_name / cfg.train_dataset / cfg.distill.teacher_run / f"fold_{cfg.fold}"
+    )
+    checkpoint = teacher_dir / f"{cfg.distill.teacher_checkpoint}.pt"
+    if not checkpoint.exists():
+        raise SystemExit(f"distill.teacher_run given but there is no {checkpoint}")
+    cache_dir = cfg.teacher_cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    wanted = [case_id for dataset in datasets for case_id in dataset.ids]
+    missing = [case_id for case_id in wanted if not (cache_dir / f"{case_id}.pt").exists()]
+    if not missing:
+        return
+
+    # The teacher is whatever its own config says it is, not whatever the student is.
+    teacher_cfg = ExperimentConfig.from_yaml(teacher_dir / "config.yaml")
+    teacher = build_model(
+        teacher_cfg.model_name,
+        teacher_cfg.probe_name,
+        num_classes(cfg.raw_data_dir / cfg.train_dataset),
+        teacher_cfg.checkpoint,
+        train_encoder=teacher_cfg.train_encoder,
+        injector=teacher_cfg.injector,
+        variant=teacher_cfg.variant,
+    )
+    _load_weights(teacher, torch.load(checkpoint, map_location="cpu", weights_only=True))
+    teacher.to(device).eval()
+    print(f"caching teacher logits from {checkpoint} for {len(missing)} cases")
+
+    amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
+    for dataset in datasets:
+        indices = [i for i, case_id in enumerate(dataset.ids) if case_id in set(missing)]
+        if not indices:
+            continue
+        loader = DataLoader(
+            torch.utils.data.Subset(dataset, indices),
+            batch_size=cfg.encoder_batch_size,
+            shuffle=False,
+            num_workers=cfg.num_workers,
+            collate_fn=collate_cases,
+            pin_memory=True,
+        )
+        with torch.no_grad():
+            for images, _, metadata in tqdm(loader, desc="caching teacher"):
+                with amp:
+                    # The head's own output, before `UperNetDecoder` interpolates it to image size.
+                    logits = teacher.probe.head(teacher.encoder(images.to(device)))
+                for logit, meta in zip(logits.float().cpu(), metadata):
+                    torch.save({"logits": logit.half()}, cache_dir / f"{meta['case_id']}.pt")
+    teacher.cpu()
+    del teacher
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+
+def _image_loader(cfg, preprocess, subset, shuffle=False, teacher_cache=None, augment=None):
     """Whole images straight to the model, for runs whose encoder trains and so cannot be cached."""
     dataset = _raw_dataset(cfg, preprocess, subset)
+    length = len(dataset)
+    collate = collate_cases
+    if teacher_cache is not None:
+        dataset = TeacherLogitDataset(dataset, teacher_cache)
+        collate = collate_teacher_cases
+    if augment is not None:
+        # Training only. Validation stays deterministic, or its Dice would not be comparable across
+        # epochs, against a run without augmentation, or against anything already in the report.
+        dataset = SpatialAugmentDataset(
+            dataset,
+            rotation_degrees=augment.rotation_degrees,
+            scale_range=(augment.scale_min, augment.scale_max),
+            flip=augment.flip,
+        )
     return DataLoader(
         dataset,
         batch_size=cfg.batch_size,
         shuffle=shuffle,
         num_workers=cfg.num_workers,
-        collate_fn=collate_cases,
+        collate_fn=collate,
         pin_memory=True,
         # UPerHead's pooling branch cannot BatchNorm a batch of one, which an odd case count would leave.
-        drop_last=shuffle and len(dataset) % cfg.batch_size == 1,
+        drop_last=shuffle and length % cfg.batch_size == 1,
     )
 
 
@@ -230,16 +317,27 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
     if getattr(module, "encoder", None) is not None and not module.encoder.trainable:
         # The trunk carries stochastic depth; a frozen encoder must never leave eval mode.
         module.encoder.eval()
-    losses, dices = [], []
+    losses, dices, distillations = [], [], []
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
     progress = tqdm(loader, desc=desc, leave=False)
     if training:
         optimizer.zero_grad(set_to_none=True)
-    for step, (images, masks, _) in enumerate(progress, start=1):
+    for step, batch in enumerate(progress, start=1):
+        # A distillation loader carries the teacher's cached logits as a fourth item.
+        if len(batch) == 4:
+            images, masks, teacher, _ = batch
+            teacher = teacher.to(device)
+        else:
+            images, masks, _ = batch
+            teacher = None
         images, masks = images.to(device), masks.to(device)
         with amp:
             logits = forward(module, images, masks)
-            loss = loss_fn(logits, masks)
+            if teacher is None:
+                loss = loss_fn(logits, masks)
+            else:
+                loss, _, distillation = loss_fn(logits, masks, teacher)
+                distillations.append(distillation.item())
         if training:
             # Accumulation keeps the effective batch where the memory does not allow the real one.
             (loss / accumulation_steps).backward()
@@ -251,7 +349,8 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
         losses.append(loss.item())
         dices.append(mean_foreground_dice(logits.detach(), masks))
         progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
-    return float(np.mean(losses)), float(np.nanmean(dices))
+    distillation = float(np.mean(distillations)) if distillations else float("nan")
+    return float(np.mean(losses)), float(np.nanmean(dices)), distillation
 
 
 def main():
@@ -291,9 +390,23 @@ def main():
             train_loader = _patch_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
             val_loader = None if cfg.fold == "all" else _patch_loader(cfg, model.encoder.preprocess, "val")
         else:
-            train_loader = _image_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
+            teacher_cache = None
+            if cfg.distill is not None:
+                subsets = ["train"] + ([] if cfg.fold == "all" else ["val"])
+                _cache_teacher_logits(
+                    cfg, [_raw_dataset(cfg, model.encoder.preprocess, s) for s in subsets], device
+                )
+                teacher_cache = cfg.teacher_cache_dir
+            train_loader = _image_loader(
+                cfg, model.encoder.preprocess, "train", shuffle=True, teacher_cache=teacher_cache,
+                augment=cfg.augment,
+            )
             val_loader = (
-                None if cfg.fold == "all" else _image_loader(cfg, model.encoder.preprocess, "val")
+                None
+                if cfg.fold == "all"
+                else _image_loader(
+                    cfg, model.encoder.preprocess, "val", teacher_cache=teacher_cache
+                )
             )
     else:
         train_raw = _raw_dataset(cfg, model.encoder.preprocess, "train")
@@ -318,7 +431,14 @@ def main():
     # Optimiser steps, not batches: accumulation folds several batches into one step.
     steps_per_epoch = -(-len(train_loader) // cfg.accumulation_steps)
     scheduler = _lr_scheduler(optimizer, cfg, steps_per_epoch)
-    loss_fn = DiceCrossEntropyLoss()
+    if cfg.distill is None:
+        loss_fn = DiceCrossEntropyLoss()
+    else:
+        loss_fn = DistillationLoss(cfg.distill.temperature, cfg.distill.alpha)
+        print(
+            f"distill teacher={cfg.distill.teacher_run}/{cfg.distill.teacher_checkpoint} "
+            f"temperature={cfg.distill.temperature} alpha={cfg.distill.alpha}"
+        )
 
     cfg.run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.config, cfg.run_dir / "config.yaml")
@@ -338,13 +458,18 @@ def main():
     with open(history_path, "a" if start_epoch > 1 else "w", newline="") as history_file:
         writer = csv.writer(history_file)
         if start_epoch == 1:
-            writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr"])
+            # `train_kd` is the teacher's term on its own, so a distillation run that is quietly
+            # supervised-only is visible in the file rather than only in the final numbers. It is
+            # empty for every run that has no teacher.
+            writer.writerow(
+                ["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr", "train_kd"]
+            )
         for epoch in range(start_epoch, cfg.epochs + 1):
             # The head's rate, which is the last group `_param_groups` appends, as this epoch starts.
             # Under a schedule this is the only place the decay is visible, and a schedule you cannot
             # see is one you cannot debug.
             learning_rate = optimizer.param_groups[-1]["lr"]
-            train_loss, train_dice = _run_epoch(
+            train_loss, train_dice, train_kd = _run_epoch(
                 module,
                 train_loader,
                 loss_fn,
@@ -359,7 +484,7 @@ def main():
                 val_loss, val_dice = float("nan"), float("nan")
             else:
                 with torch.no_grad():
-                    val_loss, val_dice = _run_epoch(
+                    val_loss, val_dice, _ = _run_epoch(
                         module,
                         val_loader,
                         loss_fn,
@@ -367,11 +492,15 @@ def main():
                         desc=f"epoch {epoch}/{cfg.epochs} val",
                         forward=forward,
                     )
-            writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice, learning_rate])
+            writer.writerow(
+                [epoch, train_loss, train_dice, val_loss, val_dice, learning_rate,
+                 "" if np.isnan(train_kd) else train_kd]
+            )
             history_file.flush()
             print(
                 f"epoch={epoch} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
                 f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} lr={learning_rate:.3g}"
+                + ("" if np.isnan(train_kd) else f" train_kd={train_kd:.4f}")
             )
             # The bookkeeping happens before the save so a resumed run picks up the counters as they
             # stood at the end of this epoch, not as they were before it.
@@ -426,6 +555,10 @@ def main():
     # it only exists so an interrupted run can be picked up again.
     torch.save(weights, cfg.run_dir / "final.pt")
     (cfg.run_dir / "last.pt").unlink(missing_ok=True)
+
+    # The teacher cache is deliberately kept, unlike the feature cache below: it is ~30x smaller per
+    # case, and rebuilding it means another full pass of a 360M-parameter teacher, which is the one
+    # expensive part of a student run that does not change when the student does.
 
     # The cache only feeds probe training; finetuning and prediction recompute features from the images.
     if cfg.patching is None and cfg.feature_cache_dir.exists():

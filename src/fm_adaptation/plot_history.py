@@ -56,8 +56,17 @@ def _series(ax, epochs, values, **style):
     ax.plot(*zip(*points), marker=marker, markersize=3, **style)
 
 
+def _has_values(history, key):
+    return any(value == value for value in history.get(key, ()))
+
+
 def _plot(curves, title, out_path):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # The teacher's term only exists for distillation runs, and it is the one curve that says whether
+    # the student is actually imitating rather than just fitting the labels -- so it earns a panel of
+    # its own, and only when there is something to draw.
+    distilled = any(_has_values(history, "train_kd") for _, history in curves)
+    panels = 3 if distilled else 2
+    fig, axes = plt.subplots(1, panels, figsize=(6 * panels, 5))
     colors = plt.get_cmap("tab10")
     for index, (label, history) in enumerate(curves):
         color = colors(index % 10)
@@ -65,11 +74,19 @@ def _plot(curves, title, out_path):
         for ax, metric in zip(axes, ("loss", "dice")):
             _series(ax, epochs, history[f"train_{metric}"], color=color, ls="--", alpha=0.6)
             _series(ax, epochs, history[f"val_{metric}"], color=color, label=label)
+        if distilled and _has_values(history, "train_kd"):
+            _series(axes[2], epochs, history["train_kd"], color=color, label=label)
     for ax, metric in zip(axes, ("loss", "dice")):
         ax.set_xlabel("epoch")
         ax.set_ylabel(metric)
         ax.set_title(f"{metric} (dashed=train, solid=val)")
         ax.grid(alpha=0.3)
+    if distilled:
+        axes[2].set_xlabel("epoch")
+        axes[2].set_ylabel("KL(student || teacher)")
+        axes[2].set_title("distillation term (train)")
+        axes[2].set_yscale("log")
+        axes[2].grid(alpha=0.3)
     axes[1].legend(fontsize="small")
     fig.suptitle(title)
     fig.tight_layout()

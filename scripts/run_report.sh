@@ -42,13 +42,19 @@ experiments=(
     # upernet_inj
     # upernet_ours
     # upernet_inj_ours
-    # upernet_inj_ft_ours
+    # upernet_inj_ft_ours          # the teacher the KD rows below are distilled from
     upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     upernet_inj_ft_vitb_ours
     upernet_inj_ft_vits_ours
     upernet_inj_ft_vitb_poly_ours
     upernet_inj_ft_vits_poly_ours
+    upernet_inj_kd_d64_ours
+    upernet_inj_kd_d64_aug_ours
+    upernet_inj_kd_d64_x2adj_ours
+    upernet_inj_kd_d64_x2stack_ours
+    upernet_inj_kd_d32_ours
+    upernet_inj_kd_d32_aug_ours
     # m2f
 )
 

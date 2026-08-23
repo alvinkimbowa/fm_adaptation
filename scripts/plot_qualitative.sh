@@ -8,8 +8,8 @@ datasets=(
     # Dataset080_BUSBRA_GE_Logiq_5
     # Dataset082_BUSBRA_Toshiba_Aplio_300
     # Dataset083_BUSBRA_U_Systems
-    # Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
+    Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
     # Dataset203_neurite_2px_scaleaug
     # Dataset204_lesion_czi_B
@@ -28,6 +28,12 @@ experiments=(
     upernet_inj_ft_vits_ours
     upernet_inj_ft_vitb_poly_ours
     upernet_inj_ft_vits_poly_ours
+    upernet_inj_kd_d64_ours
+    upernet_inj_kd_d64_aug_ours
+    upernet_inj_kd_d64_x2adj_ours
+    upernet_inj_kd_d64_x2stack_ours
+    upernet_inj_kd_d32_ours
+    upernet_inj_kd_d32_aug_ours
     m2f
     # nonlinear
     linear_finetune
@@ -46,7 +52,7 @@ cols=4          # samples per row
 # mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=mask_pair
+layout=pair
 
 # contour | overlay | centerline
 gt_style=contour

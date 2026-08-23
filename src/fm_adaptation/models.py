@@ -117,6 +117,31 @@ def _dinov3_root() -> Path:
 # config does for ViT-L. `deform_num_heads` has to keep the deformable attention's channels-per-head a
 # power of two -- at 384 dim with `deform_ratio=0.5`, 16 heads gives 24 and takes `MSDeformAttn`'s slow
 # path, while 6 gives 32.
+# The 324K student, named once because the weight-sharing variants below are exactly this model with
+# a different block order -- sharing the spec is what keeps their parameter counts identical to it.
+_STUDENT_D64 = {
+    "hub": None,
+    "checkpoint": None,
+    "feature_channels": 64,
+    "embed_dim": 64,
+    "depth": 4,
+    "num_heads": 4,
+    "last_layer": 3,
+    # Four blocks and four interactions, so every block is its own.
+    "interaction_indexes": (0, 1, 2, 3),
+    # `MSDeformAttn` needs `adapter_dim * deform_ratio / heads` to be a power of two; at 16 wide
+    # and ratio 0.5, one head gives 8.
+    "deform_num_heads": 1,
+    "adapter_dim": 16,
+    "spm_inplanes": 4,
+    "head_channels": 16,
+    # The base adapter drops 30% of extractor branches per sample, which is sensible over its
+    # usual four interactions on a 24-block trunk. Here there are only four blocks in total, so
+    # the same rate perturbs a far larger fraction of the network; the students turn it off.
+    "adapter_drop_path": 0.0,
+}
+
+
 DINOV3_VARIANTS = {
     "vitl16": {
         "hub": "dinov3_vitl16",
@@ -142,6 +167,43 @@ DINOV3_VARIANTS = {
         "interaction_indexes": (2, 5, 8, 11),
         "deform_num_heads": 6,
     },
+    # Distillation students. No pretrained trunk exists at these sizes, so `hub` is None and the
+    # transformer is built from scratch. They also name the adapter and head widths, which the larger
+    # variants leave at their defaults: at a 64-wide trunk a stock 512-channel UperNet head would be
+    # 42x the trunk it decodes, so cutting the trunk alone buys almost nothing. `adapter_dim` runs the
+    # injectors and extractors narrower than the trunk, which costs a projection at every crossing --
+    # see `dinov3_injector.DINOv3AdapterWithInjector`.
+    "student_d64": dict(_STUDENT_D64),
+    # Weight sharing: the same trunk executed twice, which buys depth without buying parameters. Both
+    # must come out at exactly `student_d64`'s count -- that equality is the whole point of the
+    # comparison, and it is asserted rather than assumed.
+    "student_d64_x2adj": {
+        **_STUDENT_D64,
+        # `0 0 1 1 2 2 3 3`: each block refines its own output before handing on.
+        "block_repeat_mode": "adjacent",
+        "block_repeat_times": 2,
+    },
+    "student_d64_x2stack": {
+        **_STUDENT_D64,
+        # `0 1 2 3 0 1 2 3`: the whole trunk run again over what it just produced.
+        "block_repeat_mode": "stack",
+        "block_repeat_times": 2,
+    },
+    "student_d32": {
+        "hub": None,
+        "checkpoint": None,
+        "feature_channels": 32,
+        "embed_dim": 32,
+        "depth": 4,
+        "num_heads": 2,
+        "last_layer": 3,
+        "interaction_indexes": (0, 1, 2, 3),
+        "deform_num_heads": 1,
+        "adapter_dim": 16,
+        "spm_inplanes": 4,
+        "head_channels": 8,
+        "adapter_drop_path": 0.0,
+    },
 }
 DEFAULT_DINOV3_VARIANT = "vitl16"
 
@@ -158,6 +220,51 @@ def _load_dinov3_backbone(checkpoint: str | None, variant: str = DEFAULT_DINOV3_
     import dinov3.hub.backbones as backbones
 
     spec = _dinov3_variant(variant)
+    if spec["hub"] is None:
+        # A student trunk. There is no pretrained checkpoint at this size, so it is built and trained
+        # from scratch. Every argument below is what `dinov3.hub.backbones` passes for the real ViT-S
+        # and ViT-L alike -- they differ only in width and depth -- so the student is genuinely the same
+        # architecture as its teacher rather than a bare `DinoVisionTransformer`. `layerscale_init`
+        # especially is not optional: without it the residual branches start at full magnitude and a
+        # randomly initialised trunk diverges to NaN within the first epoch.
+        from dinov3.models.vision_transformer import DinoVisionTransformer
+
+        student = DinoVisionTransformer(
+            img_size=224,
+            patch_size=16,
+            in_chans=3,
+            pos_embed_rope_base=100,
+            pos_embed_rope_normalize_coords="separate",
+            pos_embed_rope_rescale_coords=2,
+            pos_embed_rope_dtype="fp32",
+            embed_dim=spec["embed_dim"],
+            depth=spec["depth"],
+            num_heads=spec["num_heads"],
+            ffn_ratio=4,
+            qkv_bias=True,
+            drop_path_rate=0.0,
+            layerscale_init=1.0e-05,
+            norm_layer="layernormbf16",
+            ffn_layer="mlp",
+            ffn_bias=True,
+            proj_bias=True,
+            n_storage_tokens=4,
+            mask_k_bias=True,
+        )
+        # `DinoVisionTransformer.__init__` allocates its parameters with `torch.empty` and never
+        # initialises them -- every other path in this project loads a pretrained checkpoint straight
+        # over the top, so nothing here had ever built a trunk that stays as constructed. Without this
+        # the student starts on uninitialised memory and its very first forward pass is NaN.
+        student.init_weights()
+        # `mask_k_bias` makes each block's qkv a `LinearKMaskedBias`, whose `bias_mask` buffer is
+        # allocated full of NaN and is only ever filled in by loading a checkpoint -- so a trunk built
+        # from scratch multiplies its bias by NaN and every forward pass is NaN. Every released DINOv3
+        # checkpoint ships that buffer as all zeros, alongside an all-zero `qkv.bias`, so zeroing it
+        # here is what the teacher actually runs rather than a guess.
+        for name, buffer in student.named_buffers():
+            if name.endswith("bias_mask"):
+                torch.nn.init.zeros_(buffer)
+        return student
     if checkpoint is None:
         checkpoint = root / "ckpts" / spec["checkpoint"]
     # The hub loader derives a config flag from an 8-char hash in the filename, which local
@@ -238,10 +345,30 @@ class DINOv3AdapterEncoder(DINOv3Encoder):
             from .dinov3_injector import DINOv3AdapterWithInjector as adapter_cls
         else:
             from dinov3.eval.segmentation.models.backbone.dinov3_adapter import DINOv3_Adapter as adapter_cls
+        extra = {}
+        if spec.get("spm_inplanes") is not None:
+            extra["conv_inplane"] = spec["spm_inplanes"]
+        if spec.get("adapter_dim") is not None:
+            # Only the injector variant knows how to run narrower than its trunk; a plain adapter has
+            # no projections and would silently ignore this.
+            if not injector:
+                raise ValueError("model.variant sets adapter_dim, which needs model.injector: true")
+            extra["adapter_dim"] = spec["adapter_dim"]
+        if spec.get("adapter_drop_path") is not None:
+            extra["drop_path_rate"] = spec["adapter_drop_path"]
+        if spec.get("block_repeat_mode") is not None:
+            # Weight sharing lives in how the trunk is executed, which only the injector variant drives
+            # itself; the base adapter runs the blocks through `get_intermediate_layers` and would
+            # ignore this.
+            if not injector:
+                raise ValueError("model.variant sets block_repeat_mode, which needs model.injector: true")
+            extra["block_repeat_mode"] = spec["block_repeat_mode"]
+            extra["block_repeat_times"] = spec.get("block_repeat_times", 1)
         adapter = adapter_cls(
             backbone,
             interaction_indexes=list(self.interaction_indexes),
             deform_num_heads=spec["deform_num_heads"],
+            **extra,
         )
         # The adapter is built with SyncBatchNorm, which needs a process group we do not have outside
         # mmseg's distributed Runner; mmengine's helper swaps it for plain BatchNorm in place.
@@ -320,7 +447,7 @@ class UperNetDecoder(nn.Module):
     run is identical to a probe run apart from the decoder itself.
     """
 
-    def __init__(self, in_channels: int, num_classes: int):
+    def __init__(self, in_channels: int, num_classes: int, channels: int = 512):
         super().__init__()
         from mmseg.models.decode_heads import UPerHead
 
@@ -328,7 +455,10 @@ class UperNetDecoder(nn.Module):
             in_channels=[in_channels] * 4,
             in_index=[0, 1, 2, 3],
             pool_scales=(1, 2, 3, 6),
-            channels=512,
+            # 512 is what every foundation-model run trained with, and it does not depend on the trunk:
+            # `99 * channels^2` of the head survives whatever the trunk does, which is why the students
+            # have to cut it explicitly rather than inherit a smaller one.
+            channels=channels,
             dropout_ratio=0.1,
             num_classes=num_classes,
             norm_cfg={"type": "BN", "requires_grad": True},
@@ -387,7 +517,12 @@ def build_model(
         encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
-    probe = probes[probe_name](encoder.feature_channels, classes)
+    probe_args = {}
+    if probe_name == "upernet" and model_name == "dinov3":
+        head_channels = _dinov3_variant(variant).get("head_channels")
+        if head_channels is not None:
+            probe_args["channels"] = head_channels
+    probe = probes[probe_name](encoder.feature_channels, classes, **probe_args)
     return SegmentationModel(encoder, probe)
 
 

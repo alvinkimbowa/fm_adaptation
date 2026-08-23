@@ -219,7 +219,20 @@ ADAPTATIONS = {
     "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 14),
     "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 15),
     "upernet_inj_ft_vits_poly_ours": ("Adapter + UperNet + Inj + FT ViT-S poly ours", 16),
-    "": ("", 17),
+    # The distilled students: the same architecture again, but with the trunk, the adapter and the head
+    # all cut, trained from scratch against the ViT-L run's predictions. They sort last because they are
+    # the smallest models in the study, not another trunk size of the same family.
+    "upernet_inj_kd_d64_ours": ("Adapter + UperNet + Inj KD D=64 ours", 17),
+    # Each student keeps its two data regimes adjacent -- no augmentation, then nnU-Net's spatial
+    # transform -- so that comparison is between neighbouring rows, as the schedules above are.
+    "upernet_inj_kd_d64_aug_ours": ("Adapter + UperNet + Inj KD D=64 aug ours", 18),
+    # Same 324K parameters as the two rows above, run with a repeated block schedule -- depth without
+    # width, so they belong directly under the augmented student they are a variation of.
+    "upernet_inj_kd_d64_x2adj_ours": ("Adapter + UperNet + Inj KD D=64 aug x2 adjacent ours", 19),
+    "upernet_inj_kd_d64_x2stack_ours": ("Adapter + UperNet + Inj KD D=64 aug x2 stacked ours", 20),
+    "upernet_inj_kd_d32_ours": ("Adapter + UperNet + Inj KD D=32 ours", 21),
+    "upernet_inj_kd_d32_aug_ours": ("Adapter + UperNet + Inj KD D=32 aug ours", 22),
+    "": ("", 23),
 }
 
 
@@ -233,7 +246,10 @@ MAIN_ADAPTATIONS = {
     "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_ours", "upernet_inj_ours",
     "upernet_inj_ft_ours", "upernet_inj_ft_poly_ours", "upernet_inj_ft_init_ours", "m2f", "m2f_inj",
     "upernet_inj_ft_vitb_ours", "upernet_inj_ft_vitb_poly_ours",
-    "upernet_inj_ft_vits_ours", "upernet_inj_ft_vits_poly_ours", "",
+    "upernet_inj_ft_vits_ours", "upernet_inj_ft_vits_poly_ours",
+    "upernet_inj_kd_d64_ours", "upernet_inj_kd_d64_aug_ours",
+    "upernet_inj_kd_d64_x2adj_ours", "upernet_inj_kd_d64_x2stack_ours",
+    "upernet_inj_kd_d32_ours", "upernet_inj_kd_d32_aug_ours", "",
 }
 
 
