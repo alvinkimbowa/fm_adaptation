@@ -22,11 +22,11 @@ def _read_run(run_dir: Path):
     )
 
 
-def _read_metrics(path: Path, dice_scale=1.0):
+def _read_metrics(path: Path):
     with open(path, newline="") as f:
         rows = list(csv.DictReader(f))
     return {
-        "dice": np.array([float(row["dice"]) for row in rows]) * dice_scale,
+        "dice": np.array([float(row["dice"]) for row in rows]),
         "masd": np.array([float(row["masd"]) for row in rows]),
     }
 
@@ -81,20 +81,19 @@ MONOUNET_NAMES = {
 
 
 def _add_monounet_records(records, results_dir, model="MonoUNet"):
-    """MonoUNet stores per-case rows as `test/image_wise_..._<Dataset>.csv`, dice in percent."""
+    """MonoUNet stores per-case rows as `test/<Dataset>/image_wise_...csv`, dice as a fraction."""
     results_dir = Path(results_dir)
-    prefix = "image_wise_results_largest_component_"
-    metrics_paths = sorted(results_dir.glob(f"Dataset*/fold_*/test/{prefix}Dataset*.csv"))
+    metrics_paths = sorted(
+        results_dir.glob("Dataset*/fold_*/test/Dataset*/image_wise_results_largest_component.csv")
+    )
     if not metrics_paths:
         raise RuntimeError(f"No MonoUNet metrics found under {results_dir}")
     for metrics_path in metrics_paths:
-        fold_dir = metrics_path.parents[1]
+        fold_dir = metrics_path.parents[2]
         trained_on = fold_dir.parent.name
         fold = fold_dir.name.removeprefix("fold_")
-        tested_on = metrics_path.stem.removeprefix(prefix)
-        records[(model, "", trained_on, fold)][tested_on] = _read_metrics(
-            metrics_path, dice_scale=0.01
-        )
+        tested_on = metrics_path.parent.name
+        records[(model, "", trained_on, fold)][tested_on] = _read_metrics(metrics_path)
 
 
 def _pool_folds(records, folds):

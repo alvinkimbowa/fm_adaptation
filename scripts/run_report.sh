@@ -54,7 +54,7 @@ experiments=(
 
 # For comparison with MonoUNet and nnUNet
 nnunet_dirs=(
-    ../nnUNet_fork/data/nnUNet_results
+    ../xtinyunet/data/nnUNet_results
 )
 monounet_dirs=(
     ../monounetv2/models_v2/MonoUNetE123V2GatedDA
