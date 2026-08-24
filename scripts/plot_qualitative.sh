@@ -18,6 +18,8 @@ datasets=(
     # Dataset090_Echo_EchoCP
     Dataset204_lesion_czi_B
     Dataset206_lesion_120_czi_B
+    Dataset208_combined_MYKE_smi_gfap
+    Dataset209_combined_MYE_smi_gfap
     # Dataset203_neurite_2px_scaleaug
     # Dataset205_neurite_2px_scaleaug_red
 )

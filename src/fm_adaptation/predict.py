@@ -77,7 +77,17 @@ def _jobs(cfg, datasets):
     jobs = []
     for dataset_name in datasets:
         if dataset_name != cfg.train_dataset:
-            jobs.append((dataset_name, cfg.test_split, "eval", "test", dataset_name))
+            # `test_split` is one setting for every evaluation set, but the newer ones ship their
+            # cases as `imagesTs` while the older ones keep everything in `imagesTr`. Honour the
+            # configured split where it exists, so no existing result moves, and fall back to
+            # whichever split the dataset actually has.
+            split = cfg.test_split
+            if not _has_cases(cfg.raw_data_dir / dataset_name, split):
+                split = next(
+                    (s for s in ("Ts", "Tr") if _has_cases(cfg.raw_data_dir / dataset_name, s)),
+                    split,
+                )
+            jobs.append((dataset_name, split, "eval", "test", dataset_name))
             continue
         if cfg.fold != "all":
             jobs.append((dataset_name, "Tr", "val", "validation", dataset_name))
@@ -93,6 +103,11 @@ def _jobs(cfg, datasets):
             column = dataset_name if split == "Ts" else f"{dataset_name}{split[2:]}"
             jobs.append((dataset_name, split, "eval", "test", column))
     return jobs
+
+
+def _has_cases(dataset_dir, split):
+    image_dir = dataset_dir / f"images{split}"
+    return image_dir.is_dir() and any(image_dir.iterdir())
 
 
 def _has_labels(dataset_dir, split):

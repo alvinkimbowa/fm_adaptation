@@ -284,8 +284,16 @@ def _shorten_name(name, limit=46):
     return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
 
+# The family is the second token of the dataset name, which groups the ultrasound sets and the lesion
+# sets without anyone maintaining a list. The evaluation sets carved out of the combined dataset break
+# that -- `interrater`, `paul` and `katie` are three families of one column each, and the row that
+# tests on them could show none of them -- so they are named back onto the family they belong to.
+FAMILY_ALIASES = {"interrater": "combined", "paul": "combined", "katie": "combined"}
+
+
 def _dataset_family(dataset):
-    return dataset.split("_", maxsplit=2)[1]
+    family = dataset.split("_", maxsplit=2)[1]
+    return FAMILY_ALIASES.get(family, family)
 
 
 PARAMETER_COUNTS = {}
@@ -773,7 +781,12 @@ def main():
         agreement = {}
         for dataset in family_datasets:
             dataset_dir = raw_dirs.get(dataset, Path()) / dataset
-            for label_dir in sorted(dataset_dir.glob("labels*interrater*")):
+            # Either a dataset that is entirely an interrater set (its whole split is the pairs), or
+            # an older one that carries the pairs as an extra split beside its own test set.
+            label_dirs = sorted(dataset_dir.glob("labels*interrater*"))
+            if not label_dirs and "interrater" in dataset:
+                label_dirs = sorted(dataset_dir.glob("labels*"))
+            for label_dir in label_dirs:
                 rows, unpaired = _interrater_rows(dataset_dir, label_dir.name[len("labels"):])
                 if rows or unpaired:
                     agreement[dataset] = (rows, unpaired)

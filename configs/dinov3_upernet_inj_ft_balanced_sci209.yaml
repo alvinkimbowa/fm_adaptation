@@ -1,20 +1,23 @@
 data:
   raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
   results_dir: models
-  train_dataset: Dataset208_combined_MYKE_smi_gfap
+  train_dataset: Dataset209_combined_MYE_smi_gfap
   test_datasets:
-    - Dataset208_combined_MYKE_smi_gfap
+    - Dataset209_combined_MYE_smi_gfap
+    - Dataset210_interrater_MY_smi_gfap
+    - Dataset211_paul_widefield_smi_gfap
     - Dataset212_katie_dorsal_column_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
   test_split: Tr
   fold: 0
-  channel_dropout: [SMI]
+  balance_sources: true
 
 model:
   name: dinov3
   probe: upernet
   injector: true
   train_encoder: true
-  run_name: upernet_inj_ft_dropsmi_ours
+  run_name: upernet_inj_ft_balanced_ours
   checkpoint: null
 
 training:
