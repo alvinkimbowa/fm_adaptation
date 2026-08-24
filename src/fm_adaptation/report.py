@@ -344,17 +344,21 @@ ADAPTATIONS = {
     # early-stopped counterpart, the way each smaller trunk pairs with its own below.
     "upernet_inj_ft_poly_ours": ("Adapter + UperNet + Inj + FT poly ours", 9),
     "upernet_inj_ft_init_ours": ("Adapter + UperNet + Inj + FT init ours", 10),
-    "m2f": ("Adapter + Mask2Former", 11),
-    "m2f_inj": ("Adapter + Mask2Former + Inj", 12),
+    "upernet_inj_ft_dropsmi_ours": ("Adapter + UperNet + Inj + FT drop-SMI ours", 11),
+    "upernet_inj_ft_dropany_ours": ("Adapter + UperNet + Inj + FT drop-any ours", 12),
+    "upernet_inj_ft_balanced_ours": ("Adapter + UperNet + Inj + FT balanced ours", 13),
+    "upernet_inj_ft_balanced_dropany_ours": ("Adapter + UperNet + Inj + FT balanced drop-any ours", 14),
+    "m2f": ("Adapter + Mask2Former", 15),
+    "m2f_inj": ("Adapter + Mask2Former + Inj", 16),
     # The same adaptation on the smaller trunks, sorted last so they close out each model's block of
     # rows, largest trunk first so the rows read down in decreasing size from the ViT-L above. Each
     # trunk keeps its two schedules together -- constant rate with early stopping, then the full-length
     # warmup + poly run -- so that comparison is between adjacent rows rather than across the block.
-    "upernet_inj_ft_vitb_ours": ("Adapter + UperNet + Inj + FT ViT-B ours", 13),
-    "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 14),
-    "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 15),
-    "upernet_inj_ft_vits_poly_ours": ("Adapter + UperNet + Inj + FT ViT-S poly ours", 16),
-    "": ("", 17),
+    "upernet_inj_ft_vitb_ours": ("Adapter + UperNet + Inj + FT ViT-B ours", 17),
+    "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 18),
+    "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 19),
+    "upernet_inj_ft_vits_poly_ours": ("Adapter + UperNet + Inj + FT ViT-S poly ours", 20),
+    "": ("", 21),
 }
 
 
@@ -367,6 +371,8 @@ ADAPTATIONS = {
 MAIN_ADAPTATIONS = {
     "linear", "linear_finetune", "upernet", "upernet_inj", "upernet_ours", "upernet_inj_ours",
     "upernet_inj_ft_ours", "upernet_inj_ft_poly_ours", "upernet_inj_ft_init_ours", "m2f", "m2f_inj",
+    "upernet_inj_ft_dropsmi_ours", "upernet_inj_ft_dropany_ours",
+    "upernet_inj_ft_balanced_ours", "upernet_inj_ft_balanced_dropany_ours",
     "upernet_inj_ft_vitb_ours", "upernet_inj_ft_vitb_poly_ours",
     "upernet_inj_ft_vits_ours", "upernet_inj_ft_vits_poly_ours", "",
 }
