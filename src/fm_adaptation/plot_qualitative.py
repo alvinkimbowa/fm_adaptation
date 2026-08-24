@@ -5,12 +5,13 @@ which images, labels and predictions belong to each run and where the figure sho
 """
 
 import argparse
+import json
 from pathlib import Path
 
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import blue_channel, load_dataset_json
+from .data import active_planes, load_dataset_json, rgb_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .selection import matches as _matches
 
@@ -26,14 +27,21 @@ def _classes(cfg, dataset_name):
     return sorted(names), names
 
 
-def _source_dirs(cfg, dataset_name, kind):
+def _source_dirs(cfg, dataset_name, kind, output_dir):
     """The training dataset's `test/` results come from its held-out imagesTs, everything else from Tr."""
-    if dataset_name != cfg.train_dataset:
+    source_path = output_dir / "source.json"
+    if source_path.exists():
+        source = json.loads(source_path.read_text())
+        dataset_name, split = source["dataset"], source["split"]
+    elif dataset_name != cfg.train_dataset:
         split = cfg.test_split
     else:
         split = "Ts" if kind == "test" else "Tr"
     dataset_dir = cfg.raw_data_dir / dataset_name
-    return dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
+    labels = dataset_dir / f"labels{split}"
+    # A dataset can ship images with no annotations -- then the figure is image and prediction only.
+    return (dataset_name, dataset_dir / f"images{split}",
+            labels if labels.is_dir() and any(labels.iterdir()) else None)
 
 
 def _crop_size(cfg, crop):
@@ -63,8 +71,11 @@ def main():
     # Selecting the work up front means the progress bar knows its total, and a run that matches nothing
     # says so immediately instead of after a silent walk of the results tree.
     jobs = []
-    for metrics_path in sorted(Path(args.results_dir).glob("*/Dataset*/*/fold_*/*/*/metrics.csv")):
-        output_dir = metrics_path.parent
+    # Driven by the predictions rather than the metrics: a dataset with no labels is never scored, so
+    # it has no metrics.csv, and keying off that would silently skip every figure it could draw.
+    for prediction_dir in sorted(Path(args.results_dir).glob("*/Dataset*/*/fold_*/*/*/predictions")):
+        output_dir = prediction_dir.parent
+        metrics_path = output_dir / "metrics.csv"
         fold_dir = output_dir.parents[1]
         dataset_name, kind = output_dir.name, output_dir.parent.name
         if not _matches(fold_dir.parents[1].name, args.datasets):
@@ -79,7 +90,8 @@ def main():
             continue
         figure_path = output_dir / "qualitative.png"
         # Redrawing every run costs minutes; only the runs whose metrics moved need a new figure.
-        if args.skip_unchanged and figure_path.exists() and figure_path.stat().st_mtime >= metrics_path.stat().st_mtime:
+        newest = metrics_path if metrics_path.exists() else prediction_dir
+        if args.skip_unchanged and figure_path.exists() and figure_path.stat().st_mtime >= newest.stat().st_mtime:
             skipped += 1
             continue
         jobs.append((metrics_path, output_dir, fold_dir, dataset_name, kind, config_path))
@@ -95,12 +107,19 @@ def main():
         # one takes a while; name the run being drawn rather than leaving a bare counter.
         progress.set_postfix_str(f"{fold_dir.parents[1].name}/{fold_dir.parent.name} {kind}")
         cfg = ExperimentConfig.from_yaml(config_path)
-        images, labels = _source_dirs(cfg, dataset_name, kind)
+        source_dataset, images, labels = _source_dirs(cfg, dataset_name, kind, output_dir)
         classes, class_names = _classes(cfg, dataset_name)
-        # Draw whichever channel the model was given, and draw it the colour it was given in, so a
-        # dataset storing its stains as separate greyscale files does not come out grey beside one
-        # storing the same signal inside an RGB file.
-        channel = blue_channel(load_dataset_json(cfg.raw_data_dir / dataset_name)["channel_names"])
+        # Draw the stains into the same planes the model was given them in, so a dataset shipping
+        # its stains as separate greyscale files does not come out grey beside one storing the same
+        # signal inside an RGB file.
+        channel_planes = rgb_planes(
+            load_dataset_json(cfg.raw_data_dir / source_dataset)["channel_names"]
+        )
+        # Only the planes the model was trained on, so a czi_B run's figure on a two-stain dataset
+        # shows the GFAP it was given and not the SMI it never saw.
+        keep = active_planes(load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"])
+        if channel_planes and keep is not None:
+            channel_planes = {stored: rgb for stored, rgb in channel_planes.items() if rgb in keep}
         path = render(
             images,
             labels,
@@ -109,15 +128,14 @@ def main():
             layout=args.layout,
             rows=args.rows,
             cols=args.cols,
-            metrics=metrics_path,
+            metrics=metrics_path if metrics_path.exists() else None,
             crop=_crop_size(cfg, args.crop),
             seed=args.seed,
             style=style,
             title=f"{dataset_name} — {fold_dir.parent.name}/{fold_dir.name} ({kind})",
             classes=classes,
             class_names=class_names,
-            channel=0 if channel is None else channel,
-            channel_color=None if channel is None else "blue",
+            channel_planes=channel_planes,
         )
         drawn += 1
         progress.write(f"wrote {path}" if path else f"skipped {output_dir} (no metrics)")

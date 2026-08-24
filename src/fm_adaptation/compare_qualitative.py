@@ -14,6 +14,8 @@ arrangement is new.
 """
 
 import argparse
+import json
+import re
 from pathlib import Path
 
 from tqdm import tqdm
@@ -27,8 +29,8 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 
 from .config import ExperimentConfig
-from .data import blue_channel, load_dataset_json
-from .report import ADAPTATIONS, _config_label, _model_rank, _split_adaptation
+from .data import active_planes, load_dataset_json, rgb_planes
+from .report import ADAPTATIONS, _config_label, _dataset_label, _model_rank, _split_adaptation
 from .qualitative import (
     MAX_FIGURE_INCHES,
     MAX_FIGURE_PIXELS,
@@ -37,11 +39,11 @@ from .qualitative import (
     _shorten,
     _to_rgb,
     add_style_arguments,
-    as_color_plane,
     crop_window,
     draw,
     mask_colors,
     panel_aspect,
+    read_channel_planes,
     read_image,
     select_cases,
     style_from_arguments,
@@ -49,8 +51,12 @@ from .qualitative import (
 from .selection import matches as _matches
 
 
-def _runs(results_dir, dataset, kind, tested_on, models, experiments):
-    """Every run that has predictions for `tested_on`, as (label, run_dir, prediction_dir, metrics)."""
+def _runs(results_dir, dataset, kind, tested_on, models, experiments, name_training_set=False):
+    """Every run that has predictions for `tested_on`, as (label, run_dir, prediction_dir, metrics).
+
+    `name_training_set` adds what the run was trained on to its label, which is the only thing that
+    tells two columns apart when the same configuration is compared across training sets.
+    """
     found = []
     pattern = f"*/{dataset}/*/fold_*/{kind}/{tested_on}/predictions"
     for prediction_dir in sorted(Path(results_dir).glob(pattern)):
@@ -63,7 +69,12 @@ def _runs(results_dir, dataset, kind, tested_on, models, experiments):
             continue
         # The column carries the label the report gives this row, so a figure and the table name the
         # same thing the same way -- a column is one row of the results table, config and all.
-        found.append((_config_label(model, run_name), fold_dir,
+        label = _config_label(model, run_name)
+        if name_training_set:
+            # Joined with the same separator the labels already use, so `_distinct` strips the shared
+            # configuration and leaves the training set, which is what the comparison is about.
+            label = f"{label} + trained on {_training_tag(dataset)}"
+        found.append((label, fold_dir,
                       prediction_dir, prediction_dir.parent / "metrics.csv", model, run_name))
     # Columns in the order the report puts its rows, so reading across the figure and down the table
     # follow the same sequence.
@@ -71,6 +82,15 @@ def _runs(results_dir, dataset, kind, tested_on, models, experiments):
                                 ADAPTATIONS.get(_split_adaptation(run[5])[0], ("", 99))[1],
                                 _split_adaptation(run[5])[1]))
     return [run[:4] for run in found]
+
+
+def _training_tag(dataset):
+    """A short name for a training set, for a column header that has to fit.
+
+    Every SCI set carries the same `_smi_gfap` stain suffix, which is exactly the part that does not
+    distinguish one from another.
+    """
+    return re.sub(r"_(smi_)?gfap$", "", _dataset_label(dataset))
 
 
 def _report_model(model):
@@ -87,7 +107,8 @@ def _common_cases(runs, count, reference, rng):
     shared = shared or set()
     # `select_cases` spans the quality range rather than taking the first few, which is what makes a
     # comparison figure worth looking at -- the interesting rows are the ones the reference finds hard.
-    picked = select_cases(reference[2], count * 3, reference[3], rng)
+    metrics = reference[3] if Path(reference[3]).exists() else None
+    picked = select_cases(reference[2], count * 3, metrics, rng)
     ordered = [case for case in picked if case[0] in shared]
     if len(ordered) < count:
         # Not enough of the reference's sample is shared; fall back to whatever every run has.
@@ -132,8 +153,26 @@ def _fit(array, target_width, nearest):
     )
 
 
+def _distinct(labels):
+    """Column headers cut down to the part that tells the runs apart.
+
+    Every column here is the same architecture on the same dataset, so the labels share a long
+    prefix and a header truncated from the right reads identically in all of them -- which is the
+    one thing a comparison figure must not do. Drop the shared leading terms instead.
+    """
+    parts = [label.split(" + ") for label in labels]
+    if len(parts) < 2:
+        return list(labels)
+    common = 0
+    while all(len(p) > common + 1 for p in parts) and len({p[common] for p in parts}) == 1:
+        common += 1
+    if not common:
+        return list(labels)
+    return ["… + " + " + ".join(p[common:]) for p in parts]
+
+
 def render_comparison(images, labels, runs, cases, output, style, crop=None, seed=0,
-                      classes=None, class_names=None, title=None, channel=0, channel_color=None,
+                      classes=None, class_names=None, title=None, channel_planes=None,
                       layout="pair", per_row=1):
     """Cases down the figure and models across it: the image, the ground truth, then each prediction.
 
@@ -152,13 +191,18 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
     rng = np.random.default_rng(seed)
     if classes is None:
         classes = _classes_in(labels, runs[0][2], cases[0][0])
+
     gt_colors, pred_colors = mask_colors(classes, style)
 
-    columns = (["image"] if show_image else []) + ["ground truth"] + [label for label, *_ in runs]
+    # A dataset with no annotations has no ground-truth column and no Dice to print; the figure is
+    # then the image beside one prediction per model.
+    scored = labels is not None
+    columns = ((["image"] if show_image else []) + (["ground truth"] if scored else [])
+               + _distinct([label for label, *_ in runs]))
     per_row = max(1, per_row)
     grid_columns = len(columns) * per_row
     grid_rows = -(-len(cases) // per_row)
-    aspect = panel_aspect(images, cases[0][0], crop, channel)
+    aspect = panel_aspect(images, cases[0][0], crop, channel_planes)
     cell_width = 3.2
     width = cell_width * grid_columns
     height = cell_width * aspect * grid_rows
@@ -179,32 +223,39 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
         row, block = divmod(index, per_row)
         first = block * len(columns)
         progress.set_postfix_str(_shorten(case_id, 24))
-        image = read_image(_find(images, case_id, channel))
-        if channel_color:
-            image = as_color_plane(image, channel_color)
-        label = read_image(_find(labels, case_id))
-        window = crop_window(np.asarray(label), np.asarray(image).shape[:2], crop, rng) if crop else None
+        image = (
+            read_channel_planes(images, case_id, channel_planes)
+            if channel_planes
+            else read_image(_find(images, case_id))
+        )
+        label = read_image(_find(labels, case_id)) if scored else None
+        reference = label if scored else read_image(_find(runs[0][2], case_id))
+        window = (crop_window(np.asarray(reference), np.asarray(image).shape[:2], crop, rng)
+                  if crop else None)
         if window:
-            image, label = np.asarray(image)[window], np.asarray(label)[window]
+            image = np.asarray(image)[window]
+            label = None if label is None else np.asarray(label)[window]
         image = _fit(image, panel_width, nearest=False)
-        label = _fit(label, panel_width, nearest=True)
+        label = None if label is None else _fit(label, panel_width, nearest=True)
         plain = _to_rgb(np.asarray(image))
 
         column = first
         if show_image:
             axes[row][column].imshow(plain.clip(0, 255).astype(np.uint8))
             column += 1
-        truth = np.zeros_like(plain) if on_black else plain.copy()
-        for value, color in gt_colors.items():
-            if flat:
-                truth[label == value] = color
-            else:
-                draw(truth, label == value, style["gt_style"], color, style["gt_width"], style["alpha"])
-        axes[row][column].imshow(truth.clip(0, 255).astype(np.uint8))
+        if scored:
+            truth = np.zeros_like(plain) if on_black else plain.copy()
+            for value, color in gt_colors.items():
+                if flat:
+                    truth[label == value] = color
+                else:
+                    draw(truth, label == value, style["gt_style"], color,
+                         style["gt_width"], style["alpha"])
+            axes[row][column].imshow(truth.clip(0, 255).astype(np.uint8))
+            column += 1
         axes[row][first].annotate(_shorten(case_id, 20), xy=(0, 0.5), xytext=(-6, 0),
                                   xycoords="axes fraction", textcoords="offset points",
                                   ha="right", va="center", fontsize=7, rotation=90)
-        column += 1
 
         for _, _, prediction_dir, metrics_path in runs:
             prediction = np.asarray(read_image(_find(prediction_dir, case_id)))
@@ -218,7 +269,7 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
                 else:
                     draw(panel, prediction == value, style["pred_style"], color,
                          style["pred_width"], style["alpha"])
-            if not flat:
+            if scored and not flat:
                 # The ground truth goes over every prediction too, so a column is read against the
                 # truth without looking back at the second column. A flat mask has no room for it.
                 for value, color in gt_colors.items():
@@ -239,7 +290,7 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
     for column in range(grid_columns):
         # The column header names the model; the per-cell title is that case's Dice, so both fit.
         # Every block gets its own headers, since each is a complete set of columns.
-        axes[0][column].annotate(_shorten(columns[column % len(columns)], 30), xy=(0.5, 1.0),
+        axes[0][column].annotate(_shorten(columns[column % len(columns)], 46), xy=(0.5, 1.0),
                                  xytext=(0, 18), xycoords="axes fraction",
                                  textcoords="offset points",
                                  ha="center", va="bottom", fontsize=8, fontweight="bold")
@@ -249,8 +300,9 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
         mpatches.Patch(color=np.array(color) / 255, label=names.get(value, f"class {value}"))
         for value, color in sorted(pred_colors.items())
     ]
-    handles.append(mpatches.Patch(color=np.array(next(iter(gt_colors.values()))) / 255,
-                                  label=f"ground truth ({style['gt_style']})"))
+    if scored:
+        handles.append(mpatches.Patch(color=np.array(next(iter(gt_colors.values()))) / 255,
+                                      label=f"ground truth ({style['gt_style']})"))
     figure.legend(handles=handles, loc="lower center", ncol=min(len(handles), 6),
                   frameon=False, fontsize=9)
     if title:
@@ -275,6 +327,9 @@ def main():
     parser.add_argument("--output-dir", default="results/qualitative",
                         help="figures land in <output-dir>/<trained-on>/")
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
+    parser.add_argument("--across-training-sets", action="store_true",
+                        help="one figure per evaluation set with every selected training set in it, "
+                             "instead of one figure per training set")
     parser.add_argument("--per-row", type=int, default=1,
                         help="cases side by side on one row, each with its own set of columns")
     parser.add_argument("--seed-max", type=int, default=1000,
@@ -287,25 +342,58 @@ def main():
     style = style_from_arguments(args)
 
     drawn = skipped = 0
-    for dataset in args.datasets:
+    # Normally each training set gets its own figure. `--across-training-sets` puts them in one, so a
+    # column is "the same configuration trained on a different dataset" rather than "another model".
+    groups = [(d,) for d in args.datasets] if not args.across_training_sets else [tuple(args.datasets)]
+    for group in groups:
+        dataset = group[0] if len(group) == 1 else "across"
         for kind in args.splits:
             # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
             # `test_datasets` later shows up without editing this.
             available = sorted({
                 p.parent.name
-                for p in Path(args.results_dir).glob(f"*/{dataset}/*/fold_*/{kind}/*/predictions")
+                for trained_on in group
+                for p in Path(args.results_dir).glob(f"*/{trained_on}/*/fold_*/{kind}/*/predictions")
             })
             targets = [d for d in available if not args.tested_on or _matches(d, args.tested_on)]
             for tested_on in targets:
-                runs = _runs(args.results_dir, dataset, kind, tested_on, args.models, args.experiments)
+                runs = [
+                    run
+                    for trained_on in group
+                    for run in _runs(args.results_dir, trained_on, kind, tested_on,
+                                     args.models, args.experiments,
+                                     name_training_set=len(group) > 1)
+                ]
                 if len(runs) < 2:
                     print(f"skipped {dataset}/{kind}/{tested_on} ({len(runs)} run(s) matched)")
                     continue
                 cfg = ExperimentConfig.from_yaml(runs[0][1] / "config.yaml")
-                split = cfg.test_split if tested_on != cfg.train_dataset else ("Ts" if kind == "test" else "Tr")
-                dataset_dir = cfg.raw_data_dir / tested_on
+                source_path = runs[0][2].parent / "source.json"
+                if source_path.exists():
+                    source = json.loads(source_path.read_text())
+                    source_dataset, split = source["dataset"], source["split"]
+                else:
+                    source_dataset = tested_on
+                    split = cfg.test_split if tested_on != cfg.train_dataset else (
+                        "Ts" if kind == "test" else "Tr"
+                    )
+                dataset_dir = cfg.raw_data_dir / source_dataset
                 images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
-                channel = blue_channel(load_dataset_json(dataset_dir)["channel_names"])
+                # No annotations, no ground-truth column: the comparison is then between the models.
+                if not (labels.is_dir() and any(labels.iterdir())):
+                    labels = None
+                channel_planes = rgb_planes(load_dataset_json(dataset_dir)["channel_names"])
+                # Restricted to the planes these runs were trained on, so the backdrop is their
+                # input. Across training sets it is the union: a plane one column never saw is still
+                # part of what another column was given.
+                trained_on = {ExperimentConfig.from_yaml(run[1] / "config.yaml").train_dataset
+                              for run in runs}
+                keeps = [active_planes(load_dataset_json(cfg.raw_data_dir / t)["channel_names"])
+                         for t in sorted(trained_on)]
+                keep = None if any(k is None for k in keeps) else frozenset().union(*keeps)
+                if channel_planes and keep is not None:
+                    channel_planes = {stored: rgb for stored, rgb in channel_planes.items()
+                                      if rgb in keep}
                 crop = None if args.crop == "full" else (
                     cfg.patching.patch_size if args.crop == "auto" and cfg.patching else
                     None if args.crop == "auto" else int(args.crop)
@@ -325,15 +413,18 @@ def main():
                 # Filed under what the models were trained on, which is what the figure compares;
                 # the split and the evaluation set name the file within it.
                 output = Path(args.output_dir) / dataset / f"{kind}__{tested_on}.png"
-                newest = max(m.stat().st_mtime for *_, m in runs if m.exists())
+                # An unscored dataset has no metrics.csv anywhere, so freshness comes from the
+                # predictions themselves rather than from a file that will never exist.
+                stamps = [m.stat().st_mtime for *_, m in runs if m.exists()]
+                stamps += [p.stat().st_mtime for _, _, p, m in runs if not m.exists()]
+                newest = max(stamps)
                 if args.skip_unchanged and output.exists() and output.stat().st_mtime >= newest:
                     skipped += 1
                     continue
                 path = render_comparison(
                     images, labels, runs, cases, output, style,
                     crop=crop, seed=seed, classes=sorted(names), class_names=names,
-                    channel=0 if channel is None else channel,
-                    channel_color=None if channel is None else "blue",
+                    channel_planes=channel_planes,
                     layout=args.layout, per_row=args.per_row,
                 )
                 drawn += 1

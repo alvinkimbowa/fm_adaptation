@@ -78,10 +78,18 @@ seed=0
 # the styles, the layout -- so there is one place to change what gets drawn. `comparison_rows` is the
 # number of cases, since a comparison row is a case rather than a grid cell.
 comparison_rows=8
+# Runs to put in the comparison figure. Empty follows `experiments` above; narrowing it here keeps the
+# per-run figures broad while the comparison stays to the handful of runs worth reading side by side.
+comparison_experiments=(
+    # upernet_inj_ft_balanced_ours     # narrow to this when comparison_across=1
+)
 # Cases side by side on one row, each with its own image / gt / model columns. `comparison_rows` is
 # still the number of cases, so 5 cases at 2 per row is 3 rows, the last one half empty.
 comparison_per_row=2
 comparison_dir=results/qualitative
+# 1 merges the training sets into one figure per evaluation set, so a column is the same
+# configuration trained on a different dataset -- written to <comparison_dir>/across/.
+comparison_across=0
 # Set to 1 to skip the per-run figures and redraw only the comparisons -- the quick loop when tuning
 # how a comparison looks, since the per-run figures are the slow half.
 comparison_only=1
@@ -118,11 +126,13 @@ fi
 # chosen runs have predictions for.
 compare_args=()
 [[ ${#comparison_models[@]} -gt 0 ]] && compare_args+=(--models "${comparison_models[@]}")
+[[ "${comparison_across:-0}" -eq 1 ]] && compare_args+=(--across-training-sets)
+compare_experiments=("${comparison_experiments[@]:-${experiments[@]}}")
 python -m fm_adaptation.compare_qualitative \
     "${args[@]}" \
     ${compare_args[@]+"${compare_args[@]}"} \
     --datasets "${datasets[@]}" \
-    --experiments "${experiments[@]}" \
+    --experiments "${compare_experiments[@]}" \
     --splits "${splits[@]}" \
     --rows "$comparison_rows" \
     --per-row "$comparison_per_row" \

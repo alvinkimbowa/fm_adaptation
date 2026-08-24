@@ -56,6 +56,14 @@ CLASS_PALETTE = (
     (245, 245, 245),   # white
 )
 IMAGE_SUFFIXES = (".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp")
+# Panels that exist only to show the ground truth, dropped from a layout when there is none.
+GT_ONLY_SLOTS = ("gt", "gt_mask")
+
+
+def _slots(layout, has_labels=True):
+    """The panels one sample occupies. Without labels the ground-truth-only panels fall away."""
+    slots = LAYOUTS[layout]
+    return slots if has_labels else tuple(s for s in slots if s not in GT_ONLY_SLOTS)
 
 
 # --------------------------------------------------------------------------------------- drawing
@@ -113,11 +121,12 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
     """The panels for one sample, as (title suffix, RGB uint8 array) pairs.
 
     `gt` and `prediction` are integer label maps; 0 is background and every other value is painted in
-    its own colour from the maps.
+    its own colour from the maps. `gt` may be None -- a dataset can ship images to predict without
+    annotations to compare against -- and then the ground-truth panels simply do not appear.
     """
     plain = _to_rgb(image)
     out = []
-    for slot in LAYOUTS[layout]:
+    for slot in _slots(layout, gt is not None):
         if slot == "image":
             panel = plain.copy()
         elif slot in ("gt_mask", "prediction_mask"):
@@ -134,7 +143,7 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
                 for value, color in pred_colors.items():
                     draw(panel, prediction == value, style["pred_style"], color,
                          style["pred_width"], style["alpha"])
-            if slot in ("both", "both_mask", "gt"):
+            if gt is not None and slot in ("both", "both_mask", "gt"):
                 for value, color in gt_colors.items():
                     draw(panel, gt == value, style["gt_style"], color,
                          style["gt_width"], style["alpha"])
@@ -180,20 +189,25 @@ def _find(directory, stem, channel=0):
     raise FileNotFoundError(f"No file for {stem} in {directory}")
 
 
-def as_color_plane(image, color):
-    """A single-plane image put into one colour of an otherwise empty picture.
+def read_channel_planes(images, case_id, channel_planes):
+    """Compose separate greyscale files into the RGB planes used by the model.
 
-    A dataset that ships its stains as separate greyscale files would otherwise be drawn grey, while a
-    dataset storing the same signal as one channel of an RGB file is drawn in its colour -- the two look
-    like different modalities in the figures although the model was handed the same thing. Built in BGR
-    order, which is what `_to_rgb` expects of anything with three channels.
+    The returned array is BGR because the drawing path calls ``_to_rgb`` exactly once for every
+    source image, including ordinary OpenCV images.
     """
-    image = np.asarray(image)
-    if image.ndim != 2:
-        return image
-    planes = np.zeros((*image.shape, 3), dtype=image.dtype)
-    planes[..., {"blue": 0, "green": 1, "red": 2}[color]] = image
-    return planes
+    composed = None
+    for stored, rgb_plane in sorted(channel_planes.items()):
+        plane = np.asarray(read_image(_find(images, case_id, stored)))
+        if plane.ndim == 3:
+            plane = cv2.cvtColor(plane, cv2.COLOR_BGR2GRAY)
+        if composed is None:
+            composed = np.zeros((*plane.shape, 3), dtype=plane.dtype)
+        elif plane.shape != composed.shape[:2]:
+            raise ValueError(f"stain planes have different shapes for {case_id}")
+        composed[..., 2 - int(rgb_plane)] = plane
+    if composed is None:
+        raise ValueError("channel_planes cannot be empty")
+    return composed
 
 
 def select_cases(prediction_dir, count, metrics=None, rng=None):
@@ -256,6 +270,8 @@ def _classes_in(labels, predictions, case_id):
     """The foreground values one case uses, for figures whose class set was not declared up front."""
     found = set()
     for directory in (labels, predictions):
+        if directory is None:
+            continue
         found |= set(np.unique(np.asarray(read_image(_find(directory, case_id)))).tolist())
     return sorted(value for value in found if value != 0)
 
@@ -268,11 +284,12 @@ MAX_FIGURE_INCHES = 24.0
 MAX_FIGURE_PIXELS = 2600
 
 
-def panel_aspect(images, case_id, crop, channel=0):
+def panel_aspect(images, case_id, crop, channel_planes=None):
     """Height / width of what one panel will show, read cheaply from the source image."""
     if crop:
         # `crop_window` cuts a square, so the panels are square whatever the slide looks like.
         return 1.0
+    channel = min(channel_planes) if channel_planes else 0
     path = _find(images, case_id, channel)
     if path is None:
         return 1.0
@@ -286,7 +303,7 @@ def panel_aspect(images, case_id, crop, channel=0):
 
 def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, metrics=None,
            crop=None, seed=0, style=None, title=None, classes=None, class_names=None,
-           channel=0, channel_color=None):
+           channel_planes=None):
     """Write one figure of `rows` x `cols` samples, each drawn as `layout` prescribes."""
     if layout not in LAYOUTS:
         raise ValueError(f"Unknown layout: {layout} (expected one of {sorted(LAYOUTS)})")
@@ -303,10 +320,10 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
         classes = _classes_in(labels, predictions, cases[0][0])
     gt_colors, pred_colors = mask_colors(classes, style)
 
-    per_sample = len(LAYOUTS[layout])
+    per_sample = len(_slots(layout, labels is not None))
     grid_rows = -(-len(cases) // cols)
     cell_width = 3.2
-    cell_height = cell_width * panel_aspect(images, cases[0][0], crop, channel)
+    cell_height = cell_width * panel_aspect(images, cases[0][0], crop, channel_planes)
     width = cell_width * per_sample * cols
     height = cell_height * grid_rows
     scale = min(1.0, MAX_FIGURE_INCHES / max(width, height))
@@ -321,17 +338,23 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
         ax.axis("off")
 
     for index, (case_id, dice) in enumerate(cases):
-        image = read_image(_find(images, case_id, channel))
-        if channel_color:
-            image = as_color_plane(image, channel_color)
-        label = read_image(_find(labels, case_id))
+        image = (
+            read_channel_planes(images, case_id, channel_planes)
+            if channel_planes
+            else read_image(_find(images, case_id))
+        )
+        label = None if labels is None else read_image(_find(labels, case_id))
         prediction = read_image(_find(predictions, case_id))
         if crop:
-            window = crop_window(np.asarray(label), image.shape[:2], crop, rng)
-            image, label, prediction = image[window], label[window], prediction[window]
+            # Without a ground truth the prediction is what the crop is centred on; it is the only
+            # mask there is, and a window drawn blind would usually miss the lesion entirely.
+            window = crop_window(np.asarray(label if label is not None else prediction),
+                                 image.shape[:2], crop, rng)
+            image, prediction = image[window], prediction[window]
+            label = None if label is None else label[window]
         panels = _panels(
-            np.asarray(image), np.asarray(label), np.asarray(prediction),
-            layout, style, gt_colors, pred_colors,
+            np.asarray(image), None if label is None else np.asarray(label),
+            np.asarray(prediction), layout, style, gt_colors, pred_colors,
         )
         row, column = divmod(index, cols)
         base = per_sample * column
