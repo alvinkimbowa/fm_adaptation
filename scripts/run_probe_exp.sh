@@ -8,7 +8,7 @@ report=${report:-1}
 checkpoint=${checkpoint:-final}   # final | best | last
 # Redoing a dataset that already has predictions costs a full forward pass per case for a result
 # that cannot change, so this defaults to reusing them; set overwrite=1 to force everything afresh.
-overwrite=${overwrite:-true}
+overwrite=${overwrite:-false}
 gpu_id=${gpu_id:-0}
 # The adapter decoders need mmseg's UPerHead and DINOv3's compiled deformable attention, which only
 # .venv-mm has; every probe and finetune run stays on the SAM3 environment.
