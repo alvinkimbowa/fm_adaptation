@@ -171,13 +171,29 @@ def read_image(path):
     return image
 
 
-def _find(directory, stem):
+def _find(directory, stem, channel=0):
     for suffix in IMAGE_SUFFIXES:
-        for candidate in (f"{stem}{suffix}", f"{stem}_0000{suffix}"):
+        for candidate in (f"{stem}{suffix}", f"{stem}_{channel:04d}{suffix}"):
             path = Path(directory) / candidate
             if path.exists():
                 return path
     raise FileNotFoundError(f"No file for {stem} in {directory}")
+
+
+def as_color_plane(image, color):
+    """A single-plane image put into one colour of an otherwise empty picture.
+
+    A dataset that ships its stains as separate greyscale files would otherwise be drawn grey, while a
+    dataset storing the same signal as one channel of an RGB file is drawn in its colour -- the two look
+    like different modalities in the figures although the model was handed the same thing. Built in BGR
+    order, which is what `_to_rgb` expects of anything with three channels.
+    """
+    image = np.asarray(image)
+    if image.ndim != 2:
+        return image
+    planes = np.zeros((*image.shape, 3), dtype=image.dtype)
+    planes[..., {"blue": 0, "green": 1, "red": 2}[color]] = image
+    return planes
 
 
 def select_cases(prediction_dir, count, metrics=None, rng=None):
@@ -244,8 +260,33 @@ def _classes_in(labels, predictions, case_id):
     return sorted(value for value in found if value != 0)
 
 
+# A cell is drawn at the shape of what goes in it, and the figure is then held inside this envelope.
+# Without the first, a portrait slide -- the lesion sections are nearly 1:3 -- collapses to a sliver in
+# a square cell and the figure is mostly white margin; without the second, shaping the cells correctly
+# is what makes the file enormous.
+MAX_FIGURE_INCHES = 24.0
+MAX_FIGURE_PIXELS = 2600
+
+
+def panel_aspect(images, case_id, crop, channel=0):
+    """Height / width of what one panel will show, read cheaply from the source image."""
+    if crop:
+        # `crop_window` cuts a square, so the panels are square whatever the slide looks like.
+        return 1.0
+    path = _find(images, case_id, channel)
+    if path is None:
+        return 1.0
+    # An eighth-size decode: the aspect is all that is wanted here, not the pixels.
+    probe = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+    if probe is None or not probe.shape[0] or not probe.shape[1]:
+        return 1.0
+    # Clamped because a pathological aspect would otherwise leave the other axis too small to read.
+    return float(np.clip(probe.shape[0] / probe.shape[1], 0.35, 3.0))
+
+
 def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, metrics=None,
-           crop=None, seed=0, style=None, title=None, classes=None, class_names=None):
+           crop=None, seed=0, style=None, title=None, classes=None, class_names=None,
+           channel=0, channel_color=None):
     """Write one figure of `rows` x `cols` samples, each drawn as `layout` prescribes."""
     if layout not in LAYOUTS:
         raise ValueError(f"Unknown layout: {layout} (expected one of {sorted(LAYOUTS)})")
@@ -264,14 +305,25 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
 
     per_sample = len(LAYOUTS[layout])
     grid_rows = -(-len(cases) // cols)
+    cell_width = 3.2
+    cell_height = cell_width * panel_aspect(images, cases[0][0], crop, channel)
+    width = cell_width * per_sample * cols
+    height = cell_height * grid_rows
+    scale = min(1.0, MAX_FIGURE_INCHES / max(width, height))
+    width, height = width * scale, height * scale
+    # Trade resolution for extent once a figure is large, so a tall grid stays a readable file rather
+    # than a 30-megapixel one.
+    dpi = min(140, MAX_FIGURE_PIXELS / max(width, height))
     figure, axes = plt.subplots(
-        grid_rows, per_sample * cols, figsize=(3.2 * per_sample * cols, 3.4 * grid_rows), squeeze=False
+        grid_rows, per_sample * cols, figsize=(width, height), squeeze=False
     )
     for ax in axes.ravel():
         ax.axis("off")
 
     for index, (case_id, dice) in enumerate(cases):
-        image = read_image(_find(images, case_id))
+        image = read_image(_find(images, case_id, channel))
+        if channel_color:
+            image = as_color_plane(image, channel_color)
         label = read_image(_find(labels, case_id))
         prediction = read_image(_find(predictions, case_id))
         if crop:
@@ -326,7 +378,7 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
     height = figure.get_size_inches()[1]
     figure.tight_layout(rect=(0, 0.45 / height, 1, 1 - (0.4 / height if title else 0)), h_pad=2.0)
     Path(output).parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output, dpi=140)
+    figure.savefig(output, dpi=dpi)
     plt.close(figure)
     return Path(output)
 

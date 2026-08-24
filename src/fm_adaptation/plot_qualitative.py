@@ -10,7 +10,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import load_dataset_json
+from .data import blue_channel, load_dataset_json
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .selection import matches as _matches
 
@@ -97,6 +97,10 @@ def main():
         cfg = ExperimentConfig.from_yaml(config_path)
         images, labels = _source_dirs(cfg, dataset_name, kind)
         classes, class_names = _classes(cfg, dataset_name)
+        # Draw whichever channel the model was given, and draw it the colour it was given in, so a
+        # dataset storing its stains as separate greyscale files does not come out grey beside one
+        # storing the same signal inside an RGB file.
+        channel = blue_channel(load_dataset_json(cfg.raw_data_dir / dataset_name)["channel_names"])
         path = render(
             images,
             labels,
@@ -112,6 +116,8 @@ def main():
             title=f"{dataset_name} — {fold_dir.parent.name}/{fold_dir.name} ({kind})",
             classes=classes,
             class_names=class_names,
+            channel=0 if channel is None else channel,
+            channel_color=None if channel is None else "blue",
         )
         drawn += 1
         progress.write(f"wrote {path}" if path else f"skipped {output_dir} (no metrics)")

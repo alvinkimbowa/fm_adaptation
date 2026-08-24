@@ -12,7 +12,7 @@ def load_dataset_json(dataset_dir: Path) -> dict:
         return json.load(f)
 
 
-def _blue_channel(channel_names: dict) -> int | None:
+def blue_channel(channel_names: dict) -> int | None:
     """Which stored channel to read on its own, or None to read the case the way every other one is.
 
     The czi_B lesion datasets declare a single channel `B` and store it as an RGB image whose red and
@@ -59,7 +59,7 @@ class NnUNet2DDataset(Dataset):
         self.ending = info["file_ending"]
         if self.ending not in {".png", ".tif", ".tiff"}:
             raise ValueError(f"Only 2D PNG/TIFF datasets are supported, got {self.ending}")
-        self.blue_channel = _blue_channel(info["channel_names"])
+        self.blue_channel = blue_channel(info["channel_names"])
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
 
     def __len__(self):
