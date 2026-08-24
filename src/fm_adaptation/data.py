@@ -12,6 +12,21 @@ def load_dataset_json(dataset_dir: Path) -> dict:
         return json.load(f)
 
 
+def _blue_channel(channel_names: dict) -> int | None:
+    """Which stored channel to read on its own, or None to read the case the way every other one is.
+
+    The czi_B lesion datasets declare a single channel `B` and store it as an RGB image whose red and
+    green planes are zero, so a model trained on them has only ever seen signal in blue. A dataset that
+    ships its stains as separate greyscale files instead -- GFAP alongside SMI -- has to be assembled
+    the same way, or `cv2.IMREAD_COLOR` replicates one plane across all three and the model is handed
+    something it was never trained on.
+    """
+    for index, name in channel_names.items():
+        if name.upper() == "GFAP":
+            return int(index)
+    return None
+
+
 def num_classes(dataset_dir: Path) -> int:
     labels = load_dataset_json(dataset_dir)["labels"]
     values = labels.values()
@@ -44,6 +59,7 @@ class NnUNet2DDataset(Dataset):
         self.ending = info["file_ending"]
         if self.ending not in {".png", ".tif", ".tiff"}:
             raise ValueError(f"Only 2D PNG/TIFF datasets are supported, got {self.ending}")
+        self.blue_channel = _blue_channel(info["channel_names"])
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
 
     def __len__(self):
@@ -51,15 +67,25 @@ class NnUNet2DDataset(Dataset):
 
     def __getitem__(self, index):
         case_id = self.ids[index]
-        image_path = self.dataset_dir / f"images{self.split}" / f"{case_id}_0000{self.ending}"
+        channel = 0 if self.blue_channel is None else self.blue_channel
+        image_path = self.dataset_dir / f"images{self.split}" / f"{case_id}_{channel:04d}{self.ending}"
         label_path = self.dataset_dir / f"labels{self.split}" / f"{case_id}{self.ending}"
-        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if self.blue_channel is None:
+            image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        else:
+            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
         mask = cv2.imread(str(label_path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(image_path)
         if mask is None:
             raise FileNotFoundError(label_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        if self.blue_channel is None:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            # Blue last, matching the RGB order the conversion above produces.
+            planes = np.zeros((*image.shape, 3), dtype=image.dtype)
+            planes[..., 2] = image
+            image = planes
         image_t, mask_t, geometry = self.preprocess(image, mask)
         return image_t, mask_t, {"case_id": case_id, **geometry}
 
