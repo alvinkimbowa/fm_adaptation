@@ -56,6 +56,9 @@ class ExperimentConfig:
     seed: int
     device: str
     patching: "PatchConfig | None"
+    channel_dropout: tuple[str, ...]
+    channel_dropout_p: float
+    balance_sources: bool
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -65,6 +68,9 @@ class ExperimentConfig:
         model = cfg["model"]
         training = cfg["training"]
         patching = cfg.get("patching") or {}
+        channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
+        if not 0.0 <= channel_dropout_p <= 1.0:
+            raise ValueError("data.channel_dropout_p must be between 0 and 1")
         return cls(
             raw_data_dir=Path(data["raw_data_dir"]),
             results_dir=Path(data.get("results_dir", "models")),
@@ -119,6 +125,9 @@ class ExperimentConfig:
             weight_decay=float(training.get("weight_decay", 0.0)),
             seed=int(training.get("seed", 0)),
             device=str(training.get("device", "cuda")),
+            channel_dropout=tuple(str(x).upper() for x in data.get("channel_dropout", [])),
+            channel_dropout_p=channel_dropout_p,
+            balance_sources=bool(data.get("balance_sources", False)),
             patching=(
                 PatchConfig(
                     patch_size=int(patching.get("patch_size", 1008)),

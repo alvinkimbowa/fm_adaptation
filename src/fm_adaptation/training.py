@@ -6,11 +6,18 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import CachedFeatureDataset, NnUNet2DDataset, collate_cases, num_classes
+from .data import (
+    CachedFeatureDataset,
+    NnUNet2DDataset,
+    collate_cases,
+    load_dataset_json,
+    num_classes,
+    stain_planes,
+)
 from .losses import DiceCrossEntropyLoss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader as _patch_loader
@@ -18,8 +25,36 @@ from .patching import patch_loader as _patch_loader
 
 def _raw_dataset(cfg, preprocess, subset):
     return NnUNet2DDataset(
-        cfg.raw_data_dir, cfg.train_dataset, "Tr", cfg.fold, subset, preprocess
+        cfg.raw_data_dir,
+        cfg.train_dataset,
+        "Tr",
+        cfg.fold,
+        subset,
+        preprocess,
+        channel_dropout=cfg.channel_dropout,
+        channel_dropout_p=cfg.channel_dropout_p,
     )
+
+
+def _balanced_sampler(case_ids):
+    sources = []
+    for case_id in case_ids:
+        if "__" not in case_id:
+            raise ValueError(f"cannot balance source for case without '__': {case_id}")
+        sources.append(case_id.split("__", 1)[0])
+    counts = {source: sources.count(source) for source in set(sources)}
+    weights = torch.tensor([1.0 / counts[source] for source in sources], dtype=torch.double)
+    return WeightedRandomSampler(weights, num_samples=len(case_ids), replacement=True)
+
+
+def _validate_data_mode(cfg, encoder_trains=None):
+    declared_stains = stain_planes(
+        load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"]
+    )
+    if cfg.patching is not None and declared_stains is not None and len(declared_stains) > 1:
+        raise ValueError("patchwise loading is not supported for multi-stain datasets")
+    if encoder_trains is False and cfg.channel_dropout:
+        raise ValueError("channel_dropout requires an uncached, trainable encoder")
 
 
 def _cache_features(cfg, encoder, dataset, device):
@@ -54,10 +89,12 @@ def _cache_features(cfg, encoder, dataset, device):
 def _image_loader(cfg, preprocess, subset, shuffle=False):
     """Whole images straight to the model, for runs whose encoder trains and so cannot be cached."""
     dataset = _raw_dataset(cfg, preprocess, subset)
+    sampler = _balanced_sampler(dataset.ids) if shuffle and cfg.balance_sources else None
     return DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=shuffle,
+        shuffle=shuffle and sampler is None,
+        sampler=sampler,
         num_workers=cfg.num_workers,
         collate_fn=collate_cases,
         pin_memory=True,
@@ -68,10 +105,12 @@ def _image_loader(cfg, preprocess, subset, shuffle=False):
 
 def _loader(cfg, raw_dataset, shuffle):
     dataset = CachedFeatureDataset(cfg.feature_cache_dir, raw_dataset.ids)
+    sampler = _balanced_sampler(raw_dataset.ids) if shuffle and cfg.balance_sources else None
     return DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=shuffle,
+        shuffle=shuffle and sampler is None,
+        sampler=sampler,
         num_workers=cfg.num_workers,
         collate_fn=collate_cases,
         pin_memory=True,
@@ -262,6 +301,8 @@ def main():
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
 
+    _validate_data_mode(cfg)
+
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
@@ -282,6 +323,7 @@ def main():
     # An encoder with parameters of its own -- the adapter -- produces different features every epoch, so
     # like the patchwise case there is nothing stable to cache.
     encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
+    _validate_data_mode(cfg, encoder_trains)
     if cfg.patching is not None or encoder_trains:
         # Nothing stable to cache -- patches are cut fresh every epoch, and a training adapter changes
         # the features it produces -- so the whole model is what gets stepped through.

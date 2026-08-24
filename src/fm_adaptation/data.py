@@ -7,24 +7,37 @@ import torch
 from torch.utils.data import Dataset
 
 
+STAIN_PLANES = {"SMI": 0, "GFAP": 2}
+
+
 def load_dataset_json(dataset_dir: Path) -> dict:
     with open(dataset_dir / "dataset.json") as f:
         return json.load(f)
 
 
-def blue_channel(channel_names: dict) -> int | None:
-    """Which stored channel to read on its own, or None to read the case the way every other one is.
+def stain_planes(channel_names: dict) -> dict[str, tuple[int, int]] | None:
+    """Map known stains to ``(stored channel, RGB plane)``.
 
-    The czi_B lesion datasets declare a single channel `B` and store it as an RGB image whose red and
-    green planes are zero, so a model trained on them has only ever seen signal in blue. A dataset that
-    ships its stains as separate greyscale files instead -- GFAP alongside SMI -- has to be assembled
-    the same way, or `cv2.IMREAD_COLOR` replicates one plane across all three and the model is handed
-    something it was never trained on.
+    Returning ``None`` for any ordinary/unknown channel declaration is deliberate: those datasets
+    must keep using their existing colour-image path rather than having an RGB plane interpreted as
+    a standalone greyscale file.
     """
-    for index, name in channel_names.items():
-        if name.upper() == "GFAP":
-            return int(index)
-    return None
+    if not channel_names:
+        return None
+    names = {str(name).upper(): int(index) for index, name in channel_names.items()}
+    if any(name not in STAIN_PLANES for name in names):
+        return None
+    return {name: (stored, STAIN_PLANES[name]) for name, stored in names.items()}
+
+
+def rgb_planes(channel_names: dict) -> dict[int, int] | None:
+    """`stain_planes` keyed the way a reader wants it: {stored channel: RGB plane}, or None.
+
+    The figures need to know which file goes into which plane, not which stain is which; keeping the
+    conversion here means the loader and the figures cannot drift into two different answers.
+    """
+    planes = stain_planes(channel_names)
+    return None if planes is None else {stored: rgb for stored, rgb in planes.values()}
 
 
 def num_classes(dataset_dir: Path) -> int:
@@ -51,41 +64,95 @@ def _case_ids(dataset_dir: Path, split: str, fold: str, subset: str) -> list[str
 
 
 class NnUNet2DDataset(Dataset):
-    def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess):
+    def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess,
+                 channel_dropout=(), channel_dropout_p=0.5):
         self.dataset_dir = Path(raw_dir) / dataset_name
         self.split = split
+        self.subset = subset
         self.preprocess = preprocess
         info = load_dataset_json(self.dataset_dir)
         self.ending = info["file_ending"]
         if self.ending not in {".png", ".tif", ".tiff"}:
             raise ValueError(f"Only 2D PNG/TIFF datasets are supported, got {self.ending}")
-        self.blue_channel = blue_channel(info["channel_names"])
+        self.channel_names = info["channel_names"]
+        self.stain_planes = stain_planes(self.channel_names)
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
+        self.channel_dropout = tuple(str(name).upper() for name in channel_dropout)
+        self.channel_dropout_p = float(channel_dropout_p)
+        if not 0.0 <= self.channel_dropout_p <= 1.0:
+            raise ValueError("channel_dropout_p must be between 0 and 1")
+        if self.channel_dropout:
+            declared = set(self.stain_planes or {})
+            unknown = sorted(set(self.channel_dropout) - declared)
+            if unknown:
+                raise ValueError(
+                    f"channel_dropout contains stains not declared by {dataset_name}: {unknown}"
+                )
+        self.present_stains = {}
+        if self.channel_dropout and subset == "train":
+            image_dir = self.dataset_dir / f"images{self.split}"
+            for case_id in self.ids:
+                present = set()
+                for stain, (stored, _) in self.stain_planes.items():
+                    path = image_dir / f"{case_id}_{stored:04d}{self.ending}"
+                    probe = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+                    if probe is None:
+                        raise FileNotFoundError(path)
+                    if probe.any():
+                        present.add(stain)
+                self.present_stains[case_id] = present
 
     def __len__(self):
         return len(self.ids)
 
     def __getitem__(self, index):
         case_id = self.ids[index]
-        channel = 0 if self.blue_channel is None else self.blue_channel
-        image_path = self.dataset_dir / f"images{self.split}" / f"{case_id}_{channel:04d}{self.ending}"
+        image_dir = self.dataset_dir / f"images{self.split}"
         label_path = self.dataset_dir / f"labels{self.split}" / f"{case_id}{self.ending}"
-        if self.blue_channel is None:
+        if self.stain_planes is None:
+            image_path = image_dir / f"{case_id}_0000{self.ending}"
             image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         else:
-            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+            present = self.present_stains.get(case_id)
+            dropped = None
+            candidates = [] if present is None else [
+                stain for stain in self.channel_dropout if stain in present
+            ]
+            if (
+                present is not None
+                and len(present) >= 2
+                and candidates
+                and torch.rand(()) < self.channel_dropout_p
+            ):
+                dropped = candidates[int(torch.randint(len(candidates), ()).item())]
+            image = None
+            for stain, (stored, rgb_plane) in self.stain_planes.items():
+                if stain == dropped or (present is not None and stain not in present):
+                    continue
+                image_path = image_dir / f"{case_id}_{stored:04d}{self.ending}"
+                plane = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if plane is None:
+                    raise FileNotFoundError(image_path)
+                if image is None:
+                    image = np.zeros((*plane.shape, 3), dtype=plane.dtype)
+                elif plane.shape != image.shape[:2]:
+                    raise ValueError(f"stain planes have different shapes for {case_id}")
+                image[..., rgb_plane] = plane
+            if image is None:
+                # All declared stains were known absent. Use one file only to recover shape/dtype.
+                stored = next(iter(self.stain_planes.values()))[0]
+                image_path = image_dir / f"{case_id}_{stored:04d}{self.ending}"
+                plane = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if plane is None:
+                    raise FileNotFoundError(image_path)
+                image = np.zeros((*plane.shape, 3), dtype=plane.dtype)
         mask = cv2.imread(str(label_path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(image_path)
         if mask is None:
             raise FileNotFoundError(label_path)
-        if self.blue_channel is None:
+        if self.stain_planes is None:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        else:
-            # Blue last, matching the RGB order the conversion above produces.
-            planes = np.zeros((*image.shape, 3), dtype=image.dtype)
-            planes[..., 2] = image
-            image = planes
         image_t, mask_t, geometry = self.preprocess(image, mask)
         return image_t, mask_t, {"case_id": case_id, **geometry}
 
