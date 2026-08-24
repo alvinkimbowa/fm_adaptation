@@ -4,6 +4,8 @@ data:
   train_dataset: Dataset208_combined_MYKE_smi_gfap
   test_datasets:
     - Dataset208_combined_MYKE_smi_gfap
+    - Dataset210_interrater_MY_smi_gfap
+    - Dataset211_paul_widefield_smi_gfap
     - Dataset212_katie_dorsal_column_smi_gfap
   test_split: Tr
   fold: 0
