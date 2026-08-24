@@ -296,6 +296,16 @@ def _dataset_family(dataset):
     return FAMILY_ALIASES.get(family, family)
 
 
+# A dataset can be a column in more than one table. Dataset207 is the lesion family's transfer target
+# and, at the same time, the Katie slice of the combined sets -- the combined rows are scored on
+# whatever part of it they held out, which for a Dataset208 run is the nine cases in its own imagesTs.
+EXTRA_COLUMN_FAMILIES = {"Dataset207_lesion_katie_contusion_smi_gfap": ("combined",)}
+
+
+def _column_families(dataset):
+    return {_dataset_family(dataset), *EXTRA_COLUMN_FAMILIES.get(dataset, ())}
+
+
 PARAMETER_COUNTS = {}
 
 
@@ -756,7 +766,7 @@ def main():
                 tested_on
                 for results in family_records.values()
                 for tested_on in results
-                if _dataset_family(tested_on) == family
+                if family in _column_families(tested_on)
             }
         )
         swept_bases = {

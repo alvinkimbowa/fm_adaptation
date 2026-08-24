@@ -7,6 +7,7 @@ data:
     - Dataset210_interrater_MY_smi_gfap
     - Dataset211_paul_widefield_smi_gfap
     - Dataset212_katie_dorsal_column_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
   test_split: Tr
   fold: 0
 

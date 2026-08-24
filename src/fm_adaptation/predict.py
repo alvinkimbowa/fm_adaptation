@@ -11,6 +11,7 @@ from tqdm import tqdm
 from .config import ExperimentConfig
 from .data import (
     NnUNet2DDataset,
+    _case_ids,
     active_planes,
     collate_cases,
     load_dataset_json,
@@ -105,6 +106,22 @@ def _jobs(cfg, datasets):
     return jobs
 
 
+def _seen_in_training(cfg):
+    """Case ids this run's fold was fitted on, so an evaluation set can exclude them.
+
+    Case ids are unique across these datasets -- every one carries its source as a prefix -- so an id
+    appearing in two datasets is the same image, not a coincidence of numbering. Dataset207 is wholly
+    contained in Dataset208, and without this a model trained on the combined set would be scored on
+    the 52 Katie slides it had already fitted. Only the training split counts: the fold's validation
+    cases are reported as the validation column, which is what that column is for.
+    """
+    dataset_dir = cfg.raw_data_dir / cfg.train_dataset
+    if not (dataset_dir / "splits_final.json").exists():
+        return set()
+    subsets = ("train",) if cfg.fold == "all" else ("train", "val")
+    return {case for subset in subsets for case in _case_ids(dataset_dir, "Tr", cfg.fold, subset)}
+
+
 def _has_cases(dataset_dir, split):
     image_dir = dataset_dir / f"images{split}"
     return image_dir.is_dir() and any(image_dir.iterdir())
@@ -163,6 +180,7 @@ def main():
     # training set is read down to the ones it shares -- a czi_B model sees GFAP in blue and never
     # meets SMI, which it has no weights for.
     keep_planes = active_planes(load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"])
+    seen = _seen_in_training(cfg)
 
     for dataset_name, split, subset, kind, column_name in _jobs(cfg, datasets):
         if cfg.patching is not None:
@@ -183,6 +201,11 @@ def main():
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
             keep_planes=keep_planes, require_labels=scored,
         )
+        if dataset_name != cfg.train_dataset:
+            dataset.ids = [c for c in dataset.ids if c not in seen]
+            if not dataset.ids:
+                print(f"Skipping {column_name}: every case was seen in training")
+                continue
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
         # Without --overwrite, a case that already has a prediction is scored from that saved file and
