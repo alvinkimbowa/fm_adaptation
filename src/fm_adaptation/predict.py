@@ -1,4 +1,5 @@
 import argparse
+import json
 from contextlib import nullcontext
 
 import cv2
@@ -8,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import NnUNet2DDataset, collate_cases, num_classes
+from .data import NnUNet2DDataset, collate_cases, load_dataset_json, num_classes, stain_planes
 from .metrics import CaseMetrics, compute_metrics, write_metrics
 from .models import build_model, restore_prediction
 from .patching import build_index, predict_case
@@ -61,7 +62,7 @@ def _scored_from_disk(prediction_dir, dataset_dir, split, ending, case_ids, clas
 
 
 def _jobs(cfg, datasets):
-    """Each evaluation to run, as (dataset, split, subset, validation|test).
+    """Each evaluation as (source dataset, split, subset, validation|test, output column).
 
     The training dataset contributes its fold's validation cases and, when it ships one, its held-out
     `imagesTs`; every other dataset is evaluated whole on `test_split`.
@@ -69,14 +70,28 @@ def _jobs(cfg, datasets):
     jobs = []
     for dataset_name in datasets:
         if dataset_name != cfg.train_dataset:
-            jobs.append((dataset_name, cfg.test_split, "eval", "test"))
+            jobs.append((dataset_name, cfg.test_split, "eval", "test", dataset_name))
             continue
         if cfg.fold != "all":
-            jobs.append((dataset_name, "Tr", "val", "validation"))
-        held_out = cfg.raw_data_dir / dataset_name / "imagesTs"
-        if held_out.is_dir() and any(held_out.iterdir()):
-            jobs.append((dataset_name, "Ts", "eval", "test"))
+            jobs.append((dataset_name, "Tr", "val", "validation", dataset_name))
+        dataset_dir = cfg.raw_data_dir / dataset_name
+        ending = load_dataset_json(dataset_dir)["file_ending"]
+        for held_out in sorted(dataset_dir.glob("imagesTs*")):
+            split = held_out.name[len("images"):]
+            labels = dataset_dir / f"labels{split}"
+            if not labels.is_dir():
+                raise FileNotFoundError(f"held-out images have no matching labels: {held_out}")
+            if not any(held_out.glob(f"*_0000{ending}")):
+                continue
+            column = dataset_name if split == "Ts" else f"{dataset_name}{split[2:]}"
+            jobs.append((dataset_name, split, "eval", "test", column))
     return jobs
+
+
+def _write_source(output_dir, dataset_name, split):
+    with open(output_dir / "source.json", "w") as f:
+        json.dump({"dataset": dataset_name, "split": split}, f, indent=2)
+        f.write("\n")
 
 
 def main():
@@ -117,13 +132,18 @@ def main():
     datasets = cfg.test_datasets or (cfg.train_dataset,)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
 
-    for dataset_name, split, subset, kind in _jobs(cfg, datasets):
-        output_dir = cfg.run_dir / kind / dataset_name
+    for dataset_name, split, subset, kind, column_name in _jobs(cfg, datasets):
+        if cfg.patching is not None:
+            declared = stain_planes(load_dataset_json(cfg.raw_data_dir / dataset_name)["channel_names"])
+            if declared is not None and len(declared) > 1:
+                raise ValueError("patchwise prediction is not supported for multi-stain datasets")
+        output_dir = cfg.run_dir / kind / column_name
         if cfg.patching is not None:
             rows = _predict_patchwise(
                 cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, args.overwrite
             )
             write_metrics(rows, output_dir / "metrics.csv")
+            _write_source(output_dir, dataset_name, split)
             print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
             continue
         dataset = NnUNet2DDataset(
@@ -162,6 +182,7 @@ def main():
                     dice, masd = compute_metrics(restored, target, classes)
                     rows.append(CaseMetrics(meta["case_id"], dice, masd))
         write_metrics(rows, output_dir / "metrics.csv")
+        _write_source(output_dir, dataset_name, split)
         print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
 
 
