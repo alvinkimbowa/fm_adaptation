@@ -7,7 +7,7 @@ data:
   test_datasets:
     - Dataset204_lesion_czi_B
     - Dataset206_lesion_120_czi_B
-    - Dataset207_lesion_katie_contusion_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
   test_split: Tr
   fold: 0
 

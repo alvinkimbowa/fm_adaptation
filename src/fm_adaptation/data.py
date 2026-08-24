@@ -8,6 +8,9 @@ from torch.utils.data import Dataset
 
 
 STAIN_PLANES = {"SMI": 0, "GFAP": 2}
+# The older datasets name their channel by the plane it occupies rather than by the stain: the czi_B
+# lesion sets declare `B` and store signal in blue alone, the neurite sets declare `R`.
+PLANE_LETTERS = {"R": 0, "G": 1, "B": 2}
 
 
 def load_dataset_json(dataset_dir: Path) -> dict:
@@ -28,6 +31,28 @@ def stain_planes(channel_names: dict) -> dict[str, tuple[int, int]] | None:
     if any(name not in STAIN_PLANES for name in names):
         return None
     return {name: (stored, STAIN_PLANES[name]) for name, stored in names.items()}
+
+
+def active_planes(channel_names: dict) -> frozenset[int] | None:
+    """RGB planes a dataset's images can carry signal in, or None when that cannot be known.
+
+    This is what a model was trained to look at. A run trained on `czi_B` has only ever seen blue, so
+    handing it a two-stain image would put signal in a plane it has never seen; `predict.py` uses this
+    to keep such a model on the stains it knows. `None` -- an ultrasound set, say, whose single grey
+    channel is replicated across all three -- means no restriction rather than no planes.
+    """
+    if not channel_names:
+        return None
+    planes = set()
+    for name in channel_names.values():
+        name = str(name).upper()
+        if name in STAIN_PLANES:
+            planes.add(STAIN_PLANES[name])
+        elif name in PLANE_LETTERS:
+            planes.add(PLANE_LETTERS[name])
+        else:
+            return None
+    return frozenset(planes)
 
 
 def rgb_planes(channel_names: dict) -> dict[int, int] | None:
@@ -65,7 +90,7 @@ def _case_ids(dataset_dir: Path, split: str, fold: str, subset: str) -> list[str
 
 class NnUNet2DDataset(Dataset):
     def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess,
-                 channel_dropout=(), channel_dropout_p=0.5):
+                 channel_dropout=(), channel_dropout_p=0.5, keep_planes=None):
         self.dataset_dir = Path(raw_dir) / dataset_name
         self.split = split
         self.subset = subset
@@ -76,6 +101,18 @@ class NnUNet2DDataset(Dataset):
             raise ValueError(f"Only 2D PNG/TIFF datasets are supported, got {self.ending}")
         self.channel_names = info["channel_names"]
         self.stain_planes = stain_planes(self.channel_names)
+        # Which RGB planes this dataset may fill. `None` fills every plane the dataset declares; a set
+        # keeps a model to the planes it was trained on, so a czi_B model reads GFAP and not SMI.
+        self.keep_planes = None if keep_planes is None else frozenset(keep_planes)
+        if self.stain_planes and self.keep_planes is not None:
+            self.stain_planes = {
+                stain: mapping for stain, mapping in self.stain_planes.items()
+                if mapping[1] in self.keep_planes
+            }
+            if not self.stain_planes:
+                raise ValueError(
+                    f"{dataset_name} has no stain in the planes this model was trained on"
+                )
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
         self.channel_dropout = tuple(str(name).upper() for name in channel_dropout)
         self.channel_dropout_p = float(channel_dropout_p)

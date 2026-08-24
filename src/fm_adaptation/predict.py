@@ -9,7 +9,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import NnUNet2DDataset, collate_cases, load_dataset_json, num_classes, stain_planes
+from .data import (
+    NnUNet2DDataset,
+    active_planes,
+    collate_cases,
+    load_dataset_json,
+    num_classes,
+    stain_planes,
+)
 from .metrics import CaseMetrics, compute_metrics, write_metrics
 from .models import build_model, restore_prediction
 from .patching import build_index, predict_case
@@ -131,6 +138,10 @@ def main():
     model.to(device).eval()
     datasets = cfg.test_datasets or (cfg.train_dataset,)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
+    # The planes this model was trained to look at. An evaluation set carrying more stains than the
+    # training set is read down to the ones it shares -- a czi_B model sees GFAP in blue and never
+    # meets SMI, which it has no weights for.
+    keep_planes = active_planes(load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"])
 
     for dataset_name, split, subset, kind, column_name in _jobs(cfg, datasets):
         if cfg.patching is not None:
@@ -147,7 +158,8 @@ def main():
             print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
             continue
         dataset = NnUNet2DDataset(
-            cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess
+            cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
+            keep_planes=keep_planes,
         )
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
