@@ -95,6 +95,12 @@ def _jobs(cfg, datasets):
     return jobs
 
 
+def _has_labels(dataset_dir, split):
+    """Whether this split can be scored at all; Dataset212 ships images with no annotations."""
+    label_dir = dataset_dir / f"labels{split}"
+    return label_dir.is_dir() and any(label_dir.iterdir())
+
+
 def _write_source(output_dir, dataset_name, split):
     with open(output_dir / "source.json", "w") as f:
         json.dump({"dataset": dataset_name, "split": split}, f, indent=2)
@@ -149,6 +155,7 @@ def main():
             if declared is not None and len(declared) > 1:
                 raise ValueError("patchwise prediction is not supported for multi-stain datasets")
         output_dir = cfg.run_dir / kind / column_name
+        scored = _has_labels(cfg.raw_data_dir / dataset_name, split)
         if cfg.patching is not None:
             rows = _predict_patchwise(
                 cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, args.overwrite
@@ -159,7 +166,7 @@ def main():
             continue
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
-            keep_planes=keep_planes,
+            keep_planes=keep_planes, require_labels=scored,
         )
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
@@ -170,9 +177,10 @@ def main():
         if not args.overwrite:
             done = [c for c in dataset.ids if (prediction_dir / f"{c}.png").exists()]
             if done:
-                rows = _scored_from_disk(
-                    prediction_dir, dataset.dataset_dir, dataset.split, dataset.ending, done, classes
-                )
+                if scored:
+                    rows = _scored_from_disk(
+                        prediction_dir, dataset.dataset_dir, dataset.split, dataset.ending, done, classes
+                    )
                 dataset.ids = [c for c in dataset.ids if not (prediction_dir / f"{c}.png").exists()]
         loader = DataLoader(
             dataset,
@@ -189,12 +197,20 @@ def main():
                 predictions = logits.argmax(1).cpu()
                 for prediction, padded_mask, meta in zip(predictions, masks, metadata):
                     restored = restore_prediction(prediction, meta)
-                    target = restore_prediction(padded_mask, meta)
                     cv2.imwrite(str(prediction_dir / f"{meta['case_id']}.png"), restored)
+                    if not meta.get("has_label", True):
+                        continue
+                    target = restore_prediction(padded_mask, meta)
                     dice, masd = compute_metrics(restored, target, classes)
                     rows.append(CaseMetrics(meta["case_id"], dice, masd))
-        write_metrics(rows, output_dir / "metrics.csv")
         _write_source(output_dir, dataset_name, split)
+        if not scored:
+            # No metrics file at all: an empty one reads in the report as a column of failures rather
+            # than as a dataset there is nothing to score against.
+            count = len(list(prediction_dir.glob("*.png")))
+            print(f"Wrote {count} predictions to {output_dir} (no labels, not scored)")
+            continue
+        write_metrics(rows, output_dir / "metrics.csv")
         print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
 
 

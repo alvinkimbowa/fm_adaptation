@@ -90,7 +90,8 @@ def _case_ids(dataset_dir: Path, split: str, fold: str, subset: str) -> list[str
 
 class NnUNet2DDataset(Dataset):
     def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess,
-                 channel_dropout=(), channel_dropout_p=0.5, keep_planes=None):
+                 channel_dropout=(), channel_dropout_p=0.5, keep_planes=None,
+                 require_labels=True):
         self.dataset_dir = Path(raw_dir) / dataset_name
         self.split = split
         self.subset = subset
@@ -113,6 +114,8 @@ class NnUNet2DDataset(Dataset):
                 raise ValueError(
                     f"{dataset_name} has no stain in the planes this model was trained on"
                 )
+        # A dataset that ships images without labels can still be predicted; it just cannot be scored.
+        self.require_labels = require_labels
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
         self.channel_dropout = tuple(str(name).upper() for name in channel_dropout)
         self.channel_dropout_p = float(channel_dropout_p)
@@ -186,12 +189,16 @@ class NnUNet2DDataset(Dataset):
         mask = cv2.imread(str(label_path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(image_path)
-        if mask is None:
-            raise FileNotFoundError(label_path)
+        has_label = mask is not None
+        if not has_label:
+            if self.require_labels:
+                raise FileNotFoundError(label_path)
+            # Geometry is derived from the pair, so the placeholder has to be the image's own size.
+            mask = np.zeros(np.asarray(image).shape[:2], dtype=np.uint8)
         if self.stain_planes is None:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image_t, mask_t, geometry = self.preprocess(image, mask)
-        return image_t, mask_t, {"case_id": case_id, **geometry}
+        return image_t, mask_t, {"case_id": case_id, "has_label": has_label, **geometry}
 
 
 class CachedFeatureDataset(Dataset):
