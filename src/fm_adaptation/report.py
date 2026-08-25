@@ -12,7 +12,7 @@ import yaml
 import cv2
 
 from .data import load_dataset_json, num_classes, stain_planes
-from .metrics import compute_metrics
+from .metrics import compute_metrics, read_case_metrics
 from .selection import matches
 
 
@@ -28,8 +28,7 @@ def _read_run(run_dir: Path):
 
 
 def _read_metrics(path: Path):
-    with open(path, newline="") as f:
-        rows = list(csv.DictReader(f))
+    rows = read_case_metrics(path)
     return {
         "dice": np.array([float(row["dice"]) for row in rows]),
         "masd": np.array([float(row["masd"]) for row in rows]),
@@ -288,7 +287,13 @@ def _shorten_name(name, limit=46):
 # sets without anyone maintaining a list. The evaluation sets carved out of the combined dataset break
 # that -- `interrater`, `paul` and `katie` are three families of one column each, and the row that
 # tests on them could show none of them -- so they are named back onto the family they belong to.
-FAMILY_ALIASES = {"interrater": "combined", "paul": "combined", "katie": "combined"}
+FAMILY_ALIASES = {
+    "interrater": "combined",
+    "paul": "combined",
+    "katie": "combined",
+    "mohammad": "combined",
+    "yvonne": "combined",
+}
 
 
 def _dataset_family(dataset):

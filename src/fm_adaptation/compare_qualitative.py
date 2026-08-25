@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 from .config import ExperimentConfig
 from .data import active_planes, load_dataset_json, rgb_planes
 from .report import ADAPTATIONS, _config_label, _dataset_label, _model_rank, _split_adaptation
+from .metrics import read_case_metrics
 from .qualitative import (
     MAX_FIGURE_INCHES,
     MAX_FIGURE_PIXELS,
@@ -122,15 +123,13 @@ def _common_cases(runs, count, reference, rng):
 
 
 def _case_dice(metrics_path, case_id):
-    import csv
-
     if not Path(metrics_path).exists():
         return None
-    with open(metrics_path, newline="") as f:
-        for row in csv.DictReader(f):
-            if row["case_id"] == case_id and row.get("dice"):
-                value = float(row["dice"])
-                return None if np.isnan(value) else value
+    for row in read_case_metrics(Path(metrics_path)):
+        # A Dice of 0.0 is a real score, so test for presence rather than truthiness.
+        if row["case_id"] == case_id and row.get("dice") is not None:
+            value = float(row["dice"])
+            return None if np.isnan(value) else value
     return None
 
 

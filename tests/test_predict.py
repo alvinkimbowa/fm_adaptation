@@ -37,6 +37,30 @@ class JobTests(unittest.TestCase):
                 f"{data.name}_interrater",
             ])
 
+        def test_all_splits_of_an_evaluation_set_share_one_column(self):
+            """`test_split: all` scores every case of a set the model never trained on."""
+            train = DatasetFixture(self.root, "Dataset213_trained", {"0": "SMI", "1": "GFAP"})
+            train.add("Katie__one", planes={0: 1, 1: 2})
+            train.split(["Katie__one"])
+            other = DatasetFixture(self.root, "Dataset215_evaluated", {"0": "SMI", "1": "GFAP"})
+            other.add("Yvonne__train", split="Tr", planes={0: 1, 1: 2})
+            other.add("Yvonne__held", split="Ts", planes={0: 1, 1: 2})
+
+            cfg = SimpleNamespace(
+                raw_data_dir=self.root, train_dataset=train.name, test_split="all", fold="0",
+            )
+            jobs = [job for job in _jobs(cfg, [other.name]) if job[0] == other.name]
+            self.assertEqual(sorted(job[1] for job in jobs), ["Tr", "Ts"])
+            self.assertEqual({job[4] for job in jobs}, {other.name},
+                             "both splits must land in one column")
+
+            # The default is unchanged, so no column that already exists moves.
+            cfg = SimpleNamespace(
+                raw_data_dir=self.root, train_dataset=train.name, test_split="Tr", fold="0",
+            )
+            jobs = [job for job in _jobs(cfg, [other.name]) if job[0] == other.name]
+            self.assertEqual([job[1] for job in jobs], ["Tr"])
+
         def test_training_cases_are_excluded_from_other_datasets(self):
             """A run is scored on an evaluation set only over the cases it did not fit.
 

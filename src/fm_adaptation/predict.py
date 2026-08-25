@@ -3,7 +3,6 @@ import json
 from contextlib import nullcontext
 
 import cv2
-import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -18,7 +17,6 @@ from .data import (
     num_classes,
     stain_planes,
 )
-from .metrics import CaseMetrics, compute_metrics, write_metrics
 from .models import build_model, restore_prediction
 from .patching import build_index, predict_case
 
@@ -36,37 +34,15 @@ def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device,
     )
     prediction_dir = output_dir / "predictions"
     prediction_dir.mkdir(parents=True, exist_ok=True)
-    rows = []
     for case in tqdm(cases, desc=f"{output_dir.name} {dataset_name}"):
         output_path = prediction_dir / f"{case.case_id}.png"
         if not overwrite and output_path.exists():
-            prediction = cv2.imread(str(output_path), cv2.IMREAD_GRAYSCALE)
-        else:
-            prediction = predict_case(
-                model, case, cfg.patching, classes, device, amp, cfg.batch_size, model.encoder.preprocess
-            )
-            cv2.imwrite(str(output_path), prediction)
-        dice, masd = compute_metrics(prediction, np.asarray(case.label), classes)
-        rows.append(CaseMetrics(case.case_id, dice, masd))
-    return rows
-
-
-def _scored_from_disk(prediction_dir, dataset_dir, split, ending, case_ids, classes):
-    """Metrics for cases already predicted, read back rather than recomputed.
-
-    A saved prediction is written at the case's native resolution, which is what the label on disk is
-    too, so scoring it needs neither the model nor the preprocessing -- and skipping both is the point:
-    a forward pass over a 30-megapixel lesion slide costs seconds, reading two PNGs costs milliseconds.
-    """
-    rows = []
-    for case_id in case_ids:
-        prediction = cv2.imread(str(prediction_dir / f"{case_id}.png"), cv2.IMREAD_GRAYSCALE)
-        target = cv2.imread(str(dataset_dir / f"labels{split}" / f"{case_id}{ending}"), cv2.IMREAD_GRAYSCALE)
-        if prediction is None or target is None:
-            raise FileNotFoundError(f"cannot score {case_id} from disk")
-        dice, masd = compute_metrics(prediction, target, classes)
-        rows.append(CaseMetrics(case_id, dice, masd))
-    return rows
+            continue
+        prediction = predict_case(
+            model, case, cfg.patching, classes, device, amp, cfg.batch_size, model.encoder.preprocess
+        )
+        cv2.imwrite(str(output_path), prediction)
+    return len(cases)
 
 
 def _jobs(cfg, datasets):
@@ -74,6 +50,12 @@ def _jobs(cfg, datasets):
 
     The training dataset contributes its fold's validation cases and, when it ships one, its held-out
     `imagesTs`; every other dataset is evaluated whole on `test_split`.
+
+    `test_split: all` evaluates every split an evaluation set has, under one column name. Some sets
+    ship both `imagesTr` and `imagesTs`, and the boundary between them is a fact about how that
+    dataset would be trained on, not about a model that never saw it -- scoring only one silently
+    drops the rest. It is opt-in rather than the rule because making it unconditional would move
+    columns that already exist.
     """
     jobs = []
     for dataset_name in datasets:
@@ -82,13 +64,16 @@ def _jobs(cfg, datasets):
             # cases as `imagesTs` while the older ones keep everything in `imagesTr`. Honour the
             # configured split where it exists, so no existing result moves, and fall back to
             # whichever split the dataset actually has.
-            split = cfg.test_split
-            if not _has_cases(cfg.raw_data_dir / dataset_name, split):
-                split = next(
-                    (s for s in ("Ts", "Tr") if _has_cases(cfg.raw_data_dir / dataset_name, s)),
-                    split,
-                )
-            jobs.append((dataset_name, split, "eval", "test", dataset_name))
+            available = [s for s in ("Ts", "Tr") if _has_cases(cfg.raw_data_dir / dataset_name, s)]
+            if cfg.test_split == "all":
+                splits = available
+            else:
+                split = cfg.test_split
+                if not _has_cases(cfg.raw_data_dir / dataset_name, split):
+                    split = next(iter(available), split)
+                splits = [split]
+            for split in splits:
+                jobs.append((dataset_name, split, "eval", "test", dataset_name))
             continue
         if cfg.fold != "all":
             jobs.append((dataset_name, "Tr", "val", "validation", dataset_name))
@@ -188,18 +173,19 @@ def main():
             if declared is not None and len(declared) > 1:
                 raise ValueError("patchwise prediction is not supported for multi-stain datasets")
         output_dir = cfg.run_dir / kind / column_name
-        scored = _has_labels(cfg.raw_data_dir / dataset_name, split)
+        # The loader still needs to know whether a label exists to return one; scoring happens later,
+        # in `fm_adaptation.compute_metrics`, against the label on disk rather than the resized copy.
+        labelled = _has_labels(cfg.raw_data_dir / dataset_name, split)
         if cfg.patching is not None:
-            rows = _predict_patchwise(
+            count = _predict_patchwise(
                 cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, args.overwrite
             )
-            write_metrics(rows, output_dir / "metrics.csv")
             _write_source(output_dir, dataset_name, split)
-            print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
+            print(f"Wrote {count} predictions to {output_dir}")
             continue
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
-            keep_planes=keep_planes, require_labels=scored,
+            keep_planes=keep_planes, require_labels=labelled,
         )
         if dataset_name != cfg.train_dataset:
             dataset.ids = [c for c in dataset.ids if c not in seen]
@@ -208,18 +194,11 @@ def main():
                 continue
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
-        # Without --overwrite, a case that already has a prediction is scored from that saved file and
-        # never goes through the model again -- the ids are dropped before the loader is built, so the
-        # image is not even decoded. `--overwrite` forces the whole dataset to be predicted afresh.
-        rows = []
+        # Without --overwrite, a case that already has a prediction keeps it and never goes through
+        # the model again -- the ids are dropped before the loader is built, so the image is not even
+        # decoded. `--overwrite` forces the whole dataset to be predicted afresh.
         if not args.overwrite:
-            done = [c for c in dataset.ids if (prediction_dir / f"{c}.png").exists()]
-            if done:
-                if scored:
-                    rows = _scored_from_disk(
-                        prediction_dir, dataset.dataset_dir, dataset.split, dataset.ending, done, classes
-                    )
-                dataset.ids = [c for c in dataset.ids if not (prediction_dir / f"{c}.png").exists()]
+            dataset.ids = [c for c in dataset.ids if not (prediction_dir / f"{c}.png").exists()]
         loader = DataLoader(
             dataset,
             batch_size=cfg.batch_size,
@@ -229,27 +208,22 @@ def main():
         )
         progress = tqdm(loader, desc=f"{kind} {dataset_name}")
         with torch.no_grad():
-            for images, masks, metadata in progress:
+            for images, _, metadata in progress:
                 with amp:
                     logits = model(images.to(device))
                 predictions = logits.argmax(1).cpu()
-                for prediction, padded_mask, meta in zip(predictions, masks, metadata):
-                    restored = restore_prediction(prediction, meta)
-                    cv2.imwrite(str(prediction_dir / f"{meta['case_id']}.png"), restored)
-                    if not meta.get("has_label", True):
-                        continue
-                    target = restore_prediction(padded_mask, meta)
-                    dice, masd = compute_metrics(restored, target, classes)
-                    rows.append(CaseMetrics(meta["case_id"], dice, masd))
+                for prediction, meta in zip(predictions, metadata):
+                    # Restored to the case's own height and width, so the file on disk is directly
+                    # comparable to the label the annotator drew -- that is what makes scoring a
+                    # separate stage possible at all.
+                    cv2.imwrite(
+                        str(prediction_dir / f"{meta['case_id']}.png"),
+                        restore_prediction(prediction, meta),
+                    )
         _write_source(output_dir, dataset_name, split)
-        if not scored:
-            # No metrics file at all: an empty one reads in the report as a column of failures rather
-            # than as a dataset there is nothing to score against.
-            count = len(list(prediction_dir.glob("*.png")))
-            print(f"Wrote {count} predictions to {output_dir} (no labels, not scored)")
-            continue
-        write_metrics(rows, output_dir / "metrics.csv")
-        print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
+        count = len(list(prediction_dir.glob("*.png")))
+        note = "" if labelled else " (no labels, nothing to score)"
+        print(f"Wrote {count} predictions to {output_dir}{note}")
 
 
 if __name__ == "__main__":

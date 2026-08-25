@@ -12,7 +12,6 @@ are independent. Nothing here is specific to a dataset or a modality.
 """
 
 import argparse
-import csv
 from pathlib import Path
 
 import cv2
@@ -23,6 +22,8 @@ matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation
+
+from .metrics import read_case_metrics
 from skimage.morphology import skeletonize
 
 STYLES = ("contour", "overlay", "centerline")
@@ -219,11 +220,11 @@ def select_cases(prediction_dir, count, metrics=None, rng=None):
     and a flat sample over all cases would over-represent whatever the bulk of the distribution is.
     """
     if metrics and Path(metrics).exists():
-        with open(metrics, newline="") as f:
-            # A case whose Dice is nan -- no foreground in either the truth or the prediction -- has no
-            # place on the ranking; nan compares false against everything and would sort arbitrarily.
-            rows = [row for row in csv.DictReader(f)
-                    if row.get("dice") and not np.isnan(float(row["dice"]))]
+        # A case whose Dice is nan -- no foreground in either the truth or the prediction -- has no
+        # place on the ranking; nan compares false against everything and would sort arbitrarily. A
+        # Dice of 0.0 is a real score and stays.
+        rows = [row for row in read_case_metrics(Path(metrics))
+                if row.get("dice") is not None and not np.isnan(row["dice"])]
         rows.sort(key=lambda row: float(row["dice"]), reverse=True)
         if rows:
             edges = np.linspace(0, len(rows), min(count, len(rows)) + 1).round().astype(int)
