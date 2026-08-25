@@ -5,12 +5,15 @@ data:
   test_datasets:
     - Dataset217_combined_MY_smi_gfap
     - Dataset207_lesion_katie_contusion_smi_gfap
-    - Dataset213_combined_KE_smi_gfap
+    - Dataset218_eric_smi_gfap
     - Dataset210_interrater_MY_smi_gfap
     - Dataset211_paul_widefield_smi_gfap
     - Dataset212_katie_dorsal_column_smi_gfap
+    - Dataset214_mohammad_smi_gfap
+    - Dataset215_yvonne_smi_gfap
   # An evaluation set's own split boundary means nothing to a model that never trained on it, so
-  # `all` scores every case of each -- Dataset213 keeps its cases in both imagesTr and imagesTs.
+  # `all` scores every case of each -- the per-annotator sets keep cases in both imagesTr and
+  # imagesTs, and only a combined set has a split boundary worth respecting.
   test_split: all
   fold: 0
   balance_sources: true

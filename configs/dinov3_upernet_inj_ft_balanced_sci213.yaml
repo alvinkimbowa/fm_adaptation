@@ -12,6 +12,7 @@ data:
     - Dataset207_lesion_katie_contusion_smi_gfap
   # Mohammad's and Yvonne's sets ship both imagesTr and imagesTs, and a split boundary inside a
   # dataset this model never trained on means nothing -- `all` scores every case of each.
+    - Dataset218_eric_smi_gfap
   test_split: all
   fold: 0
   balance_sources: true

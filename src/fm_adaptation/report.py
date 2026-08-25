@@ -4,6 +4,7 @@ import html
 import json
 import re
 from collections import Counter, defaultdict
+from functools import cache
 from pathlib import Path
 
 import numpy as np
@@ -296,6 +297,34 @@ FAMILY_ALIASES = {
 }
 
 
+# The per-annotator evaluation sets, in the order they read best. Paul is deliberately last: no model
+# trains on it and every one scores badly there, so it belongs at the edge of the table rather than in
+# among the columns being compared. A source not named here sorts after these, alphabetically.
+INDIVIDUAL_SOURCES = ("katie", "eric", "mohammad", "yvonne", "paul")
+
+
+def _individual_source(dataset):
+    """Which single annotator a dataset covers, or None if it is a combined or interrater set.
+
+    Keyed on the name rather than the family token, because the token is not consistent across these
+    -- `Dataset207_lesion_katie_contusion` reads as `lesion` while `Dataset214_mohammad` reads as the
+    annotator directly.
+    """
+    if "combined" in dataset or "interrater" in dataset:
+        return None
+    lowered = dataset.lower()
+    return next((source for source in INDIVIDUAL_SOURCES if source in lowered), None)
+
+
+@cache
+def _dataset_cases(raw_data_dir, dataset):
+    """Every case id a dataset ships, across all of its image splits."""
+    cases = set()
+    for image_dir in Path(raw_data_dir).glob(f"{dataset}/images*"):
+        cases |= {path.name.split("_0000")[0] for path in image_dir.glob("*_0000.*")}
+    return frozenset(cases)
+
+
 def _dataset_family(dataset):
     family = dataset.split("_", maxsplit=2)[1]
     return FAMILY_ALIASES.get(family, family)
@@ -475,8 +504,13 @@ def _experiment_order(item):
     )
 
 
-def _best_values(records, datasets, reducer):
-    """Maps each column of a trained-on group to its (best, second best) values."""
+def _best_values(records, datasets, reducer, raw_dirs=None, averaged=()):
+    """Maps each column of a trained-on group to its (best, second best) values.
+
+    Blanked cells are skipped and the average is taken over the same columns the table averages, so
+    the highlighting cannot mark a value the table does not show.
+    """
+    raw_dirs = raw_dirs or {}
     seen = defaultdict(list)
     rows_per_group = Counter(trained_on for _, _, trained_on, _ in records)
     for (_, _, trained_on, _), results in records.items():
@@ -485,14 +519,16 @@ def _best_values(records, datasets, reducer):
         cross = {"dice": [], "masd": []}
         for dataset in datasets:
             metrics = results.get(dataset)
-            if metrics is None:
+            if metrics is None or _is_covered_by_training(
+                raw_dirs.get(trained_on), dataset, trained_on
+            ):
                 continue
             for metric in ("dice", "masd"):
                 value = _reduce(metrics[metric], reducer)
                 if np.isnan(value):
                     continue
                 seen[(trained_on, dataset, metric)].append(value)
-                if dataset != trained_on:
+                if dataset in averaged and dataset != trained_on:
                     cross[metric].append(value)
         for metric, values in cross.items():
             if not values:
@@ -507,7 +543,10 @@ def _best_values(records, datasets, reducer):
     return ranked
 
 
-def _metric_cell(text, value, ranking, separator=False):
+def _metric_cell(text, value, ranking, separator=False, reference=False):
+    """`reference` greys the cell: shown for context, but outside the ranking and the average."""
+    if reference:
+        return f"<td class='reference{' sep' if separator else ''}'>{text}</td>"
     # `ranking` is None for groups with a single row, where there is nothing to win against.
     best, second = ranking if ranking else (None, None)
     tag = ""
@@ -526,21 +565,81 @@ def _sep(separator):
     return " class='sep'" if separator else ""
 
 
-def _render_table(records, datasets, statistic):
+# Evaluation sets that earn their own table rather than a column among the transfer results. The
+# interrater set is the only place two annotators mark the same images, so it is measured against the
+# agreement table beside it. Paul's slides are widefield rather than the confocal tiles everything
+# else is built from, so they are external in the sense that matters here -- a different imaging
+# modality, not just a different annotator -- and as a column they would dominate an average meant to
+# compare the rest.
+STANDALONE_TABLES = (("interrater", "Interrater set"), ("paul", "External (widefield)"))
+
+
+def _standalone_table(dataset):
+    """The heading this dataset gets its own table under, or None to keep it as a column."""
+    lowered = dataset.lower()
+    return next((title for key, title in STANDALONE_TABLES if key in lowered), None)
+
+
+def _order_columns(datasets, records):
+    """Training sets first, then interrater, then the per-annotator sets, then anything else.
+
+    A row's own training set and the other rows' training sets belong together on the left: reading
+    across, you see what each model was fitted to before you see where it was sent. The per-annotator
+    columns are what the cross-dataset average is taken over, so they sit together on the right.
+    """
+    trained_on = {key[2] for key in records}
+    def rank(dataset):
+        if dataset in trained_on:
+            return (0, dataset)
+        if "interrater" in dataset:
+            return (1, dataset)
+        source = _individual_source(dataset)
+        if source is not None:
+            return (2, INDIVIDUAL_SOURCES.index(source), dataset)
+        return (3, dataset)
+    return sorted(datasets, key=lambda d: (rank(d)[0], *rank(d)[1:]))
+
+
+def _is_covered_by_training(raw_data_dir, dataset, trained_on):
+    """Whether an evaluation set's annotator is already inside the training set.
+
+    Such a cell is left blank rather than filled: whatever of it the model did not fit is reported in
+    the training set's own held-out column, so repeating a subset of it here would invite comparison
+    between a number over cases the model was fitted around and one over a whole unseen annotator.
+    """
+    if raw_data_dir is None or dataset == trained_on:
+        return False
+    return bool(_dataset_cases(raw_data_dir, dataset) & _dataset_cases(raw_data_dir, trained_on))
+
+
+def _render_table(records, datasets, statistic, raw_dirs=None):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
-    best = _best_values(records, datasets, reducer)
-    # Averaging one external dataset just repeats its column, so only show it when there are more.
+    raw_dirs = raw_dirs or {}
+    datasets = _order_columns(datasets, records)
+    # The average is over the per-annotator sets only -- the combined training sets overlap each other
+    # and the interrater set overlaps them too, so folding those in would weight some images several
+    # times over. Averaging a single column just repeats it, so it only appears when there are more.
+    averaged = [d for d in datasets if _individual_source(d) is not None]
+    if len(averaged) < 2:
+        # Tables without per-annotator columns -- the ultrasound and czi_B families -- keep the older
+        # rule, every column but the row's own training set, rather than losing the average entirely.
+        averaged = list(datasets)
     show_average = (
         max(
             (
-                sum(1 for dataset in datasets if dataset != trained_on and dataset in results)
+                sum(
+                    1 for dataset in averaged
+                    if dataset in results and dataset != trained_on
+                    and not _is_covered_by_training(raw_dirs.get(trained_on), dataset, trained_on)
+                )
                 for (_, _, trained_on, _), results in records.items()
             ),
             default=0,
         )
         > 1
     )
+    best = _best_values(records, datasets, reducer, raw_dirs, averaged)
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
@@ -574,6 +673,7 @@ def _render_table(records, datasets, statistic):
             if metrics is None:
                 parts.append(f"<td>—</td><td{_sep(last)}>—</td>")
                 continue
+            reference = _is_covered_by_training(raw_dirs.get(trained_on), dataset, trained_on)
             dice_value = _reduce(metrics["dice"], reducer)
             masd_value = _reduce(metrics["masd"], reducer)
             parts.append(
@@ -581,6 +681,7 @@ def _render_table(records, datasets, statistic):
                     fmt(metrics["dice"], 100),
                     dice_value,
                     best.get((trained_on, dataset, "dice")),
+                    reference=reference,
                 )
             )
             parts.append(
@@ -589,9 +690,10 @@ def _render_table(records, datasets, statistic):
                     masd_value,
                     best.get((trained_on, dataset, "masd")),
                     separator=last,
+                    reference=reference,
                 )
             )
-            if dataset != trained_on:
+            if dataset in averaged and not reference and dataset != trained_on:
                 cross_dice.append(dice_value)
                 cross_masd.append(masd_value)
         if not show_average:
@@ -711,6 +813,9 @@ def main():
         raw_dirs.setdefault(trained_on, raw_data_dir)
         fold = run_dir.name.removeprefix("fold_")
         tested_on = metrics_path.parent.name
+        # Evaluation sets need an entry too: the annotator-agreement section reads their labels, and
+        # an interrater set that is not also a training set would otherwise have nowhere to look.
+        raw_dirs.setdefault(tested_on, raw_data_dir)
         kind = metrics_path.parents[1].name
         # The training dataset is reported once, in a single column: on its own imagesTs when the run
         # produced one, otherwise on the fold's validation split.
@@ -749,6 +854,9 @@ def main():
     tr.group-start td{border-top:3px solid #777}strong{color:#eee;font-weight:700}
     th.sep,td.sep{border-right:2px solid #777}
     .undef{color:#777;font-size:11px;font-weight:400;margin-top:2px}
+    /* Scored on images the model was trained on: kept for reference, greyed so it cannot be misread
+       as a transfer result, and excluded from both the ranking and the row average. */
+    td.reference{color:#555;font-style:italic}
     u{color:#ddd;text-decoration:underline;text-underline-offset:3px}
     /* Config and "Trained on" read as labels, so they stay left; everything else, the parameter
        counts included, is centred like the metrics. */
@@ -806,10 +914,23 @@ def main():
                 if rows or unpaired:
                     agreement[dataset] = (rows, unpaired)
 
+        standalone = defaultdict(list)
+        transfer_datasets = []
+        for dataset in family_datasets:
+            title = _standalone_table(dataset)
+            (standalone[title] if title else transfer_datasets).append(dataset)
+        # Keep the order STANDALONE_TABLES declares rather than whatever the datasets sorted into.
+        standalone = [(title, standalone[title]) for _, title in STANDALONE_TABLES if standalone[title]]
+
         for suffix, statistic in statistics.items():
             bodies[("main", suffix)] += (
                 f"<section><h1>{html.escape(family)}</h1>"
-                + _render_table(main_records, family_datasets, statistic)
+                + _render_table(main_records, transfer_datasets, statistic, raw_dirs)
+                + "".join(
+                    f"<h1 style='margin-top:40px'>{html.escape(title)}</h1>"
+                    + _render_table(main_records, columns, statistic, raw_dirs)
+                    for title, columns in standalone
+                )
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
                     f"{html.escape(_dataset_label(dataset))}</h1>"
@@ -824,7 +945,7 @@ def main():
             if ablation_records:
                 bodies[("ablation", suffix)] += (
                     f"<section><h1>{html.escape(family)} — Ablation</h1>"
-                    + _render_table(ablation_records, family_datasets, statistic)
+                    + _render_table(ablation_records, transfer_datasets, statistic, raw_dirs)
                     + "</section>"
                 )
 
