@@ -369,7 +369,11 @@ def main():
                                      args.models, args.experiments,
                                      name_training_set=len(group) > 1)
                 ]
-                if len(runs) < 2:
+                # Across training sets a single run has nothing to compare against, so the figure
+                # would be a column on its own. Within one training set it is still worth drawing:
+                # a training set with one adaptation is exactly the case where its predictions have
+                # nowhere else to be seen.
+                if len(runs) < (2 if len(group) > 1 else 1):
                     print(f"skipped {dataset}/{kind}/{tested_on} ({len(runs)} run(s) matched)")
                     continue
                 cfg = ExperimentConfig.from_yaml(runs[0][1] / "config.yaml")

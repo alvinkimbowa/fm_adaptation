@@ -182,11 +182,24 @@ def read_image(path):
 
 
 def _find(directory, stem, channel=0):
-    for suffix in IMAGE_SUFFIXES:
-        for candidate in (f"{stem}{suffix}", f"{stem}_{channel:04d}{suffix}"):
-            path = Path(directory) / candidate
-            if path.exists():
-                return path
+    """The file for one case, searching the sibling splits when it is not in `directory`.
+
+    A results column can span both `imagesTr` and `imagesTs` -- an evaluation set is scored whole,
+    since its own split boundary means nothing to a model that never trained on it -- while the
+    recorded source names a single split. Rather than fail on the half that lives elsewhere, fall
+    back to the dataset's other splits of the same kind.
+    """
+    directory = Path(directory)
+    prefix = "labels" if directory.name.startswith("labels") else "images"
+    candidates = [directory] + sorted(
+        d for d in directory.parent.glob(f"{prefix}*") if d.is_dir() and d != directory
+    )
+    for candidate_dir in candidates:
+        for suffix in IMAGE_SUFFIXES:
+            for candidate in (f"{stem}{suffix}", f"{stem}_{channel:04d}{suffix}"):
+                path = candidate_dir / candidate
+                if path.exists():
+                    return path
     raise FileNotFoundError(f"No file for {stem} in {directory}")
 
 
