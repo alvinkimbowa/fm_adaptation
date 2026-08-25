@@ -4,6 +4,7 @@ set -euo pipefail
 config="${1:-configs/sam3_linear.yaml}"
 train=${train:-1}
 predict=${predict:-1}
+compute_metrics=${compute_metrics:-1}
 report=${report:-1}
 checkpoint=${checkpoint:-final}   # final | best | last
 # Redoing a dataset that already has predictions costs a full forward pass per case for a result
@@ -31,6 +32,14 @@ if [[ "$predict" -eq 1 ]]; then
         predict_args+=(--overwrite)
     fi
     python -m fm_adaptation.predict "${predict_args[@]}"
+fi
+
+# Scoring is its own stage, on its own interpreter -- see scripts/compute_metrics.sh. Restricted to
+# the run this config names, so `train=0 predict=0 compute_metrics=1` rescores just that one, with no
+# GPU involved.
+if [[ "$compute_metrics" -eq 1 ]]; then
+    "${metrics_venv:-$PWD/.venv-mm}/bin/python" -m fm_adaptation.compute_metrics \
+        --config "$config" --overwrite
 fi
 
 if [[ "$report" -eq 1 ]]; then

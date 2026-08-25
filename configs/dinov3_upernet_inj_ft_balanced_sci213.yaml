@@ -1,0 +1,40 @@
+data:
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset213_combined_KE_smi_gfap
+  test_datasets:
+    - Dataset213_combined_KE_smi_gfap
+    - Dataset214_mohammad_smi_gfap
+    - Dataset215_yvonne_smi_gfap
+    - Dataset210_interrater_MY_smi_gfap
+    - Dataset211_paul_widefield_smi_gfap
+    - Dataset212_katie_dorsal_column_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
+  # Mohammad's and Yvonne's sets ship both imagesTr and imagesTs, and a split boundary inside a
+  # dataset this model never trained on means nothing -- `all` scores every case of each.
+  test_split: all
+  fold: 0
+  balance_sources: true
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  train_encoder: true
+  run_name: upernet_inj_ft_balanced_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
