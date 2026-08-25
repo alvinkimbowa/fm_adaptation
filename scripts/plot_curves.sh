@@ -13,6 +13,10 @@ datasets=(
     # Dataset090_Echo_EchoCP
     Dataset204_lesion_czi_B
     Dataset206_lesion_120_czi_B
+    Dataset208_combined_MYKE_smi_gfap
+    Dataset209_combined_MYE_smi_gfap
+    Dataset213_combined_KE_smi_gfap
+    Dataset217_combined_MY_smi_gfap
     # Dataset203_neurite_2px_scaleaug
     # Dataset205_neurite_2px_scaleaug_red
 )
@@ -27,6 +31,10 @@ experiments=(
     upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
+    upernet_inj_ft_dropsmi_ours
+    upernet_inj_ft_dropany_ours
+    upernet_inj_ft_balanced_ours
+    upernet_inj_ft_balanced_dropany_ours
     upernet_inj_ft_poly_ours
     upernet_inj_ft_init_ours
     upernet_inj_ft_vitb_ours

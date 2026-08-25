@@ -21,6 +21,7 @@ datasets=(
     Dataset208_combined_MYKE_smi_gfap
     Dataset209_combined_MYE_smi_gfap
     Dataset213_combined_KE_smi_gfap
+    Dataset217_combined_MY_smi_gfap
     # Dataset203_neurite_2px_scaleaug
     # Dataset205_neurite_2px_scaleaug_red
 )
