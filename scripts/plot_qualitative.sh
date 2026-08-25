@@ -88,8 +88,8 @@ comparison_experiments=(
 comparison_per_row=2
 comparison_dir=results/qualitative
 # 1 merges the training sets into one figure per evaluation set, so a column is the same
-# configuration trained on a different dataset -- written to <comparison_dir>/across/.
-comparison_across=0
+# configuration trained on a different dataset -- written to <comparison_dir>/across_training_sets/.
+comparison_across=${comparison_across:-0}
 # Set to 1 to skip the per-run figures and redraw only the comparisons -- the quick loop when tuning
 # how a comparison looks, since the per-run figures are the slow half.
 comparison_only=1
@@ -127,6 +127,12 @@ fi
 compare_args=()
 [[ ${#comparison_models[@]} -gt 0 ]] && compare_args+=(--models "${comparison_models[@]}")
 [[ "${comparison_across:-0}" -eq 1 ]] && compare_args+=(--across-training-sets)
+# Across training sets every training set contributes its own column, so carrying several adaptations
+# as well multiplies the columns until the headers overlap into noise. Narrow to one unless asked
+# otherwise; the balanced run is the one every training set has.
+if [[ "$comparison_across" -eq 1 && ${#comparison_experiments[@]} -eq 0 ]]; then
+    comparison_experiments=(upernet_inj_ft_balanced_ours)
+fi
 compare_experiments=("${comparison_experiments[@]:-${experiments[@]}}")
 python -m fm_adaptation.compare_qualitative \
     "${args[@]}" \

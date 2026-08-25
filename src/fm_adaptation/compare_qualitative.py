@@ -52,6 +52,12 @@ from .qualitative import (
 from .selection import matches as _matches
 
 
+# Where the across-training-sets figures go. Every other figure directory is named after the training
+# set its columns share; these have no single training set to be named after, because that is the
+# thing being compared.
+ACROSS_DIR = "across_training_sets"
+
+
 def _runs(results_dir, dataset, kind, tested_on, models, experiments, name_training_set=False):
     """Every run that has predictions for `tested_on`, as (label, run_dir, prediction_dir, metrics).
 
@@ -345,7 +351,7 @@ def main():
     # column is "the same configuration trained on a different dataset" rather than "another model".
     groups = [(d,) for d in args.datasets] if not args.across_training_sets else [tuple(args.datasets)]
     for group in groups:
-        dataset = group[0] if len(group) == 1 else "across"
+        dataset = group[0] if len(group) == 1 else ACROSS_DIR
         for kind in args.splits:
             # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
             # `test_datasets` later shows up without editing this.
