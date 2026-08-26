@@ -18,7 +18,7 @@ from .data import (
     stain_planes,
 )
 from .datasets import dataset_dir as resolve_dataset_dir
-from .models import build_model, restore_prediction
+from .models import load_trained_model, restore_prediction
 from .patching import build_index, predict_case
 
 
@@ -135,32 +135,7 @@ def main():
     cfg = ExperimentConfig.from_yaml(args.config)
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
-    model = build_model(
-        cfg.model_name,
-        cfg.probe_name,
-        classes,
-        cfg.checkpoint,
-        train_encoder=cfg.train_encoder,
-        injector=cfg.injector,
-        variant=cfg.variant,
-    )
-    checkpoint_name = "final" if cfg.fold == "all" else args.checkpoint
-    checkpoint_path = cfg.run_dir / f"{checkpoint_name}.pt"
-    if checkpoint_name == "last":
-        # `last.pt` also carries optimiser and RNG state, which the safe loader cannot unpickle.
-        state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    else:
-        state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    model.probe.load_state_dict(state["probe"])
-    if "encoder" in state:
-        model.encoder.trunk.load_state_dict(state["encoder"])
-    if "adapter" in state:
-        # Trained adapter weights only; the frozen trunk came from the DINOv3 checkpoint at build time.
-        missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
-        missing = [key for key in missing if not key.startswith("backbone.")]
-        if missing or unexpected:
-            raise RuntimeError(f"adapter checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
-    model.to(device).eval()
+    model = load_trained_model(cfg, args.checkpoint, device, classes)
     datasets = cfg.test_datasets or (cfg.train_dataset,)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
     # The planes this model was trained to look at. An evaluation set carrying more stains than the

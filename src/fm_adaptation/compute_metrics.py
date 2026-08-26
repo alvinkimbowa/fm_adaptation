@@ -52,8 +52,15 @@ class CaseMetrics:
 
 
 def _nanmean(values) -> float:
+    """The mean of the cases that produced a number.
+
+    `inf` is masked along with `nan`: a case whose label is empty has no surface for a distance to be
+    measured to, and MONAI reports that as `inf` rather than `nan`. Two of Paul's sixteen cases are
+    like this, and left in they made every distance column read `inf`.
+    """
     array = np.array(list(values), dtype=np.float64)
-    return float("nan") if np.all(np.isnan(array)) else float(np.nanmean(array))
+    finite = np.isfinite(array)
+    return float("nan") if not finite.any() else float(array[finite].mean())
 
 
 def read_mask(path) -> np.ndarray:

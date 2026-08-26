@@ -391,6 +391,30 @@ def build_model(
     return SegmentationModel(encoder, probe)
 
 
+def load_trained_model(cfg, checkpoint: str, device, classes: int):
+    """The model a finished run left behind, built from its config and loaded from its checkpoint."""
+    model = build_model(
+        cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
+        train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
+    )
+    name = "final" if cfg.fold == "all" else checkpoint
+    path = cfg.run_dir / f"{name}.pt"
+    # `last.pt` also carries optimiser and RNG state, which the safe loader cannot unpickle.
+    state = torch.load(path, map_location="cpu", weights_only=name != "last")
+    model.probe.load_state_dict(state["probe"])
+    if "encoder" in state:
+        model.encoder.trunk.load_state_dict(state["encoder"])
+    if "adapter" in state:
+        # Trained adapter weights only; the frozen trunk came from the DINOv3 checkpoint at build time.
+        missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
+        missing = [key for key in missing if not key.startswith("backbone.")]
+        if missing or unexpected:
+            raise RuntimeError(
+                f"adapter checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}"
+            )
+    return model.to(device).eval()
+
+
 def restore_prediction(prediction: torch.Tensor, geometry: dict) -> np.ndarray:
     top, left = geometry["pad_top"], geometry["pad_left"]
     height, width = geometry["resized_height"], geometry["resized_width"]
