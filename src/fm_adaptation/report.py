@@ -11,7 +11,7 @@ import numpy as np
 import yaml
 
 
-from . import agreement
+from . import agreement, overlap
 from .datasets import dataset_dir as resolve_dataset_dir, resolve
 from .metrics import read_case_metrics
 from .selection import matches
@@ -222,29 +222,14 @@ def _dataset_cases(raw_data_dir, dataset):
     return frozenset(cases)
 
 
-# The slide a case was cut from, where the case id records it. Two datasets can be two exports of one
-# set of images under different naming -- Dataset105 calls a case
-# `Drug-study_3_..._Rat-12_slide-5_Section-5_10x-...` and Dataset218 calls the same slide
-# `Eric__Rat-12_slide-5_Section-5` -- and comparing ids alone would call them disjoint.
-SLIDE_KEY = re.compile(r"Rat-?(\d+)_(slide-\d+)_(Section-\d+)", re.IGNORECASE)
-
-
-def _slide_keys(raw_data_dir, dataset):
-    """The slides a dataset covers, for datasets whose case ids name one."""
-    keys = set()
-    for case in _dataset_cases(raw_data_dir, dataset):
-        match = SLIDE_KEY.search(case)
-        if match:
-            keys.add(f"rat{match.group(1)}_{match.group(2)}_{match.group(3)}".lower())
-    return frozenset(keys)
-
-
 def _dataset_family(dataset):
     """The second token of the dataset name, which is what puts a run in one table or another."""
     return dataset.split("_", maxsplit=2)[1]
 
 
 PARAMETER_COUNTS = {}
+# Datasets that ship the same images, as `compute_metrics` measured them.
+SHARED_IMAGES = frozenset()
 
 
 def _load_parameter_counts(path):
@@ -545,15 +530,20 @@ def _order_columns(datasets, records):
 def _is_covered_by_training(raw_data_dir, dataset, trained_on):
     """Whether an evaluation set's annotator is already inside the training set.
 
-    Such a cell is left blank rather than filled: whatever of it the model did not fit is reported in
-    the training set's own held-out column, so repeating a subset of it here would invite comparison
-    between a number over cases the model was fitted around and one over a whole unseen annotator.
+    Such a cell is greyed rather than ranked: whatever of it the model did not fit is reported in the
+    training set's own held-out column, so reading a subset of it here would invite comparison between
+    a number over cases the model was fitted around and one over a whole unseen annotator.
+
+    An id shared between the two settles it; where the exports name the same section differently, the
+    measured overlap does.
     """
-    if raw_data_dir is None or dataset in (trained_on, OWN_TEST):
+    if dataset in (trained_on, OWN_TEST):
         return False
-    if _dataset_cases(raw_data_dir, dataset) & _dataset_cases(raw_data_dir, trained_on):
+    if overlap.shares_images(SHARED_IMAGES, dataset, trained_on):
         return True
-    return bool(_slide_keys(raw_data_dir, dataset) & _slide_keys(raw_data_dir, trained_on))
+    if raw_data_dir is None:
+        return False
+    return bool(_dataset_cases(raw_data_dir, dataset) & _dataset_cases(raw_data_dir, trained_on))
 
 
 def _render_table(records, datasets, statistic, raw_dirs=None):
@@ -760,6 +750,8 @@ def main():
     )
     args = parser.parse_args()
     _load_parameter_counts(args.parameter_counts)
+    global SHARED_IMAGES
+    SHARED_IMAGES = overlap.read(Path(args.results_dir) / "overlap.csv")
     records = defaultdict(dict)
     # Where compute_metrics wrote the agreement between annotators.
     agreement_dir = Path(args.results_dir) / "agreement"

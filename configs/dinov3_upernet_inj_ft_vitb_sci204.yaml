@@ -6,9 +6,11 @@ data:
   train_dataset: Dataset204_lesion_mohammad_eric_gfap
   test_datasets:
     - Dataset204_lesion_mohammad_eric_gfap
-    - Dataset206_lesion_yvonne_gfap
     - Dataset207_lesion_katie_contusion_smi_gfap
-  test_split: Tr
+    - Dataset214_lesion_mohammad_smi_gfap
+    - Dataset215_lesion_yvonne_smi_gfap
+    - Dataset218_lesion_eric_smi_gfap
+  test_split: all
   fold: 0
 
 model:

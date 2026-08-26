@@ -28,7 +28,6 @@ datasets=(          # what a run was trained on
     # Dataset090_Echo_EchoCP
     Dataset105_lesion_eric_gfap_resized
     Dataset204_lesion_mohammad_eric_gfap
-    Dataset206_lesion_yvonne_gfap
     Dataset208_lesion_MYKE_smi_gfap
     Dataset209_lesion_MYE_smi_gfap
     Dataset213_lesion_KE_smi_gfap

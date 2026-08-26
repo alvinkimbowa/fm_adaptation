@@ -1,8 +1,10 @@
 import argparse
 import json
 from contextlib import nullcontext
+from functools import cache
 
 import cv2
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -13,10 +15,13 @@ from .data import (
     _case_ids,
     active_planes,
     collate_cases,
+    fingerprints,
     load_dataset_json,
     num_classes,
+    same_image,
     stain_planes,
 )
+from .datasets import dataset_dir as resolve_dataset_dir
 from .models import build_model, restore_prediction
 from .patching import build_index, predict_case
 
@@ -100,11 +105,35 @@ def _seen_in_training(cfg):
     the 52 Katie slides it had already fitted. Only the training split counts: the fold's validation
     cases are reported as the validation column, which is what that column is for.
     """
-    dataset_dir = cfg.raw_data_dir / cfg.train_dataset
+    dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, cfg.train_dataset)
     if not (dataset_dir / "splits_final.json").exists():
         return set()
     subsets = ("train",) if cfg.fold == "all" else ("train", "val")
     return {case for subset in subsets for case in _case_ids(dataset_dir, "Tr", cfg.fold, subset)}
+
+
+@cache
+def _trained_images(raw_data_dir, train_dataset, seen):
+    """Fingerprints of the images this fold was fitted on, stacked for comparison.
+
+    The same section is exported under a different case id in each dataset it appears in --
+    `Mohammad__10` and `10_018` are one image -- so the ids alone leave a model scored on slides it
+    was trained on. Matching the picture instead recognises it whatever it is called.
+    """
+    prints = fingerprints(resolve_dataset_dir(raw_data_dir, train_dataset), "Tr")
+    trained = [prints[case] for case in seen if prints.get(case) is not None]
+    return np.stack(trained) if trained else None
+
+
+def _held_out(cfg, dataset_name, split, ids, seen):
+    """`ids` with everything the fold was fitted on taken out, by case id and by image."""
+    kept = [case for case in ids if case not in seen]
+    trained = _trained_images(cfg.raw_data_dir, cfg.train_dataset, frozenset(seen))
+    if trained is None or not kept:
+        return kept
+    prints = fingerprints(resolve_dataset_dir(cfg.raw_data_dir, dataset_name), split)
+    repeats = same_image({case: prints.get(case) for case in kept}, trained)
+    return [case for case in kept if case not in repeats]
 
 
 def _has_cases(dataset_dir, split):
@@ -188,7 +217,7 @@ def main():
             keep_planes=keep_planes, require_labels=labelled,
         )
         if dataset_name != cfg.train_dataset:
-            dataset.ids = [c for c in dataset.ids if c not in seen]
+            dataset.ids = _held_out(cfg, dataset_name, split, dataset.ids, seen)
             if not dataset.ids:
                 print(f"Skipping {column_name}: every case was seen in training")
                 continue

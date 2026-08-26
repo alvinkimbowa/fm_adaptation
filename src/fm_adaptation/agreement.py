@@ -12,26 +12,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .data import load_dataset_json, num_classes, stain_planes
+from .data import (
+    FINGERPRINT,
+    SAME_IMAGE,
+    fingerprint,
+    load_dataset_json,
+    num_classes,
+    stain_channel,
+)
 from .metrics import compute_metrics
-
-
-# Correlation above which two cases are taken to be the same image. The pairs in Dataset208 sit at
-# 0.975 and above and the nearest non-pair at 0.65, so anything in that gap separates them; 0.9
-# leaves room for a rescaled export without admitting two different sections of the same cord.
-SAME_IMAGE = 0.9
-# Fixed size every case is reduced to before correlating, so images that differ in crop or scale
-# still compare. Portrait, because these sections are all taller than they are wide.
-FINGERPRINT = (48, 96)
-
-
-def fingerprint(path):
-    """A cheap, size-independent description of one image, for comparing against another."""
-    image = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_8)
-    if image is None:
-        return None
-    vector = cv2.resize(image.astype(np.float32), FINGERPRINT).ravel()
-    return (vector - vector.mean()) / (vector.std() + 1e-6)
 
 
 def annotator(case_id):
@@ -62,9 +51,8 @@ def interrater_pairs(dataset_dir, split):
     that last condition a near-miss would produce a Dice that means nothing.
     """
     info = load_dataset_json(dataset_dir)
-    planes = stain_planes(info["channel_names"])
     # The stain the models are actually shown, so agreement is read on the same picture they saw.
-    channel = planes["GFAP"][0] if planes and "GFAP" in planes else 0
+    channel = stain_channel(info)
     ending = info["file_ending"]
     image_dir, label_dir = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
     cases = sorted(p.name[: -len(f"_{channel:04d}{ending}")]

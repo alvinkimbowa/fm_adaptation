@@ -67,6 +67,60 @@ def rgb_planes(channel_names: dict) -> dict[int, int] | None:
     return None if planes is None else {stored: rgb for stored, rgb in planes.values()}
 
 
+# Correlation above which two cases are taken to be the same image. The pairs in Dataset208 sit at
+# 0.975 and above and the nearest non-pair at 0.65, so anything in that gap separates them; 0.9
+# leaves room for a rescaled export without admitting two different sections of the same cord.
+SAME_IMAGE = 0.9
+# Fixed size every case is reduced to before correlating, so images that differ in crop or scale
+# still compare. Portrait, because these sections are all taller than they are wide.
+FINGERPRINT = (48, 96)
+
+
+def fingerprint(path):
+    """A cheap, size-independent description of one image, for comparing against another."""
+    image = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+    if image is None:
+        return None
+    vector = cv2.resize(image.astype(np.float32), FINGERPRINT).ravel()
+    return (vector - vector.mean()) / (vector.std() + 1e-6)
+
+
+def stain_channel(info: dict) -> int:
+    """The stored channel holding the stain a model is shown, which is what identifies the image."""
+    planes = stain_planes(info["channel_names"])
+    return planes["GFAP"][0] if planes and "GFAP" in planes else 0
+
+
+def fingerprints(dataset_dir: Path, split: str) -> dict:
+    """`{case id: fingerprint}` for one split, read from the stain every model sees.
+
+    An image exported twice carries a different case id each time -- `Mohammad__10` and `10_018` are
+    one section -- so anything that has to recognise the same image across datasets compares these
+    rather than the ids.
+    """
+    info = load_dataset_json(dataset_dir)
+    channel, ending = stain_channel(info), info["file_ending"]
+    suffix = f"_{channel:04d}{ending}"
+    image_dir = dataset_dir / f"images{split}"
+    if not image_dir.is_dir():
+        return {}
+    found = {}
+    for path in sorted(image_dir.glob(f"*{suffix}")):
+        found[path.name[: -len(suffix)]] = fingerprint(path)
+    return found
+
+
+def same_image(prints, against) -> set:
+    """The keys of `prints` whose image also appears in `against`."""
+    if not prints or against is None or not len(against):
+        return set()
+    cases = [case for case, value in prints.items() if value is not None]
+    if not cases:
+        return set()
+    similarity = np.stack([prints[case] for case in cases]) @ against.T / np.prod(FINGERPRINT)
+    return {case for case, best in zip(cases, similarity.max(axis=1)) if best >= SAME_IMAGE}
+
+
 def num_classes(dataset_dir: Path) -> int:
     labels = load_dataset_json(dataset_dir)["labels"]
     values = labels.values()
