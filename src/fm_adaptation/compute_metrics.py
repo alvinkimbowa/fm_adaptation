@@ -31,6 +31,7 @@ from monai.metrics import (
 from monai.networks.utils import one_hot
 from PIL import Image
 
+from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, resolve
 from .selection import matches
 
@@ -281,6 +282,22 @@ def main():
         raise RuntimeError(f"No predictions under {args.results_dir} for this selection")
     for prediction_dir, raw_data_dir in columns:
         print(measure(prediction_dir, raw_data_dir, args.overwrite, args.dry_run), flush=True)
+
+    # Agreement between annotators is a property of a dataset rather than of any run, so it is
+    # measured once for every evaluation set that ships the same image drawn twice.
+    agreement_dir = Path(args.results_dir) / "agreement"
+    for dataset_dir in sorted({resolve_dataset_dir(raw, d.parent.name) for d, raw in columns}):
+        for split in agreement.splits(dataset_dir):
+            path = agreement.path_for(agreement_dir, dataset_dir.name, split)
+            if path.exists() and not args.overwrite:
+                print(f"{dataset_dir.name}{split} agreement: up to date", flush=True)
+                continue
+            if args.dry_run:
+                print(f"{dataset_dir.name}{split} agreement: would measure", flush=True)
+                continue
+            rows, unpaired = agreement.measure(dataset_dir, split)
+            agreement.write(rows, unpaired, path)
+            print(f"{dataset_dir.name}{split} agreement: measured {len(rows)}", flush=True)
 
 
 if __name__ == "__main__":

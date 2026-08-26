@@ -10,11 +10,10 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-import cv2
 
-from .data import load_dataset_json, num_classes, stain_planes
+from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, resolve
-from .metrics import compute_metrics, read_case_metrics
+from .metrics import read_case_metrics
 from .selection import matches
 
 
@@ -154,98 +153,6 @@ def _median_iqr(values, scale=1.0):
         return _annotate("—", undefined)
     q1, median, q3 = np.percentile(finite, [25, 50, 75])
     return _annotate(f"{median:.2f} ({q1:.2f}–{q3:.2f})", undefined)
-
-
-# ------------------------------------------------------------------------- annotator agreement
-
-# Correlation above which two cases are taken to be the same image. The pairs in Dataset208 sit at
-# 0.975 and above and the nearest non-pair at 0.65, so anything in that gap separates them; 0.9
-# leaves room for a rescaled export without admitting two different sections of the same cord.
-SAME_IMAGE = 0.9
-# Fixed size every case is reduced to before correlating, so images that differ in crop or scale
-# still compare. Portrait, because these sections are all taller than they are wide.
-FINGERPRINT = (48, 96)
-
-
-def _fingerprint(path):
-    """A cheap, size-independent description of one image, for comparing against another."""
-    image = cv2.imread(str(path), cv2.IMREAD_REDUCED_GRAYSCALE_8)
-    if image is None:
-        return None
-    vector = cv2.resize(image.astype(np.float32), FINGERPRINT).ravel()
-    return (vector - vector.mean()) / (vector.std() + 1e-6)
-
-
-def _annotator(case_id):
-    """Who drew this annotation, from the case ID.
-
-    `Mohammad__1` and `Yvonne_b2__Cond-Lesion-...` name the annotator before the `__`; a `_b2` on the
-    end of that is a second batch by the same person rather than a second person. A `_rater1` suffix
-    on the case itself is the one place two annotators share a source name.
-    """
-    source = case_id.split("__", 1)[0]
-    source = re.sub(r"_b\d+$", "", source)
-    rater = re.search(r"_rater(\d+)$", case_id)
-    return f"{source} rater{rater.group(1)}" if rater else source
-
-
-def _image_name(case_ids):
-    """A name for the image the pair shares, taken from whichever ID describes it."""
-    name = max(case_ids, key=len).split("__", 1)[-1]
-    return re.sub(r"_rater\d+$", "", name)
-
-
-def _interrater_pairs(dataset_dir, split):
-    """The same image annotated twice, as (image name, (case A, case B)), plus anything unpaired.
-
-    The pairing cannot come from the case IDs -- `Mohammad__1` and `Yvonne__...Rat-1-slide11-section-1`
-    are the same slide -- so it comes from the images. Two cases pair when each is the other's best
-    match, the correlation clears `SAME_IMAGE`, and their labels have identical dimensions; without
-    that last condition a near-miss would produce a Dice that means nothing.
-    """
-    info = load_dataset_json(dataset_dir)
-    planes = stain_planes(info["channel_names"])
-    # The stain the models are actually shown, so agreement is read on the same picture they saw.
-    channel = planes["GFAP"][0] if planes and "GFAP" in planes else 0
-    ending = info["file_ending"]
-    image_dir, label_dir = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
-    cases = sorted(p.name[: -len(f"_{channel:04d}{ending}")]
-                   for p in image_dir.glob(f"*_{channel:04d}{ending}"))
-    prints, shapes = [], []
-    for case_id in cases:
-        prints.append(_fingerprint(image_dir / f"{case_id}_{channel:04d}{ending}"))
-        label = cv2.imread(str(label_dir / f"{case_id}{ending}"), cv2.IMREAD_GRAYSCALE)
-        shapes.append(None if label is None else label.shape)
-    if not cases or any(f is None for f in prints):
-        return [], cases
-    similarity = np.stack(prints) @ np.stack(prints).T / np.prod(FINGERPRINT)
-    np.fill_diagonal(similarity, -1.0)
-    best = similarity.argmax(axis=1)
-    pairs, paired = [], set()
-    for i, j in enumerate(best):
-        if i in paired or best[j] != i or similarity[i, j] < SAME_IMAGE:
-            continue
-        if shapes[i] is None or shapes[i] != shapes[j]:
-            continue
-        pairs.append((_image_name((cases[i], cases[j])), (cases[i], cases[j])))
-        paired |= {i, j}
-    return pairs, [case for index, case in enumerate(cases) if index not in paired]
-
-
-def _interrater_rows(dataset_dir, split):
-    """Dice and MASD between the two annotations of every paired image."""
-    pairs, unpaired = _interrater_pairs(dataset_dir, split)
-    classes = num_classes(dataset_dir)
-    ending = load_dataset_json(dataset_dir)["file_ending"]
-    label_dir = dataset_dir / f"labels{split}"
-    rows = []
-    for name, (first, second) in pairs:
-        a = cv2.imread(str(label_dir / f"{first}{ending}"), cv2.IMREAD_GRAYSCALE)
-        b = cv2.imread(str(label_dir / f"{second}{ending}"), cv2.IMREAD_GRAYSCALE)
-        # Dice and MASD are both symmetric, so which annotation is passed first does not matter.
-        dice, masd = compute_metrics(a, b, classes)
-        rows.append((sorted((_annotator(first), _annotator(second))), name, dice, masd))
-    return rows, unpaired
 
 
 def _render_interrater(rows, unpaired, statistic):
@@ -854,6 +761,8 @@ def main():
     args = parser.parse_args()
     _load_parameter_counts(args.parameter_counts)
     records = defaultdict(dict)
+    # Where compute_metrics wrote the agreement between annotators.
+    agreement_dir = Path(args.results_dir) / "agreement"
     # Where each training dataset's images live, so the annotator-agreement section can read the
     # labels themselves; the tables need only the metrics CSVs.
     raw_dirs = {}
@@ -953,19 +862,17 @@ def main():
         }
 
         # A dataset that ships an interrater split holds the same image annotated twice, which is
-        # the ceiling every model in the table above is measured against.
-        agreement = {}
+        # the ceiling every model in the table above is measured against. Measured by
+        # compute_metrics, like every other number here, and read back from what it wrote.
+        measured = {}
         for dataset in family_datasets:
             dataset_dir = resolve_dataset_dir(raw_dirs.get(dataset, Path()), dataset)
-            # Either a dataset that is entirely an interrater set (its whole split is the pairs), or
-            # an older one that carries the pairs as an extra split beside its own test set.
-            label_dirs = sorted(dataset_dir.glob("labels*interrater*"))
-            if not label_dirs and "interrater" in dataset:
-                label_dirs = sorted(dataset_dir.glob("labels*"))
-            for label_dir in label_dirs:
-                rows, unpaired = _interrater_rows(dataset_dir, label_dir.name[len("labels"):])
+            for split in agreement.splits(dataset_dir):
+                rows, unpaired = agreement.read(
+                    agreement.path_for(agreement_dir, dataset_dir.name, split)
+                )
                 if rows or unpaired:
-                    agreement[dataset] = (rows, unpaired)
+                    measured[dataset] = (rows, unpaired)
 
         standalone = defaultdict(list)
         transfer_datasets = []
@@ -991,7 +898,7 @@ def main():
                     "pair is one slide, though the two annotators did not always work from the same "
                     "export of it.</p>"
                     + _render_interrater(rows, unpaired, statistic)
-                    for dataset, (rows, unpaired) in sorted(agreement.items())
+                    for dataset, (rows, unpaired) in sorted(measured.items())
                 )
                 + "</section>"
             )
