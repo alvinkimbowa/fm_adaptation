@@ -4,7 +4,7 @@ The counts come from wherever each family already records them, so nothing is es
 
 * foundation-model runs -- built from their own config and counted directly;
 * mmseg adapter runs -- built from `dinov3_mmseg.head_cfg`, which is what trained them;
-* nnU-Net -- its own `model_stats.json`;
+* nnU-Net -- its own `model_stats.json`, or the saved checkpoint where a run predates that file;
 * MonoUNet -- summed from the saved checkpoint, which holds exactly the trained weights.
 
 Written once to `models/parameter_counts.json`; `report.py` only reads that file, so generating the
@@ -56,7 +56,12 @@ def _foundation_counts(model_name, run_name, probe, injector, train_encoder=Fals
 
 
 def _nnunet_counts(results_dirs):
-    """nnU-Net records its own stats per trainer, and each plans variant is a row of its own."""
+    """nnU-Net records its own stats per trainer, and each plans variant is a row of its own.
+
+    Runs from before that file existed are counted from `checkpoint_final.pth` instead, whose
+    `network_weights` is the trained network and nothing else. nnU-Net scales the ResEnc presets to
+    the dataset, so two runs of the same plans name legitimately differ in size.
+    """
     from .report import nnunet_label
 
     found = {}
@@ -68,6 +73,18 @@ def _nnunet_counts(results_dirs):
                 "total": stats["num_parameters"],
                 "trainable": stats["num_parameters_trainable"],
             }
+        for path in sorted(Path(results_dir).glob("nnunet/Dataset*/*/fold_*/checkpoint_final.pth")):
+            key = f"{nnunet_label(path.parents[1].name)}||{path.parents[2].name}"
+            if key in found:
+                continue
+            try:
+                state = torch.load(path, map_location="cpu", weights_only=False)["network_weights"]
+            except (EOFError, RuntimeError, KeyError):
+                # A run that died mid-write leaves a truncated checkpoint. It is not this script's
+                # job to report that, and one bad file must not cost every other count.
+                continue
+            total = sum(v.numel() for v in state.values() if torch.is_tensor(v) and v.is_floating_point())
+            found[key] = {"total": total, "trainable": total}
     return found
 
 

@@ -294,6 +294,11 @@ FAMILY_ALIASES = {
     "katie": "combined",
     "mohammad": "combined",
     "yvonne": "combined",
+    "eric": "combined",
+    # The czi sets are the same lesion, annotated before the per-annotator datasets were split out.
+    # A model trained on one of them earns a row beside the annotator-trained models rather than a
+    # section of its own, which is the only place its Dataset207/210/211 columns mean anything.
+    "spinal": "combined",
 }
 
 
@@ -323,6 +328,23 @@ def _dataset_cases(raw_data_dir, dataset):
     for image_dir in Path(raw_data_dir).glob(f"{dataset}/images*"):
         cases |= {path.name.split("_0000")[0] for path in image_dir.glob("*_0000.*")}
     return frozenset(cases)
+
+
+# The slide a case was cut from, where the case id records it. Two datasets can be two exports of one
+# set of images under different naming -- Dataset105 calls a case
+# `Drug-study_3_..._Rat-12_slide-5_Section-5_10x-...` and Dataset218 calls the same slide
+# `Eric__Rat-12_slide-5_Section-5` -- and comparing ids alone would call them disjoint.
+SLIDE_KEY = re.compile(r"Rat-?(\d+)_(slide-\d+)_(Section-\d+)", re.IGNORECASE)
+
+
+def _slide_keys(raw_data_dir, dataset):
+    """The slides a dataset covers, for datasets whose case ids name one."""
+    keys = set()
+    for case in _dataset_cases(raw_data_dir, dataset):
+        match = SLIDE_KEY.search(case)
+        if match:
+            keys.add(f"rat{match.group(1)}_{match.group(2)}_{match.group(3)}".lower())
+    return frozenset(keys)
 
 
 def _dataset_family(dataset):
@@ -374,6 +396,8 @@ def _parameter_counts(model, adaptation, trained_on):
 
 def _dataset_label(dataset):
     """Drops the `Dataset0xx_` prefix for display."""
+    if dataset == OWN_TEST:
+        return "Test"
     return re.sub(r"^Dataset\d+_", "", dataset)
 
 
@@ -518,7 +542,7 @@ def _best_values(records, datasets, reducer, raw_dirs=None, averaged=()):
             continue  # Nothing to compare against, so nothing is "best".
         cross = {"dice": [], "masd": []}
         for dataset in datasets:
-            metrics = results.get(dataset)
+            metrics = _column_metrics(results, dataset, trained_on)
             if metrics is None or _is_covered_by_training(
                 raw_dirs.get(trained_on), dataset, trained_on
             ):
@@ -580,6 +604,33 @@ def _standalone_table(dataset):
     return next((title for key, title in STANDALONE_TABLES if key in lowered), None)
 
 
+# The stand-in for "whatever this row held out of its own training set". Not a dataset name, so it
+# can never collide with one.
+OWN_TEST = "\0own-test"
+
+
+def _collapsed_columns(datasets, records):
+    """The training sets that say nothing except on their own row, and so become one `Test` column.
+
+    A training set that some other row was evaluated on is a real transfer target -- the czi_B model
+    tested on czi_120 -- and keeps its column. One that nobody else was sent to holds a single value
+    per row, on the diagonal, so a table of them is mostly dashes stating one fact each.
+    """
+    trained_on = {key[2] for key in records}
+    return {
+        dataset for dataset in datasets
+        if dataset in trained_on
+        and not any(
+            dataset in results and dataset != fitted_to
+            for (_, _, fitted_to, _), results in records.items()
+        )
+    }
+
+
+def _column_metrics(results, dataset, trained_on):
+    return results.get(trained_on if dataset == OWN_TEST else dataset)
+
+
 def _order_columns(datasets, records):
     """Training sets first, then interrater, then the per-annotator sets, then anything else.
 
@@ -607,16 +658,21 @@ def _is_covered_by_training(raw_data_dir, dataset, trained_on):
     the training set's own held-out column, so repeating a subset of it here would invite comparison
     between a number over cases the model was fitted around and one over a whole unseen annotator.
     """
-    if raw_data_dir is None or dataset == trained_on:
+    if raw_data_dir is None or dataset in (trained_on, OWN_TEST):
         return False
-    return bool(_dataset_cases(raw_data_dir, dataset) & _dataset_cases(raw_data_dir, trained_on))
+    if _dataset_cases(raw_data_dir, dataset) & _dataset_cases(raw_data_dir, trained_on):
+        return True
+    return bool(_slide_keys(raw_data_dir, dataset) & _slide_keys(raw_data_dir, trained_on))
 
 
 def _render_table(records, datasets, statistic, raw_dirs=None):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
     raw_dirs = raw_dirs or {}
-    datasets = _order_columns(datasets, records)
+    collapsed = _collapsed_columns(datasets, records)
+    datasets = _order_columns([d for d in datasets if d not in collapsed], records)
+    if collapsed:
+        datasets = [OWN_TEST] + datasets
     # The average is over the per-annotator sets only -- the combined training sets overlap each other
     # and the interrater set overlaps them too, so folding those in would weight some images several
     # times over. Averaging a single column just repeats it, so it only appears when there are more.
@@ -624,13 +680,14 @@ def _render_table(records, datasets, statistic, raw_dirs=None):
     if len(averaged) < 2:
         # Tables without per-annotator columns -- the ultrasound and czi_B families -- keep the older
         # rule, every column but the row's own training set, rather than losing the average entirely.
-        averaged = list(datasets)
+        averaged = [d for d in datasets if d != OWN_TEST]
     show_average = (
         max(
             (
                 sum(
                     1 for dataset in averaged
-                    if dataset in results and dataset != trained_on
+                    if _column_metrics(results, dataset, trained_on) is not None
+                    and dataset != trained_on
                     and not _is_covered_by_training(raw_dirs.get(trained_on), dataset, trained_on)
                 )
                 for (_, _, trained_on, _), results in records.items()
@@ -669,7 +726,7 @@ def _render_table(records, datasets, statistic, raw_dirs=None):
         cross_dice, cross_masd = [], []
         for index, dataset in enumerate(datasets):
             last = index == len(datasets) - 1 and show_average
-            metrics = results.get(dataset)
+            metrics = _column_metrics(results, dataset, trained_on)
             if metrics is None:
                 parts.append(f"<td>—</td><td{_sep(last)}>—</td>")
                 continue
@@ -774,6 +831,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
     parser.add_argument("--nnunet-results-dir", nargs="*", default=[])
+    parser.add_argument(
+        "--nnunet-raw-data-dir",
+        default=None,
+        help="Where the nnU-Net baselines' training datasets live. They carry no config of their "
+        "own, so without this their training set has no images to compare an evaluation set "
+        "against and every cell of theirs reads as unseen.",
+    )
     parser.add_argument("--monounet-results-dir", nargs="*", default=[])
     parser.add_argument(
         "--folds",
@@ -825,6 +889,9 @@ def main():
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
     for results_dir in args.nnunet_results_dir:
         _add_nnunet_records(records, results_dir)
+    if args.nnunet_raw_data_dir is not None:
+        for _, _, trained_on, _ in records:
+            raw_dirs.setdefault(trained_on, Path(args.nnunet_raw_data_dir).expanduser())
     for results_dir in args.monounet_results_dir:
         name = Path(results_dir).name
         _add_monounet_records(records, results_dir, MONOUNET_NAMES.get(name, name))

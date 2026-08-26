@@ -26,6 +26,7 @@ datasets=(          # what a run was trained on
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
+    Dataset105_spinal_cord_injury_czi_B
     Dataset204_lesion_czi_B
     Dataset206_lesion_120_czi_B
     Dataset208_combined_MYKE_smi_gfap
@@ -60,6 +61,25 @@ splits=(
 
 folds=(0)
 
+# nnU-Net baselines, which are trained outside this project and carry none of its config. They are
+# selected from their own directory layout instead: `datasets` above picks what a run was trained on,
+# `nnunet_tested_on` which of its evaluation sets to measure. Leave `nnunet_dirs` empty to skip them.
+nnunet_dirs=(
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
+)
+nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
+nnunet_tested_on=(
+    Dataset105_spinal_cord_injury_czi_B
+    Dataset207_lesion_katie_contusion_smi_gfap
+    Dataset210_interrater_MY_smi_gfap
+    Dataset211_paul_widefield_smi_gfap
+    Dataset214_mohammad_smi_gfap
+    Dataset215_yvonne_smi_gfap
+    Dataset218_eric_smi_gfap
+    # The older lesion and traced sets these runs also predicted are left out: they belong to
+    # families no table here shows.
+)
+
 export PYTHONPATH="${PYTHONPATH:-}:src"
 
 # `set -u` makes an empty array expansion an error, so each selection is only passed when it has one.
@@ -72,6 +92,22 @@ args=()
 [[ "$overwrite" -eq 1 ]] && args+=(--overwrite)
 [[ "$dry_run" -eq 1 ]] && args+=(--dry-run)
 
-"${metrics_venv/#\~/$HOME}/bin/python" -m fm_adaptation.compute_metrics \
+python=${metrics_venv/#\~/$HOME}/bin/python
+
+"$python" -m fm_adaptation.compute_metrics \
     --results-dir "$results_dir" \
     ${args[@]+"${args[@]}"}
+
+if [[ ${#nnunet_dirs[@]} -gt 0 ]]; then
+    nnunet_args=()
+    [[ ${#datasets[@]} -gt 0 ]] && nnunet_args+=(--datasets "${datasets[@]}")
+    [[ ${#folds[@]} -gt 0 ]] && nnunet_args+=(--folds "${folds[@]}")
+    [[ ${#nnunet_tested_on[@]} -gt 0 ]] && nnunet_args+=(--tested-on "${nnunet_tested_on[@]}")
+    [[ "$overwrite" -eq 1 ]] && nnunet_args+=(--overwrite)
+    [[ "$dry_run" -eq 1 ]] && nnunet_args+=(--dry-run)
+
+    "$python" -m fm_adaptation.compute_metrics \
+        --nnunet-results-dir "${nnunet_dirs[@]}" \
+        --raw-data-dir "$nnunet_raw_data_dir" \
+        ${nnunet_args[@]+"${nnunet_args[@]}"}
+fi

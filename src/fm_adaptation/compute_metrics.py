@@ -173,11 +173,34 @@ def _columns(results_dir: Path, args):
     return selected
 
 
+def _nnunet_columns(results_dir: Path, raw_data_dir: Path, args):
+    """Every (predictions dir, raw data dir) an nnU-Net results tree holds for this selection.
+
+    nnU-Net runs are trained elsewhere and carry no config of ours, so the selection comes from the
+    layout: `nnunet/<trained on>/<trainer>/fold_N/test/<tested on>/preds`. The predictions are written
+    at the case's native resolution, which is all this needs.
+    """
+    selected = []
+    for prediction_dir in sorted(results_dir.glob("nnunet/Dataset*/*/fold_*/test/Dataset*/preds")):
+        trained_on = prediction_dir.parents[4].name
+        fold = prediction_dir.parents[2].name.removeprefix("fold_")
+        if (
+            matches(trained_on, args.datasets)
+            and matches(fold, args.folds)
+            and matches(prediction_dir.parent.name, args.tested_on)
+        ):
+            selected.append((prediction_dir, raw_data_dir))
+    return selected
+
+
 def _is_current(metrics_path: Path, prediction_dir: Path):
     """Whether a metrics file already reflects every prediction beside it."""
     if not metrics_path.exists():
         return False
-    predictions = list(prediction_dir.glob("*.png"))
+    predictions = [
+        path for path in prediction_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in MASK_SUFFIXES
+    ]
     return bool(predictions) and metrics_path.stat().st_mtime >= max(
         p.stat().st_mtime for p in predictions
     )
@@ -188,7 +211,7 @@ def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=F
     output_dir = prediction_dir.parent
     dataset_dir = raw_data_dir / output_dir.name
     metrics_path = output_dir / "metrics.csv"
-    label = "/".join(p.name for p in reversed(output_dir.parents[:3])) + f" -> {output_dir.name}"
+    label = "/".join(p.name for p in reversed(output_dir.parents[:4])) + f" -> {output_dir.name}"
 
     predictions = index_by_stem(prediction_dir)
     if not predictions:
@@ -227,6 +250,12 @@ def main():
     parser.add_argument("--experiments", nargs="*", default=[], help="run names, globs or `_suffix`")
     parser.add_argument("--folds", nargs="*", default=[])
     parser.add_argument("--splits", nargs="*", default=[], help="validation, test; empty keeps both")
+    parser.add_argument("--tested-on", nargs="*", default=[], help="evaluation sets, nnU-Net only")
+    parser.add_argument(
+        "--nnunet-results-dir", nargs="*", default=[],
+        help="nnU-Net results trees to measure as well, selected by --datasets/--folds/--tested-on",
+    )
+    parser.add_argument("--raw-data-dir", help="where the nnU-Net trees' datasets live")
     parser.add_argument("--overwrite", action="store_true", help="redo columns already current")
     parser.add_argument("--dry-run", action="store_true", help="list the columns, measure nothing")
     args = parser.parse_args()
@@ -238,7 +267,14 @@ def main():
         args.experiments = [cfg["model"].get("run_name", cfg["model"]["probe"])]
         args.folds = [str(cfg["data"]["fold"])]
 
-    columns = _columns(Path(args.results_dir), args)
+    columns = _columns(Path(args.results_dir), args) if not args.nnunet_results_dir else []
+    for results_dir in args.nnunet_results_dir:
+        if not args.raw_data_dir:
+            raise RuntimeError("--nnunet-results-dir needs --raw-data-dir")
+        found = _nnunet_columns(Path(results_dir), Path(args.raw_data_dir), args)
+        if not found:
+            raise RuntimeError(f"No nnU-Net predictions under {results_dir} for this selection")
+        columns += found
     if not columns:
         raise RuntimeError(f"No predictions under {args.results_dir} for this selection")
     for prediction_dir, raw_data_dir in columns:

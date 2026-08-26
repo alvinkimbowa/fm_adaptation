@@ -90,5 +90,62 @@ class LabelResolutionTests(unittest.TestCase):
             self.assertEqual(_label_index(data.path), {})
 
 
+class NnunetColumnTests(unittest.TestCase):
+        """Selecting the baseline columns out of an nnU-Net results tree, which carries no config."""
+
+        def setUp(self):
+            self.tmp = tempfile.TemporaryDirectory()
+            self.root = Path(self.tmp.name)
+            self.results = self.root / "nnUNet_results"
+            for trained_on, tested_on in (
+                ("Dataset105_spinal_cord_injury_czi_B", "Dataset105_spinal_cord_injury_czi_B"),
+                ("Dataset105_spinal_cord_injury_czi_B", "Dataset207_lesion_katie_contusion_smi_gfap"),
+                ("Dataset116_traced_axons_images_R", "Dataset121_neurite_segmentation"),
+            ):
+                (
+                    self.results / "nnunet" / trained_on
+                    / "nnUNetTrainer__nnUNetResEncUNetMPlans__2d" / "fold_0" / "test" / tested_on
+                    / "preds"
+                ).mkdir(parents=True)
+
+        def tearDown(self):
+            self.tmp.cleanup()
+
+        def _select(self, **kwargs):
+            from argparse import Namespace
+            from fm_adaptation.compute_metrics import _nnunet_columns
+
+            args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
+            return [
+                (path.parents[4].name, path.parent.name)
+                for path, _ in _nnunet_columns(self.results, self.root, args)
+            ]
+
+        def test_every_column_is_found_without_a_selection(self):
+            self.assertEqual(len(self._select()), 3)
+
+        def test_the_selection_narrows_by_training_and_evaluation_set(self):
+            """The other runs in a shared results tree belong to work this table never shows."""
+            self.assertEqual(
+                self._select(
+                    datasets=["Dataset105_spinal_cord_injury_czi_B"],
+                    tested_on=["Dataset207_lesion_katie_contusion_smi_gfap"],
+                ),
+                [("Dataset105_spinal_cord_injury_czi_B",
+                  "Dataset207_lesion_katie_contusion_smi_gfap")],
+            )
+
+        def test_a_tif_only_column_counts_as_current(self):
+            """The czi predictions are TIFFs, so a PNG-only freshness check never sees them."""
+            from fm_adaptation.compute_metrics import _is_current
+
+            predictions = self.root / "preds"
+            predictions.mkdir()
+            (predictions / "case.tif").write_bytes(b"")
+            metrics = self.root / "metrics.csv"
+            metrics.write_text("image_id,dice,hd95,masd\n")
+            self.assertTrue(_is_current(metrics, predictions))
+
+
 if __name__ == "__main__":
     unittest.main()

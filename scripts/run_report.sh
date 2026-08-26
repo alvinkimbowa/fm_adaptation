@@ -12,12 +12,7 @@ folds=0
 models=(
     dinov3
     sam3
-    nnU-Net       # case, hyphens and underscores are ignored, so `nnunet` works too
-    XTinyUNet     # its own model, so `nnU-Net` above does not select it
-    # MonoUNet-t
-    # MonoUNet-B
-    # MonoUNet-L
-    monounet*     # all three MonoUNets
+    nnunet
 )
 
 datasets=(
@@ -27,6 +22,7 @@ datasets=(
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
+    Dataset105_spinal_cord_injury_czi_B
     Dataset204_lesion_czi_B
     Dataset206_lesion_120_czi_B
     Dataset208_combined_MYKE_smi_gfap
@@ -64,7 +60,9 @@ experiments=(
 # For comparison with MonoUNet and nnUNet
 nnunet_dirs=(
     ../xtinyunet/data/nnUNet_results
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
+nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 monounet_dirs=(
     ../monounetv2/models_v2/MonoUNetE123V2GatedDA
     ../monounetv2/models_v2/MonoUNetE123V2GatedS8DA
@@ -97,6 +95,7 @@ python -m fm_adaptation.report \
     --results-dir "$results_dir" \
     --folds "$folds" \
     --nnunet-results-dir "${nnunet_dirs[@]}" \
+    --nnunet-raw-data-dir "$nnunet_raw_data_dir" \
     --monounet-results-dir "${monounet_dirs[@]}" \
     ${report_args[@]+"${report_args[@]}"}
 
