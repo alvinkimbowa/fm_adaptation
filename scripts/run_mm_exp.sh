@@ -2,7 +2,7 @@
 # DINOv3 ViT-Adapter heads (UperNet, Mask2Former) through mmsegmentation's own training loop.
 set -euo pipefail
 
-config="${1:-configs/dinov3_linear_sci204.yaml}"
+config="${1:-configs/dinov3_linear_sci203.yaml}"
 head=${head:-upernet}      # upernet | m2f
 injector=${injector:-0}    # 1 restores ViT-Adapter's injector; the run is named <head>_inj
 epochs=${epochs:-40}
