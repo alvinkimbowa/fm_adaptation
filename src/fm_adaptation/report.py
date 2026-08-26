@@ -13,6 +13,7 @@ import yaml
 import cv2
 
 from .data import load_dataset_json, num_classes, stain_planes
+from .datasets import dataset_dir as resolve_dataset_dir, resolve
 from .metrics import compute_metrics, read_case_metrics
 from .selection import matches
 
@@ -20,11 +21,12 @@ from .selection import matches
 def _read_run(run_dir: Path):
     with open(run_dir / "config.yaml") as f:
         cfg = yaml.safe_load(f)
+    raw_data_dir = Path(cfg["data"]["raw_data_dir"])
     return (
         cfg["model"]["name"],
         cfg["model"].get("run_name", cfg["model"]["probe"]),
-        cfg["data"]["train_dataset"],
-        Path(cfg["data"]["raw_data_dir"]),
+        resolve(raw_data_dir, cfg["data"]["train_dataset"]),
+        raw_data_dir,
     )
 
 
@@ -284,48 +286,31 @@ def _shorten_name(name, limit=46):
     return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
 
-# The family is the second token of the dataset name, which groups the ultrasound sets and the lesion
-# sets without anyone maintaining a list. The evaluation sets carved out of the combined dataset break
-# that -- `interrater`, `paul` and `katie` are three families of one column each, and the row that
-# tests on them could show none of them -- so they are named back onto the family they belong to.
-FAMILY_ALIASES = {
-    "interrater": "combined",
-    "paul": "combined",
-    "katie": "combined",
-    "mohammad": "combined",
-    "yvonne": "combined",
-    "eric": "combined",
-    # The czi sets are the same lesion, annotated before the per-annotator datasets were split out.
-    # A model trained on one of them earns a row beside the annotator-trained models rather than a
-    # section of its own, which is the only place its Dataset207/210/211 columns mean anything.
-    "spinal": "combined",
-}
-
-
 # The per-annotator evaluation sets, in the order they read best. Paul is deliberately last: no model
 # trains on it and every one scores badly there, so it belongs at the edge of the table rather than in
 # among the columns being compared. A source not named here sorts after these, alphabetically.
 INDIVIDUAL_SOURCES = ("katie", "eric", "mohammad", "yvonne", "paul")
 
 
-def _individual_source(dataset):
-    """Which single annotator a dataset covers, or None if it is a combined or interrater set.
+def _individual_source(dataset, trained_on=()):
+    """Which single annotator a dataset covers, or None if it covers more than one.
 
-    Keyed on the name rather than the family token, because the token is not consistent across these
-    -- `Dataset207_lesion_katie_contusion` reads as `lesion` while `Dataset214_mohammad` reads as the
-    annotator directly.
+    Only evaluation sets qualify. A training set can name an annotator too, and several name more than
+    one, but it is a row of the table rather than a column averaged across it, so it is excluded on
+    what the records say it was fitted to rather than on how it reads.
     """
-    if "combined" in dataset or "interrater" in dataset:
+    if dataset in trained_on or "interrater" in dataset:
         return None
     lowered = dataset.lower()
-    return next((source for source in INDIVIDUAL_SOURCES if source in lowered), None)
+    found = [source for source in INDIVIDUAL_SOURCES if source in lowered]
+    return found[0] if len(found) == 1 else None
 
 
 @cache
 def _dataset_cases(raw_data_dir, dataset):
     """Every case id a dataset ships, across all of its image splits."""
     cases = set()
-    for image_dir in Path(raw_data_dir).glob(f"{dataset}/images*"):
+    for image_dir in resolve_dataset_dir(raw_data_dir, dataset).glob("images*"):
         cases |= {path.name.split("_0000")[0] for path in image_dir.glob("*_0000.*")}
     return frozenset(cases)
 
@@ -348,18 +333,8 @@ def _slide_keys(raw_data_dir, dataset):
 
 
 def _dataset_family(dataset):
-    family = dataset.split("_", maxsplit=2)[1]
-    return FAMILY_ALIASES.get(family, family)
-
-
-# A dataset can be a column in more than one table. Dataset207 is the lesion family's transfer target
-# and, at the same time, the Katie slice of the combined sets -- the combined rows are scored on
-# whatever part of it they held out, which for a Dataset208 run is the nine cases in its own imagesTs.
-EXTRA_COLUMN_FAMILIES = {"Dataset207_lesion_katie_contusion_smi_gfap": ("combined",)}
-
-
-def _column_families(dataset):
-    return {_dataset_family(dataset), *EXTRA_COLUMN_FAMILIES.get(dataset, ())}
+    """The second token of the dataset name, which is what puts a run in one table or another."""
+    return dataset.split("_", maxsplit=2)[1]
 
 
 PARAMETER_COUNTS = {}
@@ -528,7 +503,7 @@ def _experiment_order(item):
     )
 
 
-def _best_values(records, datasets, reducer, raw_dirs=None, averaged=()):
+def _best_values(records, datasets, reducer, raw_dirs=None, averaged=(), own_test_column=False):
     """Maps each column of a trained-on group to its (best, second best) values.
 
     Blanked cells are skipped and the average is taken over the same columns the table averages, so
@@ -542,7 +517,7 @@ def _best_values(records, datasets, reducer, raw_dirs=None, averaged=()):
             continue  # Nothing to compare against, so nothing is "best".
         cross = {"dice": [], "masd": []}
         for dataset in datasets:
-            metrics = _column_metrics(results, dataset, trained_on)
+            metrics = _column_metrics(results, dataset, trained_on, own_test_column)
             if metrics is None or _is_covered_by_training(
                 raw_dirs.get(trained_on), dataset, trained_on
             ):
@@ -627,8 +602,17 @@ def _collapsed_columns(datasets, records):
     }
 
 
-def _column_metrics(results, dataset, trained_on):
-    return results.get(trained_on if dataset == OWN_TEST else dataset)
+def _column_metrics(results, dataset, trained_on, own_test_column=False):
+    """What a row shows in one column, or None where it shows nothing.
+
+    A row's result on its own training set belongs in one place. Where the table carries a `Test`
+    column it goes there, and the training set's own column is left to the rows that were sent to it.
+    """
+    if dataset == OWN_TEST:
+        return results.get(trained_on)
+    if own_test_column and dataset == trained_on:
+        return None
+    return results.get(dataset)
 
 
 def _order_columns(datasets, records):
@@ -644,7 +628,7 @@ def _order_columns(datasets, records):
             return (0, dataset)
         if "interrater" in dataset:
             return (1, dataset)
-        source = _individual_source(dataset)
+        source = _individual_source(dataset, trained_on)
         if source is not None:
             return (2, INDIVIDUAL_SOURCES.index(source), dataset)
         return (3, dataset)
@@ -671,22 +655,24 @@ def _render_table(records, datasets, statistic, raw_dirs=None):
     raw_dirs = raw_dirs or {}
     collapsed = _collapsed_columns(datasets, records)
     datasets = _order_columns([d for d in datasets if d not in collapsed], records)
-    if collapsed:
+    own_test_column = bool(collapsed)
+    if own_test_column:
         datasets = [OWN_TEST] + datasets
     # The average is over the per-annotator sets only -- the combined training sets overlap each other
     # and the interrater set overlaps them too, so folding those in would weight some images several
     # times over. Averaging a single column just repeats it, so it only appears when there are more.
-    averaged = [d for d in datasets if _individual_source(d) is not None]
+    trained_on_sets = {key[2] for key in records}
+    averaged = [d for d in datasets if _individual_source(d, trained_on_sets) is not None]
     if len(averaged) < 2:
-        # Tables without per-annotator columns -- the ultrasound and czi_B families -- keep the older
-        # rule, every column but the row's own training set, rather than losing the average entirely.
+        # A table with no per-annotator columns averages every column but the row's own training set,
+        # so that it still reports one rather than nothing at all.
         averaged = [d for d in datasets if d != OWN_TEST]
     show_average = (
         max(
             (
                 sum(
                     1 for dataset in averaged
-                    if _column_metrics(results, dataset, trained_on) is not None
+                    if _column_metrics(results, dataset, trained_on, own_test_column) is not None
                     and dataset != trained_on
                     and not _is_covered_by_training(raw_dirs.get(trained_on), dataset, trained_on)
                 )
@@ -696,7 +682,7 @@ def _render_table(records, datasets, statistic, raw_dirs=None):
         )
         > 1
     )
-    best = _best_values(records, datasets, reducer, raw_dirs, averaged)
+    best = _best_values(records, datasets, reducer, raw_dirs, averaged, own_test_column)
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
@@ -726,7 +712,7 @@ def _render_table(records, datasets, statistic, raw_dirs=None):
         cross_dice, cross_masd = [], []
         for index, dataset in enumerate(datasets):
             last = index == len(datasets) - 1 and show_average
-            metrics = _column_metrics(results, dataset, trained_on)
+            metrics = _column_metrics(results, dataset, trained_on, own_test_column)
             if metrics is None:
                 parts.append(f"<td>—</td><td{_sep(last)}>—</td>")
                 continue
@@ -946,7 +932,7 @@ def main():
                 tested_on
                 for results in family_records.values()
                 for tested_on in results
-                if family in _column_families(tested_on)
+                if _dataset_family(tested_on) == family
             }
         )
         swept_bases = {
@@ -970,7 +956,7 @@ def main():
         # the ceiling every model in the table above is measured against.
         agreement = {}
         for dataset in family_datasets:
-            dataset_dir = raw_dirs.get(dataset, Path()) / dataset
+            dataset_dir = resolve_dataset_dir(raw_dirs.get(dataset, Path()), dataset)
             # Either a dataset that is entirely an interrater set (its whole split is the pairs), or
             # an older one that carries the pairs as an extra split beside its own test set.
             label_dirs = sorted(dataset_dir.glob("labels*interrater*"))

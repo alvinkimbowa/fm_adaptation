@@ -7,6 +7,8 @@ region of interest (everything above ``roi_threshold``); the masked-out surround
 
 from pathlib import Path
 
+from .datasets import dataset_dir as resolve_dataset_dir
+
 import cv2
 import numpy as np
 import torch
@@ -124,7 +126,7 @@ class CaseIndex:
 
 def build_index(raw_dir, dataset_name, split, fold, subset, patch_cfg, cache_dir) -> list[CaseIndex]:
     """One `CaseIndex` per case, with the ROI occupancy map cached to disk on first use."""
-    dataset_dir = Path(raw_dir) / dataset_name
+    dataset_dir = resolve_dataset_dir(raw_dir, dataset_name)
     ending = load_dataset_json(dataset_dir)["file_ending"]
     block = max(1, patch_cfg.patch_size // BLOCKS_PER_PATCH)
     cache_dir = Path(cache_dir)

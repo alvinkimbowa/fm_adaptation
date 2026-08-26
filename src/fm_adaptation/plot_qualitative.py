@@ -13,6 +13,7 @@ from tqdm import tqdm
 from .config import ExperimentConfig
 from .data import active_planes, load_dataset_json, rgb_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
+from .datasets import dataset_dir as resolve_dataset_dir
 from .selection import matches as _matches
 
 
@@ -37,7 +38,7 @@ def _source_dirs(cfg, dataset_name, kind, output_dir):
         split = cfg.test_split
     else:
         split = "Ts" if kind == "test" else "Tr"
-    dataset_dir = cfg.raw_data_dir / dataset_name
+    dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
     labels = dataset_dir / f"labels{split}"
     # A dataset can ship images with no annotations -- then the figure is image and prediction only.
     return (dataset_name, dataset_dir / f"images{split}",
@@ -113,7 +114,7 @@ def main():
         # its stains as separate greyscale files does not come out grey beside one storing the same
         # signal inside an RGB file.
         channel_planes = rgb_planes(
-            load_dataset_json(cfg.raw_data_dir / source_dataset)["channel_names"]
+            load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, source_dataset))["channel_names"]
         )
         # Only the planes the model was trained on, so a czi_B run's figure on a two-stain dataset
         # shows the GFAP it was given and not the SMI it never saw.

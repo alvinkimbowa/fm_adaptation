@@ -5,8 +5,9 @@ results_dir=models
 folds=0
 
 # Which rows to tabulate. Leave a list empty to keep everything it selects; otherwise list entries the
-# way plot_curves.sh and plot_qualitative.sh do -- exact names, globs, or a `_suffix` tag. `models`
-# picks the models to compare, `datasets` what a run was trained on, and `experiments` the adaptation.
+# way plot_curves.sh and plot_qualitative.sh do -- an exact name, a glob, or a `_suffix` tag, and for a
+# dataset its number alone. `models` picks the models to compare, `datasets` what a run was trained on,
+# and `experiments` the adaptation.
 # `experiments` narrows the foundation-model rows only, so the baselines stay in as the comparison;
 # use `models` to drop those.
 models=(
@@ -22,15 +23,14 @@ datasets=(
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
-    Dataset105_spinal_cord_injury_czi_B
-    Dataset204_lesion_czi_B
-    Dataset206_lesion_120_czi_B
-    Dataset208_combined_MYKE_smi_gfap
-    Dataset209_combined_MYE_smi_gfap
-    Dataset213_combined_KE_smi_gfap
-    Dataset217_combined_MY_smi_gfap
-    # Dataset203_neurite_2px_scaleaug
-    # Dataset205_neurite_2px_scaleaug_red
+    Dataset105_lesion_eric_gfap_resized
+    Dataset204_lesion_mohammad_eric_gfap
+    Dataset206_lesion_yvonne_gfap
+    Dataset208_lesion_MYKE_smi_gfap
+    Dataset209_lesion_MYE_smi_gfap
+    Dataset213_lesion_KE_smi_gfap
+    Dataset217_lesion_MY_smi_gfap
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 
 experiments=(

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from .datasets import dataset_dir
+
 import cv2
 import numpy as np
 import torch
@@ -92,7 +94,7 @@ class NnUNet2DDataset(Dataset):
     def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess,
                  channel_dropout=(), channel_dropout_p=0.5, keep_planes=None,
                  require_labels=True):
-        self.dataset_dir = Path(raw_dir) / dataset_name
+        self.dataset_dir = dataset_dir(raw_dir, dataset_name)
         self.split = split
         self.subset = subset
         self.preprocess = preprocess

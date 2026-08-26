@@ -1,16 +1,16 @@
 data:
   raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
   results_dir: models
-  train_dataset: Dataset209_combined_MYE_smi_gfap
+  train_dataset: Dataset209_lesion_MYE_smi_gfap
   test_datasets:
-    - Dataset209_combined_MYE_smi_gfap
-    - Dataset210_interrater_MY_smi_gfap
-    - Dataset211_paul_widefield_smi_gfap
-    - Dataset212_katie_dorsal_column_smi_gfap
+    - Dataset209_lesion_MYE_smi_gfap
+    - Dataset210_lesion_interrater_MY_smi_gfap
+    - Dataset211_lesion_paul_widefield_smi_gfap
+    - Dataset212_lesion_katie_dorsal_column_smi_gfap
     - Dataset207_lesion_katie_contusion_smi_gfap
-    - Dataset214_mohammad_smi_gfap
-    - Dataset215_yvonne_smi_gfap
-    - Dataset218_eric_smi_gfap
+    - Dataset214_lesion_mohammad_smi_gfap
+    - Dataset215_lesion_yvonne_smi_gfap
+    - Dataset218_lesion_eric_smi_gfap
   test_split: all
   fold: 0
   balance_sources: true

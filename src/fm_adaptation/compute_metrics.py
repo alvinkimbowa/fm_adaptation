@@ -11,7 +11,7 @@ Dice, HD95 and mean average surface distance per case, background excluded. Noth
 the predictions must already be in the space of the labels.
 
     PYTHONPATH=src python -m fm_adaptation.compute_metrics \
-        --results-dir models --datasets Dataset209_combined_MYE_smi_gfap --folds 0
+        --results-dir models --datasets 209 --folds 0
 """
 
 import argparse
@@ -31,6 +31,7 @@ from monai.metrics import (
 from monai.networks.utils import one_hot
 from PIL import Image
 
+from .datasets import dataset_dir as resolve_dataset_dir, resolve
 from .selection import matches
 
 # Paul's widefield strips are 29739x6240 -- 186 megapixels against PIL's 89 megapixel ceiling, which
@@ -141,11 +142,12 @@ def _read_run(fold_dir: Path):
     """(model, run name, trained on, raw data dir) from the config the run was launched with."""
     with open(fold_dir / "config.yaml") as f:
         cfg = yaml.safe_load(f)
+    raw_data_dir = Path(cfg["data"]["raw_data_dir"])
     return (
         cfg["model"]["name"],
         cfg["model"].get("run_name", cfg["model"]["probe"]),
-        cfg["data"]["train_dataset"],
-        Path(cfg["data"]["raw_data_dir"]),
+        resolve(raw_data_dir, cfg["data"]["train_dataset"]),
+        raw_data_dir,
     )
 
 
@@ -209,7 +211,7 @@ def _is_current(metrics_path: Path, prediction_dir: Path):
 def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=False):
     """Write `metrics.csv` beside `prediction_dir`; returns a one-line report of what happened."""
     output_dir = prediction_dir.parent
-    dataset_dir = raw_data_dir / output_dir.name
+    dataset_dir = resolve_dataset_dir(raw_data_dir, output_dir.name)
     metrics_path = output_dir / "metrics.csv"
     label = "/".join(p.name for p in reversed(output_dir.parents[:4])) + f" -> {output_dir.name}"
 

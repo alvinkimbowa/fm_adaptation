@@ -16,14 +16,13 @@ datasets=(
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
-    Dataset204_lesion_czi_B
-    Dataset206_lesion_120_czi_B
-    Dataset208_combined_MYKE_smi_gfap
-    Dataset209_combined_MYE_smi_gfap
-    Dataset213_combined_KE_smi_gfap
-    Dataset217_combined_MY_smi_gfap
-    # Dataset203_neurite_2px_scaleaug
-    # Dataset205_neurite_2px_scaleaug_red
+    Dataset204_lesion_mohammad_eric_gfap
+    Dataset206_lesion_yvonne_gfap
+    Dataset208_lesion_MYKE_smi_gfap
+    Dataset209_lesion_MYE_smi_gfap
+    Dataset213_lesion_KE_smi_gfap
+    Dataset217_lesion_MY_smi_gfap
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 experiments=(
     # linear

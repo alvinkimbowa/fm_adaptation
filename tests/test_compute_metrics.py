@@ -98,9 +98,9 @@ class NnunetColumnTests(unittest.TestCase):
             self.root = Path(self.tmp.name)
             self.results = self.root / "nnUNet_results"
             for trained_on, tested_on in (
-                ("Dataset105_spinal_cord_injury_czi_B", "Dataset105_spinal_cord_injury_czi_B"),
-                ("Dataset105_spinal_cord_injury_czi_B", "Dataset207_lesion_katie_contusion_smi_gfap"),
-                ("Dataset116_traced_axons_images_R", "Dataset121_neurite_segmentation"),
+                ("Dataset105_lesion_eric_gfap_resized", "Dataset105_lesion_eric_gfap_resized"),
+                ("Dataset105_lesion_eric_gfap_resized", "Dataset207_lesion_katie_contusion_smi_gfap"),
+                ("Dataset116_neurites_mohammad_smi", "Dataset121_neurites_yvonne_smi"),
             ):
                 (
                     self.results / "nnunet" / trained_on
@@ -124,14 +124,21 @@ class NnunetColumnTests(unittest.TestCase):
         def test_every_column_is_found_without_a_selection(self):
             self.assertEqual(len(self._select()), 3)
 
+        def test_a_number_selects_a_column(self):
+            self.assertEqual(
+                self._select(datasets=["105"], tested_on=["207"]),
+                [("Dataset105_lesion_eric_gfap_resized",
+                  "Dataset207_lesion_katie_contusion_smi_gfap")],
+            )
+
         def test_the_selection_narrows_by_training_and_evaluation_set(self):
             """The other runs in a shared results tree belong to work this table never shows."""
             self.assertEqual(
                 self._select(
-                    datasets=["Dataset105_spinal_cord_injury_czi_B"],
+                    datasets=["Dataset105_lesion_eric_gfap_resized"],
                     tested_on=["Dataset207_lesion_katie_contusion_smi_gfap"],
                 ),
-                [("Dataset105_spinal_cord_injury_czi_B",
+                [("Dataset105_lesion_eric_gfap_resized",
                   "Dataset207_lesion_katie_contusion_smi_gfap")],
             )
 

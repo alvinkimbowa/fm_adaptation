@@ -6,7 +6,7 @@ Here the cases are chosen once and every model is drawn on the same ones, so a r
 comparison across the columns.
 
     python -m fm_adaptation.compare_qualitative \
-        --datasets Dataset204_lesion_czi_B --splits test \
+        --datasets 204 --splits test \
         --experiments upernet_inj_ft_ours upernet_ours --rows 5
 
 Drawing is `qualitative.py`'s: the same styles, the same colours, the same channel handling. Only the
@@ -49,6 +49,7 @@ from .qualitative import (
     select_cases,
     style_from_arguments,
 )
+from .datasets import dataset_dir as resolve_dataset_dir
 from .selection import matches as _matches
 
 
@@ -386,7 +387,7 @@ def main():
                     split = cfg.test_split if tested_on != cfg.train_dataset else (
                         "Ts" if kind == "test" else "Tr"
                     )
-                dataset_dir = cfg.raw_data_dir / source_dataset
+                dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
                 images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
                 # No annotations, no ground-truth column: the comparison is then between the models.
                 if not (labels.is_dir() and any(labels.iterdir())):
@@ -397,7 +398,7 @@ def main():
                 # part of what another column was given.
                 trained_on = {ExperimentConfig.from_yaml(run[1] / "config.yaml").train_dataset
                               for run in runs}
-                keeps = [active_planes(load_dataset_json(cfg.raw_data_dir / t)["channel_names"])
+                keeps = [active_planes(load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, t))["channel_names"])
                          for t in sorted(trained_on)]
                 keep = None if any(k is None for k in keeps) else frozenset().union(*keeps)
                 if channel_planes and keep is not None:

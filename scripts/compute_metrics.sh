@@ -26,15 +26,14 @@ datasets=(          # what a run was trained on
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
-    Dataset105_spinal_cord_injury_czi_B
-    Dataset204_lesion_czi_B
-    Dataset206_lesion_120_czi_B
-    Dataset208_combined_MYKE_smi_gfap
-    Dataset209_combined_MYE_smi_gfap
-    Dataset213_combined_KE_smi_gfap
-    Dataset217_combined_MY_smi_gfap
-    # Dataset203_neurite_2px_scaleaug
-    # Dataset205_neurite_2px_scaleaug_red
+    Dataset105_lesion_eric_gfap_resized
+    Dataset204_lesion_mohammad_eric_gfap
+    Dataset206_lesion_yvonne_gfap
+    Dataset208_lesion_MYKE_smi_gfap
+    Dataset209_lesion_MYE_smi_gfap
+    Dataset213_lesion_KE_smi_gfap
+    Dataset217_lesion_MY_smi_gfap
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 
 experiments=(       # the adaptation, i.e. the run name
@@ -69,13 +68,13 @@ nnunet_dirs=(
 )
 nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 nnunet_tested_on=(
-    Dataset105_spinal_cord_injury_czi_B
+    Dataset105_lesion_eric_gfap_resized
     Dataset207_lesion_katie_contusion_smi_gfap
-    Dataset210_interrater_MY_smi_gfap
-    Dataset211_paul_widefield_smi_gfap
-    Dataset214_mohammad_smi_gfap
-    Dataset215_yvonne_smi_gfap
-    Dataset218_eric_smi_gfap
+    Dataset210_lesion_interrater_MY_smi_gfap
+    Dataset211_lesion_paul_widefield_smi_gfap
+    Dataset214_lesion_mohammad_smi_gfap
+    Dataset215_lesion_yvonne_smi_gfap
+    Dataset218_lesion_eric_smi_gfap
     # The older lesion and traced sets these runs also predicted are left out: they belong to
     # families no table here shows.
 )

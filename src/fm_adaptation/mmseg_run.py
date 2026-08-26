@@ -19,6 +19,7 @@ from mmengine.registry import init_default_scope
 from mmengine.runner import Runner
 
 from .config import ExperimentConfig
+from .datasets import dataset_dir as resolve_dataset_dir
 from .data import _case_ids, load_dataset_json, num_classes
 from .dinov3_mmseg import head_cfg
 from .metrics import CaseMetrics, compute_metrics, write_metrics
@@ -150,7 +151,7 @@ def _predict(runner, cfg, test_pipeline, run_dir, classes, ending):
             continue
         if cfg.fold != "all":
             jobs.append((name, "Tr", "val", "validation"))
-        if (cfg.raw_data_dir / name / "imagesTs").is_dir():
+        if (resolve_dataset_dir(cfg.raw_data_dir, name) / "imagesTs").is_dir():
             jobs.append((name, "Ts", "eval", "test"))
 
     for dataset_name, split, subset, kind in jobs:

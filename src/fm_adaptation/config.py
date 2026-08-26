@@ -3,6 +3,8 @@ from pathlib import Path
 
 import yaml
 
+from .datasets import resolve
+
 
 @dataclass(frozen=True)
 class PatchConfig:
@@ -71,11 +73,15 @@ class ExperimentConfig:
         channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
         if not 0.0 <= channel_dropout_p <= 1.0:
             raise ValueError("data.channel_dropout_p must be between 0 and 1")
+        # Datasets may be given by number alone. Naming them the way the raw data directory does, once
+        # and here, is what lets every path built from a config -- the run directory, the caches, the
+        # prediction and metrics directories -- read the same as the data it was made from.
+        raw_data_dir = Path(data["raw_data_dir"])
         return cls(
-            raw_data_dir=Path(data["raw_data_dir"]),
+            raw_data_dir=raw_data_dir,
             results_dir=Path(data.get("results_dir", "models")),
-            train_dataset=str(data["train_dataset"]),
-            test_datasets=tuple(str(x) for x in data.get("test_datasets", [])),
+            train_dataset=resolve(raw_data_dir, data["train_dataset"]),
+            test_datasets=tuple(resolve(raw_data_dir, x) for x in data.get("test_datasets", [])),
             test_split=str(data.get("test_split", "Tr")),
             fold=str(data["fold"]),
             model_name=str(model["name"]),
