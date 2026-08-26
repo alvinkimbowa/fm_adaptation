@@ -11,7 +11,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import active_planes, load_dataset_json, rgb_planes
+from .data import load_dataset_json, rgb_planes, trained_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .datasets import dataset_dir as resolve_dataset_dir
 from .selection import matches as _matches
@@ -118,7 +118,9 @@ def main():
         )
         # Only the planes the model was trained on, so a czi_B run's figure on a two-stain dataset
         # shows the GFAP it was given and not the SMI it never saw.
-        keep = active_planes(load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"])
+        keep = trained_planes(
+            load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"], cfg.stains
+        )
         if channel_planes and keep is not None:
             channel_planes = {stored: rgb for stored, rgb in channel_planes.items() if rgb in keep}
         path = render(

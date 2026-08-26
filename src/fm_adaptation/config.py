@@ -58,6 +58,7 @@ class ExperimentConfig:
     seed: int
     device: str
     patching: "PatchConfig | None"
+    stains: tuple[str, ...]
     channel_dropout: tuple[str, ...]
     channel_dropout_p: float
     balance_sources: bool
@@ -131,6 +132,9 @@ class ExperimentConfig:
             weight_decay=float(training.get("weight_decay", 0.0)),
             seed=int(training.get("seed", 0)),
             device=str(training.get("device", "cuda")),
+            # The stains the training images actually carry, where that is narrower than what the
+            # dataset declares; empty means take the declaration at its word.
+            stains=tuple(str(x).upper() for x in data.get("stains", [])),
             channel_dropout=tuple(str(x).upper() for x in data.get("channel_dropout", [])),
             channel_dropout_p=channel_dropout_p,
             balance_sources=bool(data.get("balance_sources", False)),

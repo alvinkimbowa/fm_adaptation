@@ -11,7 +11,7 @@ from .config import ExperimentConfig
 from .data import (
     NnUNet2DDataset,
     _case_ids,
-    active_planes,
+    trained_planes,
     collate_cases,
     load_dataset_json,
     num_classes,
@@ -166,7 +166,9 @@ def main():
     # The planes this model was trained to look at. An evaluation set carrying more stains than the
     # training set is read down to the ones it shares -- a czi_B model sees GFAP in blue and never
     # meets SMI, which it has no weights for.
-    keep_planes = active_planes(load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"])
+    keep_planes = trained_planes(
+        load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"], cfg.stains
+    )
     seen = _seen_in_training(cfg)
 
     for dataset_name, split, subset, kind, column_name in _jobs(cfg, datasets):

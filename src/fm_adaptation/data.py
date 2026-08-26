@@ -57,6 +57,26 @@ def active_planes(channel_names: dict) -> frozenset[int] | None:
     return frozenset(planes)
 
 
+def trained_planes(channel_names: dict, stains=()) -> frozenset[int] | None:
+    """The planes a model actually saw, which is not always what its training set declares.
+
+    `Dataset218_lesion_eric_smi_gfap` declares SMI and GFAP but ships a blank SMI file for every
+    case, so a model trained on it has only ever seen GFAP. Naming the stains in the config keeps
+    such a run from being handed real SMI by an evaluation set that has it.
+    """
+    if not stains:
+        return active_planes(channel_names)
+    planes = set()
+    for stain in (str(name).upper() for name in stains):
+        if stain in STAIN_PLANES:
+            planes.add(STAIN_PLANES[stain])
+        elif stain in PLANE_LETTERS:
+            planes.add(PLANE_LETTERS[stain])
+        else:
+            raise ValueError(f"unknown stain: {stain}")
+    return frozenset(planes)
+
+
 def rgb_planes(channel_names: dict) -> dict[int, int] | None:
     """`stain_planes` keyed the way a reader wants it: {stored channel: RGB plane}, or None.
 

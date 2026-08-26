@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import torch
 
-from fm_adaptation.data import NnUNet2DDataset, active_planes, stain_planes
+from fm_adaptation.data import NnUNet2DDataset, active_planes, stain_planes, trained_planes
 from fixtures import DatasetFixture, preprocess
 
 
@@ -104,6 +104,16 @@ class LoaderTests(unittest.TestCase):
             self.assertFalse(blue[0].any())
             self.assertFalse(blue[1].any())
             self.assertTrue(torch.all(blue[2] == 47))
+
+        def test_a_run_can_narrow_the_planes_its_training_set_declares(self):
+            """Dataset218 declares SMI and GFAP but ships a blank SMI, so its runs are GFAP-only."""
+            declared = {"0": "SMI", "1": "GFAP"}
+            self.assertEqual(trained_planes(declared), frozenset({0, 2}))
+            self.assertEqual(trained_planes(declared, ["GFAP"]), frozenset({2}))
+            # Plane letters name the same thing the older datasets do.
+            self.assertEqual(trained_planes(declared, ["B"]), frozenset({2}))
+            with self.assertRaises(ValueError):
+                trained_planes(declared, ["DAPI"])
 
         def test_images_without_labels(self):
             """Dataset212 ships images to predict and nothing to score them against."""
