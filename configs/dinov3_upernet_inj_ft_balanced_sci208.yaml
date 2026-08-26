@@ -4,10 +4,10 @@ data:
   train_dataset: Dataset208_lesion_MYKE_smi_gfap
   test_datasets:
     - Dataset208_lesion_MYKE_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
     - Dataset210_lesion_interrater_MY_smi_gfap
     - Dataset211_lesion_paul_widefield_smi_gfap
     - Dataset212_lesion_katie_dorsal_column_smi_gfap
-    - Dataset207_lesion_katie_contusion_smi_gfap
     - Dataset214_lesion_mohammad_smi_gfap
     - Dataset215_lesion_yvonne_smi_gfap
     - Dataset218_lesion_eric_smi_gfap

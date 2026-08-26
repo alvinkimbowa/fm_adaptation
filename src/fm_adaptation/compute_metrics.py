@@ -31,7 +31,7 @@ from monai.metrics import (
 from monai.networks.utils import one_hot
 from PIL import Image
 
-from . import agreement, overlap
+from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, resolve
 from .selection import matches
 
@@ -282,19 +282,6 @@ def main():
         raise RuntimeError(f"No predictions under {args.results_dir} for this selection")
     for prediction_dir, raw_data_dir in columns:
         print(measure(prediction_dir, raw_data_dir, args.overwrite, args.dry_run), flush=True)
-
-    # Which datasets are exports of the same images, so the report can tell an evaluation set that
-    # sits inside a training set from one the model has never met.
-    overlap_path = Path(args.results_dir) / "overlap.csv"
-    dataset_dirs = sorted({resolve_dataset_dir(raw, d.parent.name) for d, raw in columns})
-    if overlap_path.exists() and not args.overwrite:
-        print("overlap: up to date", flush=True)
-    elif args.dry_run:
-        print(f"overlap: would measure {len(dataset_dirs)} datasets", flush=True)
-    else:
-        rows = overlap.measure(dataset_dirs)
-        overlap.write(rows, overlap_path)
-        print(f"overlap: measured {sum(1 for r in rows if r[2])} sharing pairs", flush=True)
 
     # Agreement between annotators is a property of a dataset rather than of any run, so it is
     # measured once for every evaluation set that ships the same image drawn twice.
