@@ -9,11 +9,23 @@ import torch
 
 
 def preprocess(image, mask):
-    """The identity preprocessing: tensors straight through, no resize or padding."""
+    """The identity preprocessing: tensors straight through, no resize or padding.
+
+    The geometry a real encoder reports is still filled in -- it says the whole canvas is image --
+    because the augmentation reads it to know where the section ends and the letterbox begins.
+    """
+    height, width = mask.shape
     return (
         torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1),
         torch.from_numpy(mask.copy()),
-        {},
+        {
+            "original_height": height,
+            "original_width": width,
+            "resized_height": height,
+            "resized_width": width,
+            "pad_top": 0,
+            "pad_left": 0,
+        },
     )
 
 

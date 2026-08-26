@@ -23,6 +23,21 @@ class PatchConfig:
 
 
 @dataclass(frozen=True)
+class AugmentConfig:
+    """Geometric augmentation of the training images: flips and a small rotation."""
+
+    hflip: bool = True
+    vflip: bool = True
+    # Degrees; each case is rotated by an angle drawn uniformly from [-rotation, +rotation].
+    rotation: float = 0.0
+    flip_p: float = 0.5
+    # Scale drawn uniformly from [zoom_min, zoom_max]; 1.0/1.0 is no zoom. A zoom that would carry
+    # part of the annotation off the canvas is reduced until it fits -- see `_augment`.
+    zoom_min: float = 1.0
+    zoom_max: float = 1.0
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     raw_data_dir: Path
     results_dir: Path
@@ -58,6 +73,7 @@ class ExperimentConfig:
     seed: int
     device: str
     patching: "PatchConfig | None"
+    augment: "AugmentConfig | None"
     stains: tuple[str, ...]
     channel_dropout: tuple[str, ...]
     channel_dropout_p: float
@@ -71,6 +87,7 @@ class ExperimentConfig:
         model = cfg["model"]
         training = cfg["training"]
         patching = cfg.get("patching") or {}
+        augment = data.get("augment") or {}
         channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
         if not 0.0 <= channel_dropout_p <= 1.0:
             raise ValueError("data.channel_dropout_p must be between 0 and 1")
@@ -138,6 +155,20 @@ class ExperimentConfig:
             channel_dropout=tuple(str(x).upper() for x in data.get("channel_dropout", [])),
             channel_dropout_p=channel_dropout_p,
             balance_sources=bool(data.get("balance_sources", False)),
+            # Absent means no augmentation, so every config written before this existed trains
+            # exactly as it did.
+            augment=(
+                AugmentConfig(
+                    hflip=bool(augment.get("hflip", True)),
+                    vflip=bool(augment.get("vflip", True)),
+                    rotation=float(augment.get("rotation", 0.0)),
+                    flip_p=float(augment.get("flip_p", 0.5)),
+                    zoom_min=float(augment.get("zoom_min", 1.0)),
+                    zoom_max=float(augment.get("zoom_max", 1.0)),
+                )
+                if augment
+                else None
+            ),
             patching=(
                 PatchConfig(
                     patch_size=int(patching.get("patch_size", 1008)),

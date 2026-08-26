@@ -29,11 +29,25 @@ class ConfigTests(unittest.TestCase):
                 "upernet_inj_ft_dropany_ours": (("SMI", "GFAP"), False),
                 "upernet_inj_ft_balanced_ours": ((), True),
                 "upernet_inj_ft_balanced_dropany_ours": (("SMI", "GFAP"), True),
+                "upernet_inj_ft_balanced_aug_ours": ((), True),
+                "upernet_inj_ft_balanced_dropsmi_aug_ours": (("SMI",), True),
             }
             self.assertEqual(set(configs), set(expected))
             for name, (dropout, balanced) in expected.items():
                 self.assertEqual(configs[name].channel_dropout, dropout, name)
                 self.assertEqual(configs[name].balance_sources, balanced, name)
+            # The two `aug` runs are the only ones with augmentation, and they carry the same one.
+            augmented = sorted(name for name, cfg in configs.items() if cfg.augment is not None)
+            self.assertEqual(augmented, [
+                "upernet_inj_ft_balanced_aug_ours", "upernet_inj_ft_balanced_dropsmi_aug_ours",
+            ])
+            for name in augmented:
+                augment = configs[name].augment
+                self.assertEqual(
+                    (augment.hflip, augment.vflip, augment.rotation,
+                     augment.zoom_min, augment.zoom_max),
+                    (True, True, 10.0, 0.5, 1.5), name,
+                )
 
 if __name__ == "__main__":
     unittest.main()

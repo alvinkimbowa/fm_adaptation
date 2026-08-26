@@ -33,6 +33,9 @@ def _raw_dataset(cfg, preprocess, subset):
         preprocess,
         channel_dropout=cfg.channel_dropout,
         channel_dropout_p=cfg.channel_dropout_p,
+        # Augment what the model learns from and nothing else: validation has to stay comparable
+        # across runs, and prediction never builds its datasets through here at all.
+        augment=cfg.augment if subset == "train" else None,
     )
 
 
@@ -55,6 +58,10 @@ def _validate_data_mode(cfg, encoder_trains=None):
         raise ValueError("patchwise loading is not supported for multi-stain datasets")
     if encoder_trains is False and cfg.channel_dropout:
         raise ValueError("channel_dropout requires an uncached, trainable encoder")
+    # Cached features were computed once, from the unaugmented image; augmenting would silently do
+    # nothing, since the cached loader never opens an image again.
+    if encoder_trains is False and cfg.augment is not None:
+        raise ValueError("augment requires an uncached, trainable encoder")
 
 
 def _cache_features(cfg, encoder, dataset, device):

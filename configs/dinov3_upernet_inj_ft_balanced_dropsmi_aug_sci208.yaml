@@ -1,0 +1,55 @@
+data:
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset208_lesion_MYKE_smi_gfap
+  test_datasets:
+    - Dataset208_lesion_MYKE_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
+    - Dataset210_lesion_interrater_MY_smi_gfap
+    - Dataset211_lesion_paul_widefield_smi_gfap
+    - Dataset212_lesion_katie_dorsal_column_smi_gfap
+    - Dataset214_lesion_mohammad_smi_gfap
+    - Dataset215_lesion_yvonne_smi_gfap
+    - Dataset218_lesion_eric_smi_gfap
+  test_split: all
+  fold: 0
+  # Flips, rotation and zoom, on the square canvas the encoder sees. A rotation is cropped back to
+  # what is real image in every row and column, so nothing invented reaches the model; 10 degrees is
+  # where that crop still leaves a usable section, since these are four times taller than wide. A
+  # zoom that would carry the annotation off the canvas is reduced until it fits.
+  augment:
+    hflip: true
+    vflip: true
+    rotation: 10
+    zoom_min: 0.5
+    zoom_max: 1.5
+  balance_sources: true
+  # Eric's cases are the only ones in MYKE with no SMI, so "GFAP alone" and "segment like Eric" are
+  # the same signal to a model trained on this set. Dropping SMI from the other annotators half the
+  # time breaks that: it only fires where both stains are actually present, so Eric's own cases are
+  # untouched and GFAP-only stops identifying him.
+  channel_dropout:
+    - SMI
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  train_encoder: true
+  run_name: upernet_inj_ft_balanced_dropsmi_aug_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda

@@ -29,13 +29,15 @@ experiments=(
     # upernet_inj
     # upernet_ours
     # upernet_inj_ours
-    upernet_inj_ft_ours
-    upernet_inj_ft_dropsmi_ours
-    upernet_inj_ft_dropany_ours
+    # upernet_inj_ft_ours
+    # upernet_inj_ft_dropsmi_ours
+    # upernet_inj_ft_dropany_ours
     upernet_inj_ft_balanced_ours
-    upernet_inj_ft_balanced_dropany_ours
+    # upernet_inj_ft_balanced_dropany_ours
+    upernet_inj_ft_balanced_aug_ours
+    upernet_inj_ft_balanced_dropsmi_aug_ours
     # upernet_inj_ft_poly_ours
-    upernet_inj_ft_init_ours
+    # upernet_inj_ft_init_ours
     # upernet_inj_ft_vitb_ours
     # upernet_inj_ft_vits_ours
     # upernet_inj_ft_vitb_poly_ours

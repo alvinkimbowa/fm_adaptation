@@ -47,6 +47,8 @@ experiments=(
     upernet_inj_ft_dropany_ours
     upernet_inj_ft_balanced_ours
     upernet_inj_ft_balanced_dropany_ours
+    upernet_inj_ft_balanced_aug_ours
+    upernet_inj_ft_balanced_dropsmi_aug_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # upernet_inj_ft_vitb_ours
