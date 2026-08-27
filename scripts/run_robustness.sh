@@ -22,7 +22,7 @@ transforms=(
     "drop SMI"
 )
 
-output_dir=${output_dir:-results_analysis/robustness}
+output_dir=${output_dir:-results/robustness}
 checkpoint=${checkpoint:-final}
 figures=${figures:-1}
 gpu_id=${gpu_id:-0}

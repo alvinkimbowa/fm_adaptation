@@ -6,7 +6,13 @@ import torch
 
 from fm_adaptation.data import STAIN_PLANES, NnUNet2DDataset
 from fixtures import DatasetFixture, preprocess
-from fm_adaptation.robustness import TRANSFORMS, Transform, apply, invert, smi_cases, table
+try:
+    from fm_adaptation.robustness import TRANSFORMS, Transform, apply, invert, smi_cases, table
+except ImportError as error:  # pragma: no cover - environment, not behaviour
+    # Scoring needs monai, which only .venv-mm carries; the figure tests need scikit-image, which
+    # only the SAM3 environment has. Skipping keeps one interpreter from failing to collect what the
+    # other checks.
+    raise unittest.SkipTest(f"fm_adaptation.robustness unavailable here: {error}") from error
 
 
 FILL = [-2.0, -2.0, -2.0]

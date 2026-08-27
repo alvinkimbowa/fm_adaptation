@@ -1,23 +1,23 @@
 """How far a finished model's score moves when the same section arrives flipped, turned or rescaled.
 
-The main table cannot answer this. A run that scores 0.85 on its test set but collapses when the
-image is mirrored has learned the orientation of its training set rather than the anatomy, and that
-is the case for training with augmentation. Nothing here trains: it reads a checkpoint and evaluates
-it under transforms it never saw.
+A run that scores 0.85 on its own test set but collapses when the image is mirrored has learned the
+orientation of its training set rather than the anatomy, and that is the case for training with
+augmentation. An ordinary evaluation never asks: it shows each section the one way round it was
+stored. Nothing here trains -- it reads a checkpoint and evaluates it under transforms it never saw.
 
 Every score is measured in the case's *own* frame, at its own resolution, against the label the
 annotator drew -- the transform is applied to the input, and the prediction is carried back through
-the inverse before it is written. So these numbers sit directly beside the ones in the main report,
-and the `none` row must reproduce them.
+the inverse before it is written. Nothing about the measurement changes between rows, so a row means
+only what its transform did, and the `none` row is an ordinary evaluation.
 
 Unlike `data._augment`, a rotation here is not cropped back to real image. Cropping is a training
 concern: a model must not be fitted on invented black. A section that genuinely arrives rotated does
 have black corners, and cropping them away would change the field of view instead of measuring
 whether the model minds.
 
-Results land outside `models/` because `report.py` keys its table on the dataset a column was
-evaluated on, whatever directory it came from, and a robustness column would silently overwrite the
-ordinary one.
+Results land in `results/robustness/` rather than under a run directory: a transformed score is not
+one of that run's evaluation columns, and anything walking a run's output would be right to read it
+as one.
 
     PYTHONPATH=src python -m fm_adaptation.robustness \
         --config configs/dinov3_upernet_inj_ft_balanced_sci208.yaml
@@ -199,7 +199,7 @@ def table(rows, columns, smi_counts, run_label):
     lines = [
         f"# Robustness of {run_label}", "",
         "Mean dice, measured at each case's own resolution against its own label, so these sit "
-        "beside the main table. Rotation and scale are applied to the input and undone on the "
+        "comparable with an ordinary evaluation. Rotation and scale are applied to the input and undone on the "
         "prediction; nothing is cropped away first.", "",
         heading, divider,
     ]
@@ -207,7 +207,7 @@ def table(rows, columns, smi_counts, run_label):
         lines.append(f"| {name} | " + " | ".join(_cell(scores.get(c)) for c in columns) + " |")
 
     # Only when `none` was actually evaluated. A partial sweep that skipped it has no reference of
-    # its own, and subtracting the main table's numbers here would quietly mix two computations.
+    # its own, and borrowing a reference computed elsewhere would quietly mix two computations.
     if "none" in dict(rows):
         reference = dict(rows)["none"]
         lines += ["", "Change against `none`.", "", heading, divider]
@@ -233,13 +233,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", choices=("best", "final", "last"), default="final")
-    parser.add_argument("--output-dir", default="results_analysis/robustness")
+    parser.add_argument("--output-dir", default="results/robustness")
     parser.add_argument("--overwrite", action="store_true",
                         help="re-predict transforms that already have predictions")
     parser.add_argument("--transforms", nargs="+", choices=[t.name for t in TRANSFORMS],
                         help="run only these rows. Without `none` among them there is no reference "
-                             "to subtract, so the change block is left out and the main table is "
-                             "what the row should be read against. Defaults to the whole sweep.")
+                             "to subtract, so the change block is left out and each row stands as an "
+                             "absolute score. Defaults to the whole sweep.")
     args = parser.parse_args()
 
     transforms = TRANSFORMS
@@ -257,12 +257,13 @@ def main():
     fill = encoder_black(model.encoder.preprocess)
     seen = _seen_in_training(cfg)
 
-    # The same jobs `predict.py` runs, so the cases are the cases the main table reports. A column
+    # The same jobs an ordinary prediction runs, so a transformed row covers the cases an untransformed
+    # one would. A column
     # can be reached by more than one job -- `test_split: all` evaluates a set that ships both
     # `imagesTr` and `imagesTs` whole -- and each keeps its own loader, since a split is a directory
     # and not just a list of ids. They write into one directory, which is what makes them one column.
     jobs, columns = {}, []
-    selected = list(_jobs(cfg, cfg.test_datasets or (cfg.train_dataset,)))
+    selected = list(_jobs(cfg, cfg.test_datasets or (cfg.train_dataset,), seen))
     # The training set is reported once: on its held-out `imagesTs` where there is one, otherwise on
     # the fold's validation split. Scoring both into one column would mix them.
     if any(kind == "test" and column == cfg.train_dataset for _, _, _, kind, column in selected):

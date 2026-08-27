@@ -1,93 +1,130 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from fm_adaptation.report import (
-    ANNOTATOR,
-    _annotator,
-    _annotator_columns,
-    _column_annotator,
-)
+from fm_adaptation.report import _best_values, _in_domain, _model_matches, _pool_folds
+from fixtures import DatasetFixture
 
 
-def column(cases, dice=None):
-    dice = np.arange(len(cases), dtype=float) if dice is None else np.asarray(dice, dtype=float)
+def column(cases, dice):
+    dice = np.asarray(dice, dtype=float)
     return {"dice": dice, "masd": dice.copy(), "cases": np.array(cases)}
 
 
-class AnnotatorTests(unittest.TestCase):
-    """Who drew a case, read off its id."""
+class ModelMatchTests(unittest.TestCase):
+    """`--models`, matched the way someone would type it."""
 
-    def test_reads_the_source_the_id_names(self):
-        self.assertEqual(_annotator("Mohammad__10"), "Mohammad")
-        self.assertEqual(_annotator("Eric__Rat-12_slide-5_Section-6"), "Eric")
+    def test_case_and_hyphens_are_ignored(self):
+        self.assertTrue(_model_matches("nnU-Net", ["nnunet"]))
+        self.assertTrue(_model_matches("nnU-Net", ["nnU_net"]))
 
-    def test_a_batch_or_an_injury_model_is_not_a_second_annotator(self):
-        self.assertEqual(_annotator("Yvonne_b2__Cond-Lesion-GelMa-rods-Rat-10"), "Yvonne")
-        self.assertEqual(_annotator("Katie_contusion__CLE2-rat1_13-3"), "Katie")
+    def test_a_plans_variant_answers_to_its_base_name(self):
+        self.assertTrue(_model_matches("nnU-Net (Res Enc M)", ["nnunet"]))
+        self.assertFalse(_model_matches("nnU-Net (Res Enc M)", ["dinov3"]))
 
-    def test_an_id_that_names_nobody_names_nobody(self):
-        self.assertIsNone(_annotator("Drug-study_3_GFAP_Rat-12_slide-5_analyzed_043"))
+    def test_a_glob_can_narrow_to_one_variant(self):
+        self.assertTrue(_model_matches("nnU-Net (xtiny32)", ["*xtiny*"]))
+        self.assertFalse(_model_matches("nnU-Net (Res Enc M)", ["*xtiny*"]))
 
-
-class ColumnAnnotatorTests(unittest.TestCase):
-    def test_a_column_of_one_annotator_is_that_annotator(self):
-        self.assertEqual(_column_annotator(column(["Mohammad__1", "Mohammad__2"])), "Mohammad")
-
-    def test_a_column_of_two_annotators_belongs_to_neither(self):
-        self.assertIsNone(_column_annotator(column(["Mohammad__1", "Yvonne__2"])))
-
-    def test_a_column_whose_ids_name_nobody_belongs_to_nobody(self):
-        self.assertIsNone(_column_annotator(column(["case_1", "case_2"])))
+    def test_an_empty_list_keeps_everything(self):
+        self.assertTrue(_model_matches("dinov3", []))
 
 
-class AnnotatorColumnTests(unittest.TestCase):
-    """The two places a per-annotator column can come from, and which one wins."""
+class PoolFoldTests(unittest.TestCase):
+    """Several folds compiled into one row."""
+
+    def records(self, folds):
+        return {
+            ("dinov3", "run", "Dataset208_MYKE", fold): {"Dataset211_paul": column([f"p{fold}"], [0.5])}
+            for fold in folds
+        }
+
+    def test_the_requested_folds_cases_end_up_in_one_row(self):
+        pooled = _pool_folds(self.records(["0", "1", "2"]), ["0", "1", "2"])
+        self.assertEqual(len(pooled), 1)
+        (key,) = pooled
+        self.assertEqual(sorted(pooled[key]["Dataset211_paul"]["cases"]), ["p0", "p1", "p2"])
+
+    def test_a_fold_that_was_not_asked_for_is_dropped(self):
+        pooled = _pool_folds(self.records(["0", "1"]), ["0"])
+        (key,) = pooled
+        self.assertEqual(list(pooled[key]["Dataset211_paul"]["cases"]), ["p0"])
+
+    def test_a_row_is_labelled_with_the_folds_it_holds(self):
+        """A run that has only fold 0 must not read as an average over three."""
+        pooled = _pool_folds(self.records(["0"]), ["0", "1", "2"])
+        self.assertEqual([key[3] for key in pooled], ["0"])
+        pooled = _pool_folds(self.records(["0", "1", "2"]), ["0", "1", "2"])
+        self.assertEqual([key[3] for key in pooled], ["0,1,2"])
+
+
+class InDomainTests(unittest.TestCase):
+    """Which cells are scored on images the row's training set also holds."""
 
     def setUp(self):
-        self.trained_on = "Dataset217_lesion_MY_smi_gfap"
-        self.key = ("dinov3", "upernet_inj_ft_ours", self.trained_on, "0")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        combined = DatasetFixture(self.root, "Dataset208_combined", {"0": "SMI", "1": "GFAP"})
+        for case_id in ("Katie__one", "Katie__two"):
+            combined.add(case_id, planes={0: 1, 1: 2})
+        katie = DatasetFixture(self.root, "Dataset207_katie", {"0": "SMI", "1": "GFAP"})
+        katie.add("Katie__one", planes={0: 1, 1: 2})
+        katie.add("Katie__held", split="Ts", planes={0: 1, 1: 2})
+        paul = DatasetFixture(self.root, "Dataset211_paul", {"0": "SMI", "1": "GFAP"})
+        paul.add("Paul__a1", split="Ts", planes={0: 1, 1: 2})
+        self.names = [combined.name, katie.name, paul.name]
+        self.raw_dirs = {name: self.root for name in self.names}
+        self.records = {("dinov3", "run", combined.name, "0"): {}}
 
-    def test_the_training_sets_own_split_fills_the_annotators_it_holds(self):
-        records = {self.key: {self.trained_on: column(["Mohammad__1", "Yvonne__2", "Yvonne_b2__3"])}}
-        rewritten, columns, in_domain = _annotator_columns(records, [self.trained_on])
-        self.assertIn(ANNOTATOR + "Mohammad", columns)
-        self.assertIn(ANNOTATOR + "Yvonne", columns)
-        self.assertEqual(len(rewritten[self.key][ANNOTATOR + "Yvonne"]["cases"]), 2)
-        self.assertIn((self.trained_on, ANNOTATOR + "Mohammad"), in_domain)
+    def tearDown(self):
+        self.tmp.cleanup()
 
-    def test_an_annotator_the_run_never_trained_on_keeps_its_own_dataset(self):
-        records = {
-            self.key: {
-                self.trained_on: column(["Mohammad__1"]),
-                "Dataset218_lesion_eric_smi_gfap": column(["Eric__a", "Eric__b"]),
-            }
+    def test_a_set_sharing_a_case_with_the_training_set_is_in_domain(self):
+        pairs = _in_domain(self.records, self.names, self.raw_dirs)
+        self.assertIn(("Dataset208_combined", "Dataset207_katie"), pairs)
+
+    def test_a_set_sharing_nothing_is_not(self):
+        pairs = _in_domain(self.records, self.names, self.raw_dirs)
+        self.assertNotIn(("Dataset208_combined", "Dataset211_paul"), pairs)
+
+    def test_a_training_set_is_never_in_domain_against_itself(self):
+        """Its own column is the held-out `Test` cell, which the table shows in its own right."""
+        pairs = _in_domain(self.records, self.names, self.raw_dirs)
+        self.assertNotIn(("Dataset208_combined", "Dataset208_combined"), pairs)
+
+
+class BestValueTests(unittest.TestCase):
+    """Which cell in a column is marked."""
+
+    def records(self):
+        return {
+            ("dinov3", "a", "Dataset208_MYKE", "0"): {"Dataset211_paul": column(["p"], [0.4])},
+            ("dinov3", "b", "Dataset219_MYK", "0"): {"Dataset211_paul": column(["p"], [0.9])},
+            ("dinov3", "c", "Dataset207_katie", "0"): {"Dataset211_paul": column(["p"], [0.6])},
         }
-        rewritten, columns, in_domain = _annotator_columns(
-            records, [self.trained_on, "Dataset218_lesion_eric_smi_gfap"]
-        )
-        self.assertIn(ANNOTATOR + "Eric", columns)
-        self.assertNotIn((self.trained_on, ANNOTATOR + "Eric"), in_domain)
-        self.assertEqual(len(rewritten[self.key][ANNOTATOR + "Eric"]["cases"]), 2)
 
-    def test_the_run_s_own_split_wins_where_both_hold_an_annotator(self):
-        records = {
-            self.key: {
-                self.trained_on: column(["Mohammad__1"], dice=[0.9]),
-                "Dataset214_lesion_mohammad_smi_gfap": column(["Mohammad__7", "Mohammad__8"], dice=[0.1, 0.2]),
-            }
-        }
-        rewritten, _, in_domain = _annotator_columns(
-            records, [self.trained_on, "Dataset214_lesion_mohammad_smi_gfap"]
-        )
-        self.assertEqual(list(rewritten[self.key][ANNOTATOR + "Mohammad"]["dice"]), [0.9])
-        self.assertIn((self.trained_on, ANNOTATOR + "Mohammad"), in_domain)
+    def test_best_and_second_span_rows_from_different_training_sets(self):
+        best = _best_values(self.records(), ["Dataset211_paul"], np.mean)
+        self.assertEqual(best[("Dataset211_paul", "dice")], (0.9, 0.6))
 
-    def test_a_set_holding_two_annotators_stays_a_column_of_its_own(self):
-        interrater = "Dataset210_lesion_interrater_MY_smi_gfap"
-        records = {self.key: {interrater: column(["Mohammad__1", "Yvonne__2"])}}
-        _, columns, _ = _annotator_columns(records, [interrater])
-        self.assertEqual(columns, [interrater])
+    def test_an_in_domain_cell_cannot_be_marked(self):
+        best = _best_values(
+            self.records(),
+            ["Dataset211_paul"],
+            np.mean,
+            in_domain={("Dataset219_MYK", "Dataset211_paul")},
+        )
+        self.assertEqual(best[("Dataset211_paul", "dice")], (0.6, 0.4))
+
+    def test_masd_is_ranked_the_other_way_up(self):
+        best = _best_values(self.records(), ["Dataset211_paul"], np.mean)
+        self.assertEqual(best[("Dataset211_paul", "masd")], (0.4, 0.6))
+
+    def test_a_single_row_has_nothing_to_win_against(self):
+        one = dict(list(self.records().items())[:1])
+        self.assertEqual(_best_values(one, ["Dataset211_paul"], np.mean), {})
 
 
 if __name__ == "__main__":

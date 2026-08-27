@@ -14,7 +14,7 @@ from .config import ExperimentConfig
 from .data import load_dataset_json, rgb_planes, trained_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .datasets import dataset_dir as resolve_dataset_dir
-from .selection import matches as _matches
+from .selection import matches as _matches, resolve_runs
 
 
 def _classes(cfg, dataset_name):
@@ -56,8 +56,13 @@ def _crop_size(cfg, crop):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
-    parser.add_argument("--datasets", nargs="*", default=[])
-    parser.add_argument("--experiments", nargs="*", default=[])
+    # A run is named by its path and a dataset is the set it was evaluated on -- the same two axes
+    # the comparison figures take, so there is one thing to learn rather than two.
+    parser.add_argument("--experiments", nargs="*", default=[],
+                        help="runs to draw, as `<model>/<trained-on>/<run>/fold_<n>` under "
+                             "--results-dir. Globs allowed. Empty draws every run.")
+    parser.add_argument("--datasets", nargs="*", default=[],
+                        help="evaluation sets to draw. Empty draws every one a run has.")
     parser.add_argument("--splits", nargs="*", default=["validation", "test"])
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
     parser.add_argument("--skip-unchanged", action="store_true",
@@ -71,6 +76,9 @@ def main():
 
     # Selecting the work up front means the progress bar knows its total, and a run that matches nothing
     # says so immediately instead of after a silent walk of the results tree.
+    # Resolved once, so a pattern that matches nothing fails here rather than drawing nothing and
+    # calling it success. `None` means every run, which is what the automatic refresh wants.
+    selected = set(resolve_runs(args.results_dir, args.experiments)) if args.experiments else None
     jobs = []
     # Driven by the predictions rather than the metrics: a dataset with no labels is never scored, so
     # it has no metrics.csv, and keying off that would silently skip every figure it could draw.
@@ -79,9 +87,9 @@ def main():
         metrics_path = output_dir / "metrics.csv"
         fold_dir = output_dir.parents[1]
         dataset_name, kind = output_dir.name, output_dir.parent.name
-        if not _matches(fold_dir.parents[1].name, args.datasets):
+        if not _matches(dataset_name, args.datasets):
             continue
-        if not _matches(fold_dir.parent.name, args.experiments):
+        if selected is not None and fold_dir not in selected:
             continue
         if not _matches(kind, args.splits):
             continue

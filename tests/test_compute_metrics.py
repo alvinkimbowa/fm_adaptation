@@ -7,6 +7,17 @@ import numpy as np
 from fm_adaptation.metrics import read_case_metrics
 from fixtures import DatasetFixture
 
+try:
+    import fm_adaptation.compute_metrics  # noqa: F401
+    SCORING = True
+except ImportError:  # pragma: no cover - environment, not behaviour
+    # Scoring needs monai, which only .venv-mm carries. The tests below that never open a metric
+    # still run everywhere; only the ones that reach into the scoring module stand down.
+    SCORING = False
+
+needs_scoring = unittest.skipUnless(SCORING, "monai is not installed in this environment")
+
+
 
 class MetricsFileTests(unittest.TestCase):
         """Reading a metrics CSV written by either tool, and what counts as a case."""
@@ -58,6 +69,7 @@ class MetricsFileTests(unittest.TestCase):
             self.assertAlmostEqual(float(np.nanmean([row["masd"] for row in rows])), 2.0)
 
 
+@needs_scoring
 class LabelResolutionTests(unittest.TestCase):
         """Pairing a prediction directory with the labels it should be scored against."""
 
@@ -90,6 +102,7 @@ class LabelResolutionTests(unittest.TestCase):
             self.assertEqual(_label_index(data.path), {})
 
 
+@needs_scoring
 class NnunetColumnTests(unittest.TestCase):
         """Selecting the baseline columns out of an nnU-Net results tree, which carries no config."""
 

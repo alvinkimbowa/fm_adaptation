@@ -5,9 +5,15 @@ does this case better?" -- reading that off separate figures fails because each 
 Here the cases are chosen once and every model is drawn on the same ones, so a row is a like-for-like
 comparison across the columns.
 
+`--experiments` is a flat list of runs, each named by its path under `--results-dir`, and the order
+given is the column order. A run is a model, a training set, a configuration and a fold, so any
+combination of them can be put side by side -- they need not share a training set or a configuration.
+`--datasets` says which evaluation sets to draw.
+
     python -m fm_adaptation.compare_qualitative \
-        --datasets 204 --splits test \
-        --experiments upernet_inj_ft_ours upernet_ours --rows 5
+        --experiments dinov3/Dataset208_lesion_MYKE_smi_gfap/upernet_inj_ft_balanced_aug_ours/fold_0 \
+                      dinov3/Dataset219_lesion_MYK_smi_gfap/upernet_inj_ft_balanced_aug_gfap_ours/fold_0 \
+        --datasets Dataset211_lesion_paul_widefield_smi_gfap --splits test --rows 5
 
 Drawing is `qualitative.py`'s: the same styles, the same colours, the same channel handling. Only the
 arrangement is new.
@@ -30,7 +36,7 @@ import matplotlib.pyplot as plt
 
 from .config import ExperimentConfig
 from .data import active_planes, load_dataset_json, rgb_planes
-from .report import ADAPTATIONS, _config_label, _dataset_label, _model_rank, _split_adaptation
+from .naming import MODEL_NAMES, dataset_tag, describe_run
 from .metrics import read_case_metrics
 from .qualitative import (
     MAX_FIGURE_INCHES,
@@ -50,60 +56,41 @@ from .qualitative import (
     style_from_arguments,
 )
 from .datasets import dataset_dir as resolve_dataset_dir
-from .selection import matches as _matches
+from .selection import matches as _matches, resolve_runs
 
 
-# Where the across-training-sets figures go. Every other figure directory is named after the training
-# set its columns share; these have no single training set to be named after, because that is the
-# thing being compared.
-ACROSS_DIR = "across_training_sets"
+def _columns(run_dirs, kind, tested_on):
+    """(label, run_dir, prediction_dir, metrics) per run, or the first run that has no predictions.
 
-
-def _runs(results_dir, dataset, kind, tested_on, models, experiments, name_training_set=False):
-    """Every run that has predictions for `tested_on`, as (label, run_dir, prediction_dir, metrics).
-
-    `name_training_set` adds what the run was trained on to its label, which is the only thing that
-    tells two columns apart when the same configuration is compared across training sets.
+    A run only predicts the sets its own config names, so a row's own training set is one the other
+    rows never evaluated. That is the one case where a comparison cannot be drawn at all, and the
+    caller reports which row was missing rather than silently dropping a column.
     """
-    found = []
-    pattern = f"*/{dataset}/*/fold_*/{kind}/{tested_on}/predictions"
-    for prediction_dir in sorted(Path(results_dir).glob(pattern)):
-        fold_dir = prediction_dir.parents[2]
-        run_name = fold_dir.parent.name
-        model = fold_dir.parents[2].name
-        if models and not _matches(model, models):
-            continue
-        if experiments and not _matches(run_name, experiments):
-            continue
-        # The column carries the label the report gives this row, so a figure and the table name the
-        # same thing the same way -- a column is one row of the results table, config and all.
-        label = _config_label(model, run_name)
-        if name_training_set:
-            # Joined with the same separator the labels already use, so `_distinct` strips the shared
-            # configuration and leaves the training set, which is what the comparison is about.
-            label = f"{label} + trained on {_training_tag(dataset)}"
-        found.append((label, fold_dir,
-                      prediction_dir, prediction_dir.parent / "metrics.csv", model, run_name))
-    # Columns in the order the report puts its rows, so reading across the figure and down the table
-    # follow the same sequence.
-    found.sort(key=lambda run: (_model_rank(_report_model(run[4])), run[4],
-                                ADAPTATIONS.get(_split_adaptation(run[5])[0], ("", 99))[1],
-                                _split_adaptation(run[5])[1]))
-    return [run[:4] for run in found]
+    columns = []
+    for run_dir in run_dirs:
+        prediction_dir = run_dir / kind / tested_on / "predictions"
+        if not prediction_dir.is_dir():
+            return None, run_dir
+        # Everything that tells this run from another: what it is, and what it was trained on. Two
+        # columns can differ in either alone, so both are always written and `_distinct` drops back
+        # whichever part they turn out to share.
+        model = run_dir.parents[2].name
+        label = " + ".join((
+            MODEL_NAMES.get(model, model),
+            describe_run(run_dir.parent.name),
+            f"trained on {dataset_tag(run_dir.parents[1].name)}",
+        ))
+        columns.append((label, run_dir, prediction_dir, prediction_dir.parent / "metrics.csv"))
+    return columns, None
 
 
-def _training_tag(dataset):
-    """A short name for a training set, for a column header that has to fit.
-
-    Every SCI set carries the same `_smi_gfap` stain suffix, which is exactly the part that does not
-    distinguish one from another.
-    """
-    return re.sub(r"_(smi_)?gfap$", "", _dataset_label(dataset))
-
-
-def _report_model(model):
-    """`_model_rank` keys foundation models by their config name, which is what the paths carry."""
-    return model
+def _evaluation_sets(run_dirs, kind):
+    """Evaluation sets every selected run has predictions for, so a figure has every column."""
+    shared = None
+    for run_dir in run_dirs:
+        here = {p.parent.name for p in (run_dir / kind).glob("*/predictions")}
+        shared = here if shared is None else (shared & here)
+    return sorted(shared or ())
 
 
 def _common_cases(runs, count, reference, rng):
@@ -333,17 +320,16 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", default="models")
-    parser.add_argument("--datasets", nargs="*", default=[], help="what the runs were trained on")
-    parser.add_argument("--tested-on", nargs="*", default=[], help="which evaluation set to draw")
-    parser.add_argument("--models", nargs="*", default=[])
-    parser.add_argument("--experiments", nargs="*", default=[])
+    parser.add_argument("--experiments", nargs="*", default=[],
+                        help="one column each, as `<model>/<trained-on>/<run>/fold_<n>` under "
+                             "--results-dir. Globs allowed; the order given is the column order. "
+                             "Empty takes every run.")
+    parser.add_argument("--datasets", nargs="*", default=[],
+                        help="evaluation sets to draw. Empty takes every set the chosen runs share.")
     parser.add_argument("--splits", nargs="*", default=["test"], choices=("validation", "test"))
     parser.add_argument("--output-dir", default="results/qualitative",
-                        help="figures land in <output-dir>/<trained-on>/")
+                        help="figures land in <output-dir>/<split>__<tested-on>.png")
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
-    parser.add_argument("--across-training-sets", action="store_true",
-                        help="one figure per evaluation set with every selected training set in it, "
-                             "instead of one figure per training set")
     parser.add_argument("--per-row", type=int, default=1,
                         help="cases side by side on one row, each with its own set of columns")
     parser.add_argument("--seed-max", type=int, default=1000,
@@ -356,97 +342,85 @@ def main():
     style = style_from_arguments(args)
 
     drawn = skipped = 0
-    # Normally each training set gets its own figure. `--across-training-sets` puts them in one, so a
-    # column is "the same configuration trained on a different dataset" rather than "another model".
-    groups = [(d,) for d in args.datasets] if not args.across_training_sets else [tuple(args.datasets)]
-    for group in groups:
-        dataset = group[0] if len(group) == 1 else ACROSS_DIR
-        for kind in args.splits:
-            # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
-            # `test_datasets` later shows up without editing this.
-            available = sorted({
-                p.parent.name
-                for trained_on in group
-                for p in Path(args.results_dir).glob(f"*/{trained_on}/*/fold_*/{kind}/*/predictions")
-            })
-            targets = [d for d in available if not args.tested_on or _matches(d, args.tested_on)]
-            for tested_on in targets:
-                runs = [
-                    run
-                    for trained_on in group
-                    for run in _runs(args.results_dir, trained_on, kind, tested_on,
-                                     args.models, args.experiments,
-                                     name_training_set=len(group) > 1)
-                ]
-                # Across training sets a single run has nothing to compare against, so the figure
-                # would be a column on its own. Within one training set it is still worth drawing:
-                # a training set with one adaptation is exactly the case where its predictions have
-                # nowhere else to be seen.
-                if len(runs) < (2 if len(group) > 1 else 1):
-                    print(f"skipped {dataset}/{kind}/{tested_on} ({len(runs)} run(s) matched)")
-                    continue
-                cfg = ExperimentConfig.from_yaml(runs[0][1] / "config.yaml")
-                source_path = runs[0][2].parent / "source.json"
-                if source_path.exists():
-                    source = json.loads(source_path.read_text())
-                    source_dataset, split = source["dataset"], source["split"]
-                else:
-                    source_dataset = tested_on
-                    split = cfg.test_split if tested_on != cfg.train_dataset else (
-                        "Ts" if kind == "test" else "Tr"
-                    )
-                dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
-                images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
-                # No annotations, no ground-truth column: the comparison is then between the models.
-                if not (labels.is_dir() and any(labels.iterdir())):
-                    labels = None
-                channel_planes = rgb_planes(load_dataset_json(dataset_dir)["channel_names"])
-                # Restricted to the planes these runs were trained on, so the backdrop is their
-                # input. Across training sets it is the union: a plane one column never saw is still
-                # part of what another column was given.
-                trained_on = {ExperimentConfig.from_yaml(run[1] / "config.yaml").train_dataset
-                              for run in runs}
-                keeps = [active_planes(load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, t))["channel_names"])
-                         for t in sorted(trained_on)]
-                keep = None if any(k is None for k in keeps) else frozenset().union(*keeps)
-                if channel_planes and keep is not None:
-                    channel_planes = {stored: rgb for stored, rgb in channel_planes.items()
-                                      if rgb in keep}
-                crop = None if args.crop == "full" else (
-                    cfg.patching.patch_size if args.crop == "auto" and cfg.patching else
-                    None if args.crop == "auto" else int(args.crop)
+    run_dirs = resolve_runs(args.results_dir, args.experiments)
+    for kind in args.splits:
+        # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
+        # `test_datasets` later shows up without editing this.
+        available = _evaluation_sets(run_dirs, kind)
+        targets = [d for d in available if _matches(d, args.datasets)]
+        for tested_on in targets:
+            runs, missing = _columns(run_dirs, kind, tested_on)
+            if runs is None:
+                print(f"skipped {kind}/{tested_on}: {missing} has no predictions for it")
+                continue
+            cfg = ExperimentConfig.from_yaml(runs[0][1] / "config.yaml")
+            source_path = runs[0][2].parent / "source.json"
+            if source_path.exists():
+                source = json.loads(source_path.read_text())
+                source_dataset, split = source["dataset"], source["split"]
+            else:
+                source_dataset = tested_on
+                split = cfg.test_split if tested_on != cfg.train_dataset else (
+                    "Ts" if kind == "test" else "Tr"
                 )
-                # A negative seed asks for a fresh sample of cases every run, overwriting the
-                # figure that was there. Pin a seed to keep drawing the same cases.
-                seed = args.seed if args.seed >= 0 else int(
-                    np.random.default_rng().integers(args.seed_max)
-                )
-                rng = np.random.default_rng(seed)
-                cases = _common_cases(runs, args.rows, runs[0], rng)
-                if not cases:
-                    print(f"skipped {dataset}/{kind}/{tested_on} (no cases shared by all runs)")
-                    continue
-                label_values = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
-                names = {int(v): k for k, v in label_values.items() if int(v) != 0}
-                # Filed under what the models were trained on, which is what the figure compares;
-                # the split and the evaluation set name the file within it.
-                output = Path(args.output_dir) / dataset / f"{kind}__{tested_on}.png"
-                # An unscored dataset has no metrics.csv anywhere, so freshness comes from the
-                # predictions themselves rather than from a file that will never exist.
-                stamps = [m.stat().st_mtime for *_, m in runs if m.exists()]
-                stamps += [p.stat().st_mtime for _, _, p, m in runs if not m.exists()]
-                newest = max(stamps)
-                if args.skip_unchanged and output.exists() and output.stat().st_mtime >= newest:
-                    skipped += 1
-                    continue
-                path = render_comparison(
-                    images, labels, runs, cases, output, style,
-                    crop=crop, seed=seed, classes=sorted(names), class_names=names,
-                    channel_planes=channel_planes,
-                    layout=args.layout, per_row=args.per_row,
-                )
-                drawn += 1
-                print(f"wrote {path}  ({len(runs)} models x {len(cases)} cases, seed {seed})")
+            dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
+            images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
+            # No annotations, no ground-truth column: the comparison is then between the models.
+            if not (labels.is_dir() and any(labels.iterdir())):
+                labels = None
+            channel_planes = rgb_planes(load_dataset_json(dataset_dir)["channel_names"])
+            # Restricted to the planes these runs were trained on, so the backdrop is their input.
+            # It is the union across columns: a plane one column never saw is still part of what
+            # another column was given.
+            trained_on = {ExperimentConfig.from_yaml(run[1] / "config.yaml").train_dataset
+                          for run in runs}
+            keeps = [active_planes(load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, t))["channel_names"])
+                     for t in sorted(trained_on)]
+            keep = None if any(k is None for k in keeps) else frozenset().union(*keeps)
+            if channel_planes and keep is not None:
+                channel_planes = {stored: rgb for stored, rgb in channel_planes.items()
+                                  if rgb in keep}
+            crop = None if args.crop == "full" else (
+                cfg.patching.patch_size if args.crop == "auto" and cfg.patching else
+                None if args.crop == "auto" else int(args.crop)
+            )
+            # A negative seed asks for a fresh sample of cases every run, overwriting the
+            # figure that was there. Pin a seed to keep drawing the same cases.
+            seed = args.seed if args.seed >= 0 else int(
+                np.random.default_rng().integers(args.seed_max)
+            )
+            rng = np.random.default_rng(seed)
+            cases = _common_cases(runs, args.rows, runs[0], rng)
+            if not cases:
+                print(f"skipped {kind}/{tested_on} (no cases shared by all runs)")
+                continue
+            label_values = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
+            names = {int(v): k for k, v in label_values.items() if int(v) != 0}
+            # Flat: with a list of rows there is no one training set to file the figure under, so the
+            # split and the evaluation set name it outright.
+            output = Path(args.output_dir) / f"{kind}__{tested_on}.png"
+            # An unscored dataset has no metrics.csv anywhere, so freshness comes from the
+            # predictions themselves rather than from a file that will never exist.
+            stamps = [m.stat().st_mtime for *_, m in runs if m.exists()]
+            stamps += [p.stat().st_mtime for _, _, p, m in runs if not m.exists()]
+            newest = max(stamps)
+            if args.skip_unchanged and output.exists() and output.stat().st_mtime >= newest:
+                skipped += 1
+                continue
+            path = render_comparison(
+                images, labels, runs, cases, output, style,
+                crop=crop, seed=seed, classes=sorted(names), class_names=names,
+                channel_planes=channel_planes,
+                layout=args.layout, per_row=args.per_row,
+            )
+            drawn += 1
+            # How many cases each column holds, when they differ. A row that trained on part of this
+            # set has only its `imagesTs`, a row that never touched it has the whole thing, and the
+            # figure is drawn on the intersection -- 8 of 73 should not read the same as 8 of 8.
+            held = [len([q for q in p.iterdir() if q.suffix.lower() == ".png"])
+                    for _, _, p, _ in runs]
+            note = "" if len(set(held)) == 1 else f", columns hold {'/'.join(map(str, held))}"
+            print(f"wrote {path}  ({len(runs)} models x {len(cases)} cases, seed {seed}{note})")
     print(f"{drawn} comparison figure(s) drawn, {skipped} up to date")
 
 

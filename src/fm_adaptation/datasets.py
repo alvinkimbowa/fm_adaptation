@@ -63,3 +63,15 @@ def resolve(raw_data_dir, value):
 
 def dataset_dir(raw_data_dir, value):
     return Path(raw_data_dir) / resolve(raw_data_dir, value)
+
+
+def split_cases(dataset_dir, split):
+    """Case ids in one split of a dataset, read off the image filenames.
+
+    An evaluation set need not ship a `splits_final.json`, so the files are the only thing that
+    always answers which cases a split holds.
+    """
+    image_dir = Path(dataset_dir) / f"images{split}"
+    if not image_dir.is_dir():
+        return set()
+    return {path.name.rsplit("_", 1)[0] for path in image_dir.glob("*_0000.*")}

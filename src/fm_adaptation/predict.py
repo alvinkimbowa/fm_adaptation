@@ -17,7 +17,7 @@ from .data import (
     num_classes,
     stain_planes,
 )
-from .datasets import dataset_dir as resolve_dataset_dir
+from .datasets import dataset_dir as resolve_dataset_dir, split_cases
 from .models import load_trained_model, restore_prediction
 from .patching import build_index, predict_case
 
@@ -46,31 +46,63 @@ def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device,
     return len(cases)
 
 
-def _jobs(cfg, datasets):
+def _seen_in_training(cfg):
+    """Case ids this run's fold was fitted on, so an evaluation set can exclude them.
+
+    Case ids are unique across these datasets -- every one carries its source as a prefix -- so an id
+    appearing in two datasets is the same image, not a coincidence of numbering. Dataset213 is wholly
+    contained in Dataset208, and without this a model trained on the combined set would be scored on
+    the slides it had already fitted. Only the training split counts: the fold's validation
+    cases are reported as the validation column, which is what that column is for.
+    """
+    dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, cfg.train_dataset)
+    if not (dataset_dir / "splits_final.json").exists():
+        return set()
+    subsets = ("train",) if cfg.fold == "all" else ("train", "val")
+    return {case for subset in subsets for case in _case_ids(dataset_dir, "Tr", cfg.fold, subset)}
+
+
+def _jobs(cfg, datasets, seen=frozenset()):
     """Each evaluation as (source dataset, split, subset, validation|test, output column).
 
     The training dataset contributes its fold's validation cases and, when it ships one, its held-out
-    `imagesTs`; every other dataset is evaluated whole on `test_split`.
+    `imagesTs`. For every other dataset, `seen` decides:
+
+    - it holds any case this run trained on -> that dataset's `imagesTs` alone;
+    - it holds none -> the whole dataset, `imagesTr` and `imagesTs` under one column, when
+      `test_split: all`; otherwise the configured split.
+
+    The first rule is what keeps model selection out of what this run is scored on: `imagesTr` is
+    what a training set is drawn from, and the fold's val cases inside it are what early stopping
+    and checkpoint choice consumed. An empty `seen` means no overlap is known, and then `test_split`
+    decides on its own.
 
     `test_split: all` evaluates every split an evaluation set has, under one column name. Some sets
     ship both `imagesTr` and `imagesTs`, and the boundary between them is a fact about how that
     dataset would be trained on, not about a model that never saw it -- scoring only one silently
-    drops the rest. It is opt-in rather than the rule because making it unconditional would move
-    columns that already exist.
+    drops the rest.
     """
     jobs = []
     for dataset_name in datasets:
         if dataset_name != cfg.train_dataset:
-            # `test_split` is one setting for every evaluation set, but the newer ones ship their
-            # cases as `imagesTs` while the older ones keep everything in `imagesTr`. Honour the
-            # configured split where it exists, so no existing result moves, and fall back to
-            # whichever split the dataset actually has.
-            available = [s for s in ("Ts", "Tr") if _has_cases(cfg.raw_data_dir / dataset_name, s)]
-            if cfg.test_split == "all":
+            dataset_dir = cfg.raw_data_dir / dataset_name
+            available = [s for s in ("Ts", "Tr") if _has_cases(dataset_dir, s)]
+            # `imagesTr` is what gets split into train and val, and val chose the checkpoint. So a
+            # dataset this run drew any training case from contributes its held-out `imagesTs` and
+            # nothing else, whatever `test_split` says -- the rest of it was either fitted or helped
+            # pick the model. A dataset it never touched is evaluated whole, both splits under one
+            # column, because none of it was seen and none of it took part in model selection.
+            if seen and any(split_cases(dataset_dir, s) & set(seen) for s in available):
+                splits = ["Ts"] if "Ts" in available else []
+            elif cfg.test_split == "all":
                 splits = available
             else:
+                # No overlap, so the configured split still decides -- `test_split` is one setting
+                # for every evaluation set, and the newer ones ship their cases as `imagesTs` while
+                # the older ones keep everything in `imagesTr`. Honour it where it exists, so no
+                # ultrasound result moves, and fall back to whichever split the dataset has.
                 split = cfg.test_split
-                if not _has_cases(cfg.raw_data_dir / dataset_name, split):
+                if not _has_cases(dataset_dir, split):
                     split = next(iter(available), split)
                 splits = [split]
             for split in splits:
@@ -90,22 +122,6 @@ def _jobs(cfg, datasets):
             column = dataset_name if split == "Ts" else f"{dataset_name}{split[2:]}"
             jobs.append((dataset_name, split, "eval", "test", column))
     return jobs
-
-
-def _seen_in_training(cfg):
-    """Case ids this run's fold was fitted on, so an evaluation set can exclude them.
-
-    Case ids are unique across these datasets -- every one carries its source as a prefix -- so an id
-    appearing in two datasets is the same image, not a coincidence of numbering. Dataset213 is wholly
-    contained in Dataset208, and without this a model trained on the combined set would be scored on
-    the slides it had already fitted. Only the training split counts: the fold's validation
-    cases are reported as the validation column, which is what that column is for.
-    """
-    dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, cfg.train_dataset)
-    if not (dataset_dir / "splits_final.json").exists():
-        return set()
-    subsets = ("train",) if cfg.fold == "all" else ("train", "val")
-    return {case for subset in subsets for case in _case_ids(dataset_dir, "Tr", cfg.fold, subset)}
 
 
 
@@ -145,8 +161,12 @@ def main():
         load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"], cfg.stains
     )
     seen = _seen_in_training(cfg)
+    # What each column is supposed to hold once every job that writes into it has run. A column can
+    # be reached by two jobs -- `test_split: all` sends `imagesTr` and `imagesTs` to one directory --
+    # so this is only complete at the end, which is where the pruning below happens.
+    evaluated = {}
 
-    for dataset_name, split, subset, kind, column_name in _jobs(cfg, datasets):
+    for dataset_name, split, subset, kind, column_name in _jobs(cfg, datasets, seen):
         if cfg.patching is not None:
             declared = stain_planes(load_dataset_json(cfg.raw_data_dir / dataset_name)["channel_names"])
             if declared is not None and len(declared) > 1:
@@ -171,6 +191,9 @@ def main():
             if not dataset.ids:
                 print(f"Skipping {column_name}: every case was seen in training")
                 continue
+        # Recorded before `--overwrite` thins the list, so it is what the column should end up
+        # holding rather than what this invocation happened to compute.
+        evaluated.setdefault((kind, column_name), set()).update(dataset.ids)
         prediction_dir = output_dir / "predictions"
         prediction_dir.mkdir(parents=True, exist_ok=True)
         # Without --overwrite, a case that already has a prediction keeps it and never goes through
@@ -203,6 +226,18 @@ def main():
         count = len(list(prediction_dir.glob("*.png")))
         note = "" if labelled else " (no labels, nothing to score)"
         print(f"Wrote {count} predictions to {output_dir}{note}")
+
+    # A column that narrows -- this run turned out to have trained on part of the set, so it is now
+    # evaluated on `imagesTs` alone -- would otherwise keep the predictions it used to have, and a
+    # leftover file is indistinguishable from a current one to anything reading this directory.
+    # Nothing here re-runs the model; it only removes what no job claimed.
+    for (kind, column_name), case_ids in evaluated.items():
+        prediction_dir = cfg.run_dir / kind / column_name / "predictions"
+        stale = [p for p in prediction_dir.glob("*.png") if p.stem not in case_ids]
+        for path in stale:
+            path.unlink()
+        if stale:
+            print(f"Removed {len(stale)} prediction(s) no longer evaluated from {prediction_dir}")
 
 
 if __name__ == "__main__":

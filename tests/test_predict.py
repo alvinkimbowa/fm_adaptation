@@ -76,6 +76,52 @@ class JobTests(unittest.TestCase):
                 _seen_in_training(cfg), {"Katie__fitted", "Katie__validated"}
             )
 
+        def _overlap_fixtures(self):
+            """A training set drawn from another dataset's `imagesTr`, which is the real shape here:
+            Dataset208 is built out of the annotators' own sets, so its cases and theirs share ids."""
+            train = DatasetFixture(self.root, "Dataset208_combined", {"0": "SMI", "1": "GFAP"})
+            for case_id in ("Mohammad__fitted", "Mohammad__validated"):
+                train.add(case_id, planes={0: 1, 1: 2})
+            train.split(["Mohammad__fitted"], val=["Mohammad__validated"])
+
+            source = DatasetFixture(self.root, "Dataset214_mohammad", {"0": "SMI", "1": "GFAP"})
+            for case_id in ("Mohammad__fitted", "Mohammad__validated", "Mohammad__spare"):
+                source.add(case_id, split="Tr", planes={0: 1, 1: 2})
+            source.add("Mohammad__held", split="Ts", planes={0: 1, 1: 2})
+
+            untouched = DatasetFixture(self.root, "Dataset215_yvonne", {"0": "SMI", "1": "GFAP"})
+            untouched.add("Yvonne__train", split="Tr", planes={0: 1, 1: 2})
+            untouched.add("Yvonne__held", split="Ts", planes={0: 1, 1: 2})
+            cfg = SimpleNamespace(
+                raw_data_dir=self.root, train_dataset=train.name, test_split="all", fold="0",
+            )
+            return cfg, source, untouched
+
+        def test_a_dataset_the_run_trained_part_of_is_scored_on_its_held_out_split_alone(self):
+            """`imagesTr` is where train and val come from, and val chose the checkpoint. Keeping
+            `Mohammad__spare` because this run happened not to fit it would score the model on a
+            split that model selection had its hands in."""
+            cfg, source, _ = self._overlap_fixtures()
+            seen = _seen_in_training(cfg)
+            jobs = [job for job in _jobs(cfg, [source.name], seen) if job[0] == source.name]
+            self.assertEqual([job[1] for job in jobs], ["Ts"])
+
+        def test_a_dataset_the_run_never_touched_is_scored_whole(self):
+            """Nothing in it was seen and nothing in it picked the model, so the `imagesTr` /
+            `imagesTs` boundary says nothing about this run and both splits count."""
+            cfg, _, untouched = self._overlap_fixtures()
+            seen = _seen_in_training(cfg)
+            jobs = [job for job in _jobs(cfg, [untouched.name], seen) if job[0] == untouched.name]
+            self.assertEqual(sorted(job[1] for job in jobs), ["Tr", "Ts"])
+            self.assertEqual({job[4] for job in jobs}, {untouched.name})
+
+        def test_the_rule_needs_seen_so_older_callers_are_unaffected(self):
+            """`seen` defaults to empty, which is the pre-existing `test_split`-only behaviour --
+            every caller that predates this keeps the jobs it had."""
+            cfg, source, _ = self._overlap_fixtures()
+            jobs = [job for job in _jobs(cfg, [source.name]) if job[0] == source.name]
+            self.assertEqual(sorted(job[1] for job in jobs), ["Tr", "Ts"])
+
         def test_nothing_is_excluded_without_a_split_file(self):
             """An evaluation-only dataset ships no splits_final.json and must not raise."""
             data = DatasetFixture(self.root, "Dataset211_nosplit", {"0": "SMI", "1": "GFAP"})
