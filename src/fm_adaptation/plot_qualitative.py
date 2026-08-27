@@ -14,7 +14,7 @@ from .config import ExperimentConfig
 from .data import load_dataset_json, rgb_planes, trained_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .datasets import dataset_dir as resolve_dataset_dir
-from .selection import matches as _matches, resolve_runs
+from .selection import matches as _matches
 
 
 def _classes(cfg, dataset_name):
@@ -56,12 +56,16 @@ def _crop_size(cfg, crop):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
-    # A run is named by its path and a dataset is the set it was evaluated on -- the same two axes
-    # the comparison figures take, so there is one thing to learn rather than two.
-    parser.add_argument("--experiments", nargs="*", default=[],
-                        help="runs to draw, as `<model>/<trained-on>/<run>/fold_<n>` under "
-                             "--results-dir. Globs allowed. Empty draws every run.")
-    parser.add_argument("--datasets", nargs="*", default=[],
+    # One list per part of a run directory, `<model>/<train dataset>/<config>/fold_<n>`, plus the
+    # evaluation set. Each is matched exactly, as a glob, as a `_suffix` tag or, for a dataset, by its
+    # number; empty keeps every value that part can take.
+    parser.add_argument("--models", nargs="*", default=[])
+    parser.add_argument("--train-datasets", nargs="*", default=[],
+                        help="what a run was trained on")
+    parser.add_argument("--configs", nargs="*", default=[])
+    parser.add_argument("--folds", nargs="*", default=[],
+                        help="folds to draw, by number; empty draws every one")
+    parser.add_argument("--test-datasets", nargs="*", default=[],
                         help="evaluation sets to draw. Empty draws every one a run has.")
     parser.add_argument("--splits", nargs="*", default=["validation", "test"])
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
@@ -76,9 +80,6 @@ def main():
 
     # Selecting the work up front means the progress bar knows its total, and a run that matches nothing
     # says so immediately instead of after a silent walk of the results tree.
-    # Resolved once, so a pattern that matches nothing fails here rather than drawing nothing and
-    # calling it success. `None` means every run, which is what the automatic refresh wants.
-    selected = set(resolve_runs(args.results_dir, args.experiments)) if args.experiments else None
     jobs = []
     # Driven by the predictions rather than the metrics: a dataset with no labels is never scored, so
     # it has no metrics.csv, and keying off that would silently skip every figure it could draw.
@@ -87,9 +88,15 @@ def main():
         metrics_path = output_dir / "metrics.csv"
         fold_dir = output_dir.parents[1]
         dataset_name, kind = output_dir.name, output_dir.parent.name
-        if not _matches(dataset_name, args.datasets):
+        if not _matches(dataset_name, args.test_datasets):
             continue
-        if selected is not None and fold_dir not in selected:
+        if not _matches(fold_dir.parents[2].name, args.models):
+            continue
+        if not _matches(fold_dir.parents[1].name, args.train_datasets):
+            continue
+        if not _matches(fold_dir.parent.name, args.configs):
+            continue
+        if not _matches(fold_dir.name.removeprefix("fold_"), args.folds):
             continue
         if not _matches(kind, args.splits):
             continue

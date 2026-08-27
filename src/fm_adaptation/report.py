@@ -287,12 +287,12 @@ def _in_domain(records, datasets, raw_dirs):
         if not training_cases:
             continue
         for dataset in datasets:
-            if dataset != trained_on and training_cases & cases(dataset):
+            if training_cases & cases(dataset):
                 pairs.add((trained_on, dataset))
     return pairs
 
 
-def _best_values(records, datasets, reducer, in_domain=(), averaged=(), own_test_column=False):
+def _best_values(records, datasets, reducer, in_domain=(), averaged=()):
     """Maps each column to its (best, second best) values over every row of the table.
 
     Blanked cells are skipped and the average is taken over the same columns the table averages, so
@@ -304,7 +304,7 @@ def _best_values(records, datasets, reducer, in_domain=(), averaged=(), own_test
     for (_, _, trained_on, _), results in records.items():
         cross = {"dice": [], "masd": []}
         for dataset in datasets:
-            metrics = _column_metrics(results, dataset, trained_on, own_test_column)
+            metrics = _column_metrics(results, dataset, trained_on)
             if metrics is None or (trained_on, dataset) in in_domain:
                 continue
             for metric in ("dice", "masd"):
@@ -312,7 +312,7 @@ def _best_values(records, datasets, reducer, in_domain=(), averaged=(), own_test
                 if np.isnan(value):
                     continue
                 seen[(dataset, metric)].append(value)
-                if dataset in averaged and dataset != trained_on:
+                if dataset in averaged:
                     cross[metric].append(value)
         for metric, values in cross.items():
             if not values:
@@ -360,25 +360,20 @@ def _sep(separator):
 OWN_TEST = "\0own-test"
 
 
-def _column_metrics(results, dataset, trained_on, own_test_column=False):
+def _column_metrics(results, dataset, trained_on):
     """What a row shows in one column, or None where it shows nothing.
 
-    A row's result on its own training set belongs in the `Test` column, so the training set's own
-    column is left to the rows that were sent to it.
+    `Test` is the row's own held-out split. Every other column is the evaluation set it names, which
+    for a set the run trained on is that set's `imagesTs` -- so a run trained on one dataset repeats
+    its `Test` value in that dataset's column.
     """
-    if dataset == OWN_TEST:
-        return results.get(trained_on)
-    if own_test_column and dataset == trained_on:
-        return None
-    return results.get(dataset)
+    return results.get(trained_on if dataset == OWN_TEST else dataset)
 
 
 def _render_table(records, datasets, statistic, in_domain=()):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
-    # Every row reports its own held-out split under `Test`, and a row's own training set is then
-    # left blank in the column it also has, so the same number is not printed twice.
-    own_test_column = True
+    # Every row reports its own held-out split under `Test`, whatever else it is shown against.
     datasets = [OWN_TEST] + list(datasets)
     # `Test` is a different set of images on every row, so it is never averaged.
     averaged = [d for d in datasets if d != OWN_TEST]
@@ -387,8 +382,7 @@ def _render_table(records, datasets, statistic, in_domain=()):
             (
                 sum(
                     1 for dataset in averaged
-                    if _column_metrics(results, dataset, trained_on, own_test_column) is not None
-                    and dataset != trained_on
+                    if _column_metrics(results, dataset, trained_on) is not None
                     and (trained_on, dataset) not in in_domain
                 )
                 for (_, _, trained_on, _), results in records.items()
@@ -397,7 +391,7 @@ def _render_table(records, datasets, statistic, in_domain=()):
         )
         > 1
     )
-    best = _best_values(records, datasets, reducer, in_domain, averaged, own_test_column)
+    best = _best_values(records, datasets, reducer, in_domain, averaged)
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
@@ -424,7 +418,7 @@ def _render_table(records, datasets, statistic, in_domain=()):
         cross_dice, cross_masd = [], []
         for index, dataset in enumerate(datasets):
             last = index == len(datasets) - 1 and show_average
-            metrics = _column_metrics(results, dataset, trained_on, own_test_column)
+            metrics = _column_metrics(results, dataset, trained_on)
             if metrics is None:
                 parts.append(f"<td>—</td><td{_sep(last)}>—</td>")
                 continue
@@ -448,7 +442,7 @@ def _render_table(records, datasets, statistic, in_domain=()):
                     reference=reference,
                 )
             )
-            if dataset in averaged and not reference and dataset != trained_on:
+            if dataset in averaged and not reference:
                 cross_dice.append(dice_value)
                 cross_masd.append(masd_value)
         if not show_average:

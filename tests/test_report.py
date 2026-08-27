@@ -89,10 +89,11 @@ class InDomainTests(unittest.TestCase):
         pairs = _in_domain(self.records, self.names, self.raw_dirs)
         self.assertNotIn(("Dataset208_combined", "Dataset211_paul"), pairs)
 
-    def test_a_training_set_is_never_in_domain_against_itself(self):
-        """Its own column is the held-out `Test` cell, which the table shows in its own right."""
+    def test_a_training_set_is_in_domain_against_itself(self):
+        """The rule is the same for every column: a set the run trained on is in-domain, so a run
+        shown against its own training set reads greyed there as well."""
         pairs = _in_domain(self.records, self.names, self.raw_dirs)
-        self.assertNotIn(("Dataset208_combined", "Dataset208_combined"), pairs)
+        self.assertIn(("Dataset208_combined", "Dataset208_combined"), pairs)
 
 
 class BestValueTests(unittest.TestCase):
