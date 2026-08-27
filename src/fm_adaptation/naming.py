@@ -17,6 +17,7 @@ import re
 MODEL_NAMES = {
     "sam3": "SAM3",
     "dinov3": "DINOv3",
+    "nnunet": "nnU-Net",
 }
 
 
@@ -60,6 +61,11 @@ _DISPLAY = dict(TOKENS)
 _POSITION = {token: index for index, (token, _) in enumerate(TOKENS)}
 
 
+def _tokens(run_name):
+    """The words a name is built from. `__` is a separator too, so it yields no empty token."""
+    return [token for token in run_name.split("_") if token]
+
+
 def describe_run(run_name):
     """A configuration name as prose: `upernet_inj_ft_balanced_aug_ours` -> the words it is made of.
 
@@ -69,7 +75,7 @@ def describe_run(run_name):
     """
     if not run_name:
         return ""
-    return " + ".join(_DISPLAY.get(token, token) for token in run_name.split("_"))
+    return " + ".join(_DISPLAY.get(token, token) for token in _tokens(run_name))
 
 
 def run_order(run_name):
@@ -85,7 +91,7 @@ def run_order(run_name):
         return ()
     return tuple(
         (_POSITION[token], "") if token in _POSITION else (len(TOKENS), token)
-        for token in run_name.split("_")
+        for token in _tokens(run_name)
         if token not in UNRANKED
     )
 

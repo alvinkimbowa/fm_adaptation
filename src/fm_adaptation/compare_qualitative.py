@@ -34,7 +34,7 @@ matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 
-from .config import ExperimentConfig
+from .config import describe_run_dir
 from .data import active_planes, load_dataset_json, rgb_planes
 from .naming import MODEL_NAMES, dataset_tag, describe_run
 from .metrics import read_case_metrics
@@ -55,7 +55,7 @@ from .qualitative import (
     select_cases,
     style_from_arguments,
 )
-from .datasets import dataset_dir as resolve_dataset_dir
+from .datasets import dataset_dir as resolve_dataset_dir, split_cases
 from .selection import matches as _matches, resolve_runs
 
 
@@ -68,8 +68,13 @@ def _columns(run_dirs, kind, tested_on):
     """
     columns = []
     for run_dir in run_dirs:
-        prediction_dir = run_dir / kind / tested_on / "predictions"
-        if not prediction_dir.is_dir():
+        prediction_dir = next(
+            (run_dir / kind / tested_on / name
+             for name in ("predictions", "preds")
+             if (run_dir / kind / tested_on / name).is_dir()),
+            None,
+        )
+        if prediction_dir is None:
             return None, run_dir
         # Everything that tells this run from another: what it is, and what it was trained on. Two
         # columns can differ in either alone, so both are always written and `_distinct` drops back
@@ -88,7 +93,7 @@ def _evaluation_sets(run_dirs, kind):
     """Evaluation sets every selected run has predictions for, so a figure has every column."""
     shared = None
     for run_dir in run_dirs:
-        here = {p.parent.name for p in (run_dir / kind).glob("*/predictions")}
+        here = {p.parent.name for p in (run_dir / kind).glob("*/pred*") if p.is_dir()}
         shared = here if shared is None else (shared & here)
     return sorted(shared or ())
 
@@ -319,7 +324,11 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-dir", default="models")
+    parser.add_argument("--results-dir", nargs="*", default=["models"],
+                        help="result trees to draw from. An external trainer's tree is laid out the "
+                             "same way, so naming it here is all it takes.")
+    parser.add_argument("--raw-data-dir", default=None,
+                        help="where the datasets live, for runs that ship no config.yaml of their own")
     parser.add_argument("--experiments", nargs="*", default=[],
                         help="one column each, as `<model>/<trained-on>/<run>/fold_<n>` under "
                              "--results-dir. Globs allowed; the order given is the column order. "
@@ -353,16 +362,24 @@ def main():
             if runs is None:
                 print(f"skipped {kind}/{tested_on}: {missing} has no predictions for it")
                 continue
-            cfg = ExperimentConfig.from_yaml(runs[0][1] / "config.yaml")
+            cfg = describe_run_dir(runs[0][1], args.raw_data_dir)
             source_path = runs[0][2].parent / "source.json"
             if source_path.exists():
                 source = json.loads(source_path.read_text())
                 source_dataset, split = source["dataset"], source["split"]
             else:
                 source_dataset = tested_on
-                split = cfg.test_split if tested_on != cfg.train_dataset else (
-                    "Ts" if kind == "test" else "Tr"
-                )
+                if not cfg.test_split:
+                    # Nothing recorded the split, so the predictions say which one it was.
+                    predicted = {path.stem for path in runs[0][2].glob("*.png")}
+                    directory = resolve_dataset_dir(cfg.raw_data_dir, tested_on)
+                    split = next(
+                        (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
+                    )
+                elif tested_on != cfg.train_dataset:
+                    split = cfg.test_split
+                else:
+                    split = "Ts" if kind == "test" else "Tr"
             dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
             images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
             # No annotations, no ground-truth column: the comparison is then between the models.
@@ -372,7 +389,7 @@ def main():
             # Restricted to the planes these runs were trained on, so the backdrop is their input.
             # It is the union across columns: a plane one column never saw is still part of what
             # another column was given.
-            trained_on = {ExperimentConfig.from_yaml(run[1] / "config.yaml").train_dataset
+            trained_on = {describe_run_dir(run[1], args.raw_data_dir).train_dataset
                           for run in runs}
             keeps = [active_planes(load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, t))["channel_names"])
                      for t in sorted(trained_on)]

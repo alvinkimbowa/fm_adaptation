@@ -22,17 +22,22 @@ def resolve_runs(results_dir, patterns):
     """Run directories, in the order asked for, from `<model>/<trained-on>/<run>/fold_<n>` patterns.
 
     A run is a model, a training set, a configuration and a fold, and on disk that is exactly one
-    directory. Naming runs by their path means any set of them can be selected -- they need not
+    directory, in any of the result trees `results_dir` names. Naming runs by their path means any set of them can be selected -- they need not
     share a training set or a configuration, and the order asked for is the order returned.
 
     Globs are honoured, so `*/Dataset219*/*aug*/fold_0` picks a family. Empty takes every run.
     """
-    root = Path(results_dir)
+    roots = [Path(results_dir)] if isinstance(results_dir, (str, Path)) else [Path(r) for r in results_dir]
     resolved = []
     for pattern in patterns or ["*/*/*/fold_*"]:
-        found = sorted(path for path in root.glob(pattern) if (path / "config.yaml").is_file())
+        found = sorted(
+            path
+            for root in roots
+            for path in root.glob(pattern)
+            if path.is_dir() and any(path.glob("*/*/pred*"))
+        )
         if not found:
-            raise SystemExit(f"no run under {root} matches {pattern!r}")
+            raise SystemExit(f"no run under {', '.join(map(str, roots))} matches {pattern!r}")
         for path in found:
             if path not in resolved:
                 resolved.append(path)

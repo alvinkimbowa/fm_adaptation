@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from types import SimpleNamespace
 
 from .datasets import resolve
 
@@ -199,3 +200,31 @@ class ExperimentConfig:
 
     def patch_cache_dir(self, dataset_name: str) -> Path:
         return self.results_dir / ".patch_cache" / dataset_name
+
+
+# What a figure needs to know about a run, for runs that ship no config of their own. nnU-Net and the
+# other external trainers write `<model>/<train dataset>/<configuration>/fold_<n>` the same way this
+# project does, but keep their own plans files instead of a config.yaml, so everything here is read
+# off the directory and the raw data directory the caller names.
+PLAIN_RUN_FIELDS = ("raw_data_dir", "train_dataset", "test_split", "patching", "stains")
+
+
+def describe_run_dir(fold_dir, raw_data_dir=None):
+    """The run at `fold_dir`, from its `config.yaml` where it has one.
+
+    Without a config, the training set is the directory it sits under and `raw_data_dir` says where
+    the datasets live. `test_split` is left empty: the caller works the split out from the cases that
+    were predicted, which is the only thing that answers it when nothing was written down.
+    """
+    config_path = Path(fold_dir) / "config.yaml"
+    if config_path.is_file():
+        return ExperimentConfig.from_yaml(config_path)
+    if raw_data_dir is None:
+        return None
+    return SimpleNamespace(
+        raw_data_dir=Path(raw_data_dir),
+        train_dataset=Path(fold_dir).parents[1].name,
+        test_split="",
+        patching=None,
+        stains=(),
+    )

@@ -10,10 +10,10 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .config import ExperimentConfig
+from .config import describe_run_dir
 from .data import load_dataset_json, rgb_planes, trained_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
-from .datasets import dataset_dir as resolve_dataset_dir
+from .datasets import dataset_dir as resolve_dataset_dir, split_cases
 from .selection import matches as _matches
 
 
@@ -28,12 +28,20 @@ def _classes(cfg, dataset_name):
     return sorted(names), names
 
 
-def _source_dirs(cfg, dataset_name, kind, output_dir):
+def _source_dirs(cfg, dataset_name, kind, output_dir, prediction_dir):
     """The training dataset's `test/` results come from its held-out imagesTs, everything else from Tr."""
     source_path = output_dir / "source.json"
     if source_path.exists():
         source = json.loads(source_path.read_text())
         dataset_name, split = source["dataset"], source["split"]
+    elif not cfg.test_split:
+        # Nothing recorded the split, so the predictions say which one it was: the images that were
+        # predicted are the images of exactly one of them.
+        predicted = {path.stem for path in prediction_dir.glob("*.png")}
+        directory = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
+        split = next(
+            (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
+        )
     elif dataset_name != cfg.train_dataset:
         split = cfg.test_split
     else:
@@ -55,7 +63,11 @@ def _crop_size(cfg, crop):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--results-dir", default="models")
+    parser.add_argument("--results-dir", nargs="*", default=["models"],
+                        help="result trees to draw from. An external trainer's tree is laid out the "
+                             "same way, so naming it here is all it takes.")
+    parser.add_argument("--raw-data-dir", default=None,
+                        help="where the datasets live, for runs that ship no config.yaml of their own")
     # One list per part of a run directory, `<model>/<train dataset>/<config>/fold_<n>`, plus the
     # evaluation set. Each is matched exactly, as a glob, as a `_suffix` tag or, for a dataset, by its
     # number; empty keeps every value that part can take.
@@ -83,7 +95,14 @@ def main():
     jobs = []
     # Driven by the predictions rather than the metrics: a dataset with no labels is never scored, so
     # it has no metrics.csv, and keying off that would silently skip every figure it could draw.
-    for prediction_dir in sorted(Path(args.results_dir).glob("*/Dataset*/*/fold_*/*/*/predictions")):
+    # `preds` as well as `predictions`: the same layout, a different word for the same directory.
+    found = sorted(
+        path
+        for root in args.results_dir
+        for name in ("predictions", "preds")
+        for path in Path(root).glob(f"*/Dataset*/*/fold_*/*/*/{name}")
+    )
+    for prediction_dir in found:
         output_dir = prediction_dir.parent
         metrics_path = output_dir / "metrics.csv"
         fold_dir = output_dir.parents[1]
@@ -100,9 +119,9 @@ def main():
             continue
         if not _matches(kind, args.splits):
             continue
-        config_path = fold_dir / "config.yaml"
-        if not config_path.exists():
-            print(f"skipped {output_dir} (no config.yaml)")
+        cfg = describe_run_dir(fold_dir, args.raw_data_dir)
+        if cfg is None:
+            print(f"skipped {output_dir} (no config.yaml, and no --raw-data-dir to stand in for it)")
             continue
         figure_path = output_dir / "qualitative.png"
         # Redrawing every run costs minutes; only the runs whose metrics moved need a new figure.
@@ -110,7 +129,7 @@ def main():
         if args.skip_unchanged and figure_path.exists() and figure_path.stat().st_mtime >= newest.stat().st_mtime:
             skipped += 1
             continue
-        jobs.append((metrics_path, output_dir, fold_dir, dataset_name, kind, config_path))
+        jobs.append((metrics_path, output_dir, fold_dir, dataset_name, kind, cfg, prediction_dir))
 
     if not jobs:
         print(f"nothing to draw ({skipped} up to date)")
@@ -118,12 +137,11 @@ def main():
     print(f"drawing {len(jobs)} figure(s), {skipped} up to date")
 
     progress = tqdm(jobs, desc="qualitative", unit="fig")
-    for metrics_path, output_dir, fold_dir, dataset_name, kind, config_path in progress:
+    for metrics_path, output_dir, fold_dir, dataset_name, kind, cfg, prediction_dir in progress:
         # Each figure reads and crops rows x cols source images, so on the whole-slide datasets a single
         # one takes a while; name the run being drawn rather than leaving a bare counter.
         progress.set_postfix_str(f"{fold_dir.parents[1].name}/{fold_dir.parent.name} {kind}")
-        cfg = ExperimentConfig.from_yaml(config_path)
-        source_dataset, images, labels = _source_dirs(cfg, dataset_name, kind, output_dir)
+        source_dataset, images, labels = _source_dirs(cfg, dataset_name, kind, output_dir, prediction_dir)
         classes, class_names = _classes(cfg, dataset_name)
         # Draw the stains into the same planes the model was given them in, so a dataset shipping
         # its stains as separate greyscale files does not come out grey beside one storing the same
@@ -141,7 +159,7 @@ def main():
         path = render(
             images,
             labels,
-            output_dir / "predictions",
+            prediction_dir,
             output_dir / "qualitative.png",
             layout=args.layout,
             rows=args.rows,

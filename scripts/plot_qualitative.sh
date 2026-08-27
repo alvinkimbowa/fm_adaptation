@@ -16,7 +16,17 @@ export PYTHONPATH="${PYTHONPATH:-}:src"
 models=(
     dinov3
     # sam3
+    nnunet
 )
+
+# Result trees to draw from. An external trainer lays its runs out the same way -- <model>/<train
+# dataset>/<configuration>/fold_<n> -- so naming its tree here is enough; `models` then picks it up
+# like any other. Runs with no config.yaml of their own read their datasets from raw_data_dir.
+results_dirs=(
+    models
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
+)
+raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 
 train_datasets=(
     Dataset207_lesion_katie_contusion_smi_gfap
@@ -100,6 +110,8 @@ args=()
 
 python -m fm_adaptation.plot_qualitative \
     "${args[@]}" \
+    --results-dir "${results_dirs[@]/#\~/$HOME}" \
+    --raw-data-dir "${raw_data_dir/#\~/$HOME}" \
     ${models[@]+--models "${models[@]}"} \
     ${train_datasets[@]+--train-datasets "${train_datasets[@]}"} \
     ${configs[@]+--configs "${configs[@]}"} \
