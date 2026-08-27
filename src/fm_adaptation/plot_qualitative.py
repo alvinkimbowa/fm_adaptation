@@ -74,7 +74,9 @@ def main():
     parser.add_argument("--models", nargs="*", default=[])
     parser.add_argument("--train-datasets", nargs="*", default=[],
                         help="what a run was trained on")
-    parser.add_argument("--configs", nargs="*", default=[])
+    parser.add_argument("--configs", nargs="*", default=[],
+                        help="configurations to draw. A run with no config.yaml of its own is not "
+                             "filtered by this; --models decides whether it is drawn.")
     parser.add_argument("--folds", nargs="*", default=[],
                         help="folds to draw, by number; empty draws every one")
     parser.add_argument("--test-datasets", nargs="*", default=[],
@@ -113,7 +115,9 @@ def main():
             continue
         if not _matches(fold_dir.parents[1].name, args.train_datasets):
             continue
-        if not _matches(fold_dir.parent.name, args.configs):
+        # A run that ships no config of its own names its directory in its trainer's vocabulary
+        # rather than this project's, so `--configs` cannot name it and `--models` decides.
+        if (fold_dir / "config.yaml").is_file() and not _matches(fold_dir.parent.name, args.configs):
             continue
         if not _matches(fold_dir.name.removeprefix("fold_"), args.folds):
             continue

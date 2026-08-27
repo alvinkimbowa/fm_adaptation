@@ -315,6 +315,26 @@ def panel_aspect(images, case_id, crop, channel_planes=None):
     return float(np.clip(probe.shape[0] / probe.shape[1], 0.35, 3.0))
 
 
+def _to_panel(image, label, prediction, size):
+    """Everything reduced to the pixels the panel actually has, before anything is drawn on it.
+
+    A contour is drawn in pixels of the array it is drawn on. Drawn at slide resolution and left to
+    the figure to shrink, a 2px outline on a 9000px section lands well under one pixel and disappears;
+    the mask work also costs a hundred times what it needs to. The image is averaged down, the masks
+    take nearest so no class is invented along an edge.
+    """
+    height, width = np.asarray(image).shape[:2]
+    scale = min(size[0] / width, size[1] / height)
+    if scale >= 1.0:
+        return image, label, prediction
+    target = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+    image = cv2.resize(np.asarray(image), target, interpolation=cv2.INTER_AREA)
+    prediction = cv2.resize(np.asarray(prediction), target, interpolation=cv2.INTER_NEAREST)
+    if label is not None:
+        label = cv2.resize(np.asarray(label), target, interpolation=cv2.INTER_NEAREST)
+    return image, label, prediction
+
+
 def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, metrics=None,
            crop=None, seed=0, style=None, title=None, classes=None, class_names=None,
            channel_planes=None):
@@ -345,6 +365,9 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
     # Trade resolution for extent once a figure is large, so a tall grid stays a readable file rather
     # than a 30-megapixel one.
     dpi = min(140, MAX_FIGURE_PIXELS / max(width, height))
+    # What one panel is worth in pixels once the figure is sized and rasterised. Everything is
+    # reduced to this before it is drawn on.
+    panel_size = (max(1, int(cell_width * scale * dpi)), max(1, int(cell_height * scale * dpi)))
     figure, axes = plt.subplots(
         grid_rows, per_sample * cols, figsize=(width, height), squeeze=False
     )
@@ -366,6 +389,7 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
                                  image.shape[:2], crop, rng)
             image, prediction = image[window], prediction[window]
             label = None if label is None else label[window]
+        image, label, prediction = _to_panel(image, label, prediction, panel_size)
         panels = _panels(
             np.asarray(image), None if label is None else np.asarray(label),
             np.asarray(prediction), layout, style, gt_colors, pred_colors,
