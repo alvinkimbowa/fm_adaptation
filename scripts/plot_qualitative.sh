@@ -16,6 +16,7 @@ datasets=(
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
+    Dataset207_lesion_katie_contusion_smi_gfap
     Dataset208_lesion_MYKE_smi_gfap
     Dataset209_lesion_MYE_smi_gfap
     Dataset213_lesion_KE_smi_gfap
@@ -37,6 +38,7 @@ experiments=(
     # upernet_inj_ft_balanced_dropany_ours
     upernet_inj_ft_balanced_aug_ours
     upernet_inj_ft_balanced_dropsmi_aug_ours
+    upernet_inj_ft_balanced_aug_gfap_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # upernet_inj_ft_vitb_ours

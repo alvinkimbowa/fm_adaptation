@@ -338,17 +338,21 @@ ADAPTATIONS = {
     "upernet_inj_ft_balanced_aug_ours": ("Adapter + UperNet + Inj + FT balanced aug ours", 15),
     "upernet_inj_ft_balanced_dropsmi_aug_ours":
         ("Adapter + UperNet + Inj + FT balanced drop-SMI aug ours", 16),
-    "m2f": ("Adapter + Mask2Former", 17),
-    "m2f_inj": ("Adapter + Mask2Former + Inj", 18),
+    # GFAP alone rather than SMI dropped at random, so it belongs directly under the drop-SMI row it
+    # is the limiting case of.
+    "upernet_inj_ft_balanced_aug_gfap_ours":
+        ("Adapter + UperNet + Inj + FT balanced aug GFAP-only ours", 17),
+    "m2f": ("Adapter + Mask2Former", 18),
+    "m2f_inj": ("Adapter + Mask2Former + Inj", 19),
     # The same adaptation on the smaller trunks, sorted last so they close out each model's block of
     # rows, largest trunk first so the rows read down in decreasing size from the ViT-L above. Each
     # trunk keeps its two schedules together -- constant rate with early stopping, then the full-length
     # warmup + poly run -- so that comparison is between adjacent rows rather than across the block.
-    "upernet_inj_ft_vitb_ours": ("Adapter + UperNet + Inj + FT ViT-B ours", 19),
-    "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 20),
-    "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 21),
-    "upernet_inj_ft_vits_poly_ours": ("Adapter + UperNet + Inj + FT ViT-S poly ours", 22),
-    "": ("", 23),
+    "upernet_inj_ft_vitb_ours": ("Adapter + UperNet + Inj + FT ViT-B ours", 20),
+    "upernet_inj_ft_vitb_poly_ours": ("Adapter + UperNet + Inj + FT ViT-B poly ours", 21),
+    "upernet_inj_ft_vits_ours": ("Adapter + UperNet + Inj + FT ViT-S ours", 22),
+    "upernet_inj_ft_vits_poly_ours": ("Adapter + UperNet + Inj + FT ViT-S poly ours", 23),
+    "": ("", 24),
 }
 
 
@@ -364,6 +368,7 @@ MAIN_ADAPTATIONS = {
     "upernet_inj_ft_dropsmi_ours", "upernet_inj_ft_dropany_ours",
     "upernet_inj_ft_balanced_ours", "upernet_inj_ft_balanced_dropany_ours",
     "upernet_inj_ft_balanced_aug_ours", "upernet_inj_ft_balanced_dropsmi_aug_ours",
+    "upernet_inj_ft_balanced_aug_gfap_ours",
     "upernet_inj_ft_vitb_ours", "upernet_inj_ft_vitb_poly_ours",
     "upernet_inj_ft_vits_ours", "upernet_inj_ft_vits_poly_ours", "",
 }

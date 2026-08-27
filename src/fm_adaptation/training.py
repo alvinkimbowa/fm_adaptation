@@ -17,6 +17,7 @@ from .data import (
     load_dataset_json,
     num_classes,
     stain_planes,
+    trained_planes,
 )
 from .losses import DiceCrossEntropyLoss, mean_foreground_dice
 from .models import build_model
@@ -33,6 +34,16 @@ def _raw_dataset(cfg, preprocess, subset):
         preprocess,
         channel_dropout=cfg.channel_dropout,
         channel_dropout_p=cfg.channel_dropout_p,
+        # The stains the config narrows this run to, when it names any. `predict.py` already keeps
+        # evaluation to those planes; without the same restriction here a run declared GFAP-only
+        # would train on SMI as well and then be scored without it.
+        keep_planes=(
+            trained_planes(
+                load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"], cfg.stains
+            )
+            if cfg.stains
+            else None
+        ),
         # Augment what the model learns from and nothing else: validation has to stay comparable
         # across runs, and prediction never builds its datasets through here at all.
         augment=cfg.augment if subset == "train" else None,

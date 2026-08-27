@@ -1,0 +1,56 @@
+data:
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset219_lesion_MYK_smi_gfap
+  test_datasets:
+    - Dataset219_lesion_MYK_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
+    - Dataset210_lesion_interrater_MY_smi_gfap
+    - Dataset211_lesion_paul_widefield_smi_gfap
+    - Dataset212_lesion_katie_dorsal_column_smi_gfap
+    - Dataset214_lesion_mohammad_smi_gfap
+    - Dataset215_lesion_yvonne_smi_gfap
+    - Dataset218_lesion_eric_smi_gfap
+  test_split: all
+  fold: 0
+  augment:
+    hflip: true
+    vflip: true
+    rotation: 10
+    zoom_min: 0.5
+    zoom_max: 1.5
+  balance_sources: true
+  # GFAP alone, at training and at evaluation. The drop-SMI pair measured what happens when SMI is
+  # sometimes absent; the robustness sweep then showed both MYK models lose almost nothing when it is
+  # taken away entirely (-0.013 and -0.006 mean dice), so the stain is carrying little. This asks the
+  # cleaner question: give the model one plane and never the other. It is also the only run that
+  # matches Eric's condition exactly, since his cases ship a blank SMI file.
+  #
+  # `stains` narrows the planes rather than dropping a stain at random, so the SMI plane is black in
+  # every image the model ever sees, training and test alike. That makes `channel_dropout` both
+  # meaningless and rejected here -- SMI is no longer a declared stain for this run to drop.
+  stains:
+    - GFAP
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  train_encoder: true
+  run_name: upernet_inj_ft_balanced_aug_gfap_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
