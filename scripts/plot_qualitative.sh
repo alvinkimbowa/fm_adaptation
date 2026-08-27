@@ -21,6 +21,7 @@ datasets=(
     Dataset213_lesion_KE_smi_gfap
     Dataset217_lesion_MY_smi_gfap
     Dataset218_lesion_eric_smi_gfap
+    Dataset219_lesion_MYK_smi_gfap
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 experiments=(
