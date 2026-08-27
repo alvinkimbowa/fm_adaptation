@@ -122,10 +122,18 @@ def _common_cases(runs, count, reference, rng):
         # Not enough of the reference's sample is shared; fall back to whatever every run has.
         extra = [(stem, None) for stem in sorted(shared) if stem not in {c for c, _ in ordered}]
         ordered += extra
-    # Keep the spread: take evenly across the surviving ranking rather than the top `count`.
+    # Keep the spread: cut the surviving ranking into `count` equal bands, best to worst, and draw one
+    # case from each rather than taking the top `count`. Drawing within the band rather than at its
+    # edge is what lets the seed move the sample: picking edges deterministically showed the same
+    # cases forever on any dataset small enough that `select_cases` returned all of them, which is
+    # every evaluation set here except Eric's 73.
     if len(ordered) > count:
-        picks = np.linspace(0, len(ordered) - 1, count).round().astype(int)
-        ordered = [ordered[i] for i in dict.fromkeys(picks.tolist())]
+        edges = np.linspace(0, len(ordered), count + 1).round().astype(int)
+        picks = [
+            int(rng.integers(low, high)) if rng is not None and high > low else int(low)
+            for low, high in zip(edges[:-1], edges[1:])
+        ]
+        ordered = [ordered[i] for i in dict.fromkeys(picks)]
     return ordered[:count]
 
 
