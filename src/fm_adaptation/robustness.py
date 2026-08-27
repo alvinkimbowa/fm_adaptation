@@ -206,16 +206,19 @@ def table(rows, columns, smi_counts, run_label):
     for name, scores in rows:
         lines.append(f"| {name} | " + " | ".join(_cell(scores.get(c)) for c in columns) + " |")
 
-    reference = dict(rows).get("none", {})
-    lines += ["", "Change against `none`.", "", heading, divider]
-    for name, scores in rows:
-        if name == "none":
-            continue
-        deltas = []
-        for column in columns:
-            score, base = scores.get(column), reference.get(column)
-            deltas.append("--" if score is None or base is None else f"{score - base:+.3f}")
-        lines.append(f"| {name} | " + " | ".join(deltas) + " |")
+    # Only when `none` was actually evaluated. A partial sweep that skipped it has no reference of
+    # its own, and subtracting the main table's numbers here would quietly mix two computations.
+    if "none" in dict(rows):
+        reference = dict(rows)["none"]
+        lines += ["", "Change against `none`.", "", heading, divider]
+        for name, scores in rows:
+            if name == "none":
+                continue
+            deltas = []
+            for column in columns:
+                score, base = scores.get(column), reference.get(column)
+                deltas.append("--" if score is None or base is None else f"{score - base:+.3f}")
+            lines.append(f"| {name} | " + " | ".join(deltas) + " |")
 
     lines += [
         "", "Cases carrying SMI, of those evaluated. `drop SMI` can only move a column that has "
@@ -233,7 +236,15 @@ def main():
     parser.add_argument("--output-dir", default="results_analysis/robustness")
     parser.add_argument("--overwrite", action="store_true",
                         help="re-predict transforms that already have predictions")
+    parser.add_argument("--transforms", nargs="+", choices=[t.name for t in TRANSFORMS],
+                        help="run only these rows. Without `none` among them there is no reference "
+                             "to subtract, so the change block is left out and the main table is "
+                             "what the row should be read against. Defaults to the whole sweep.")
     args = parser.parse_args()
+
+    transforms = TRANSFORMS
+    if args.transforms:
+        transforms = tuple(t for t in TRANSFORMS if t.name in set(args.transforms))
 
     cfg = ExperimentConfig.from_yaml(args.config)
     device = torch.device(cfg.device)
@@ -283,7 +294,7 @@ def main():
     shutil.copyfile(cfg.run_dir / "config.yaml", fold_dir / "config.yaml")
 
     rows = []
-    for transform in TRANSFORMS:
+    for transform in transforms:
         scores = {}
         for column in columns:
             output_dir = fold_dir / transform.directory / column
@@ -308,7 +319,12 @@ def main():
         for column, loaders in jobs.items()
     }
     label = f"{cfg.model_name} {cfg.run_name} on {cfg.train_dataset} fold {cfg.fold}"
-    path = root / f"{cfg.model_name}__{cfg.train_dataset}__{cfg.run_name}__fold_{cfg.fold}.md"
+    # A partial sweep gets its own filename. Writing it to the full sweep's path would replace a
+    # twelve-row table with a two-row one and there would be nothing to show the rest had been lost.
+    suffix = "" if transforms == TRANSFORMS else "__" + "+".join(
+        t.directory for t in transforms if t.name != "none"
+    )
+    path = root / f"{cfg.model_name}__{cfg.train_dataset}__{cfg.run_name}__fold_{cfg.fold}{suffix}.md"
     rendered = table(rows, columns, smi_counts, label)
     path.write_text(rendered)
     print("\n" + rendered + f"\nwrote {path}")
