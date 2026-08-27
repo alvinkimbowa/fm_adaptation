@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from fm_adaptation.report import _best_values, _in_domain, _model_matches, _pool_folds
+from fm_adaptation.report import _best_values, _experiment_order, _in_domain, _model_matches, _pool_folds
 from fixtures import DatasetFixture
 
 
@@ -30,6 +30,38 @@ class ModelMatchTests(unittest.TestCase):
 
     def test_an_empty_list_keeps_everything(self):
         self.assertTrue(_model_matches("dinov3", []))
+
+
+class RowOrderTests(unittest.TestCase):
+    """Rows come out where the selection lists put them."""
+
+    def rows(self, models=(), train_datasets=(), configs=()):
+        records = {
+            ("dinov3", "balanced_aug", "Dataset208_MYKE", "0"): {},
+            ("dinov3", "balanced", "Dataset219_MYK", "0"): {},
+            ("nnunet", "", "Dataset105_eric", "0"): {},
+        }
+        key = _experiment_order(list(models), list(train_datasets), list(configs))
+        return [(k[0], k[2], k[1]) for k, _ in sorted(records.items(), key=key)]
+
+    def test_model_is_weighed_first_then_training_set_then_configuration(self):
+        self.assertEqual(
+            self.rows(models=["nnunet", "dinov3"],
+                      train_datasets=["Dataset219_MYK", "Dataset208_MYKE", "Dataset105_eric"]),
+            [("nnunet", "Dataset105_eric", ""),
+             ("dinov3", "Dataset219_MYK", "balanced"),
+             ("dinov3", "Dataset208_MYKE", "balanced_aug")],
+        )
+
+    def test_reordering_a_list_reorders_the_rows(self):
+        first = self.rows(models=["dinov3", "nnunet"])
+        second = self.rows(models=["nnunet", "dinov3"])
+        self.assertEqual(first[0][0], "dinov3")
+        self.assertEqual(second[0][0], "nnunet")
+
+    def test_a_value_no_list_names_sorts_after_the_ones_named(self):
+        rows = self.rows(models=["nnunet"])
+        self.assertEqual(rows[0][0], "nnunet")
 
 
 class PoolFoldTests(unittest.TestCase):

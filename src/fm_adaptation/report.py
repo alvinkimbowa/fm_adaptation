@@ -12,9 +12,9 @@ import yaml
 
 from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, resolve, split_cases
-from .naming import MODEL_NAMES, describe_run, run_order
+from .naming import MODEL_NAMES, describe_run
 from .metrics import read_case_metrics
-from .selection import matches
+from .selection import list_order, matches
 
 
 def _read_run(run_dir: Path):
@@ -250,25 +250,31 @@ def _model_matches(model, patterns):
 
 # Model families, in the order their rows read best: foundation models keyed by their config name,
 # baselines by the label their loader records. A model not named here sorts last.
-MODEL_ORDER = {
-    "sam3": 0,
-    "dinov3": 1,
-    "nnU-Net": 2,
-    "XTinyUNet": 3,
-}
+def _experiment_order(models, train_datasets, configs):
+    """Sort key putting rows where the selection lists put them.
 
+    The parts are weighed in the order a run directory writes them -- model, then training set, then
+    configuration -- so reading down the table follows the lists that chose it. A part whose list is
+    empty was not narrowed and has no order of its own; `list_order` falls back to the value itself.
+    """
+    def model_order(model):
+        # `--models` is matched leniently, so ordering has to be too: a row labelled
+        # `nnU-Net (Res Enc M)` is the one `nnUNet` named and belongs where that entry sits.
+        for index, pattern in enumerate(models):
+            if _model_matches(model, [pattern]):
+                return (index, "")
+        return (len(models), model)
 
-def _model_rank(model):
-    """nnU-Net's plans variants are named `nnU-Net (...)`, so they rank where plain nnU-Net does."""
-    if model in MODEL_ORDER:
-        return MODEL_ORDER[model]
-    base = model.split(" (")[0]
-    return MODEL_ORDER.get(base, len(MODEL_ORDER))
+    def key(item):
+        model, adaptation, trained_on, fold = item[0]
+        return (
+            model_order(model),
+            list_order(trained_on, train_datasets),
+            list_order(adaptation, configs),
+            fold,
+        )
 
-
-def _experiment_order(item):
-    model, adaptation, trained_on, fold = item[0]
-    return (_model_rank(model), run_order(adaptation), trained_on, model, fold)
+    return key
 
 
 def _in_domain(records, datasets, raw_dirs):
@@ -370,7 +376,7 @@ def _column_metrics(results, dataset, trained_on):
     return results.get(trained_on if dataset == OWN_TEST else dataset)
 
 
-def _render_table(records, datasets, statistic, in_domain=()):
+def _render_table(records, datasets, statistic, order, in_domain=()):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
     # Every row reports its own held-out split under `Test`, whatever else it is shown against.
@@ -405,7 +411,7 @@ def _render_table(records, datasets, statistic, in_domain=()):
         last = index == len(datasets) - 1 and show_average
         parts.append(f"<th>Dice ↑</th><th{_sep(last)}>MASD (px) ↓</th>")
     parts.append("</tr></thead><tbody>")
-    for key, results in sorted(records.items(), key=_experiment_order):
+    for key, results in sorted(records.items(), key=order):
         model, probe, trained_on, fold = key
         config = _config_label(model, probe)
         total, trainable = _parameter_counts(model, probe, trained_on)
@@ -471,7 +477,7 @@ def _render_table(records, datasets, statistic, in_domain=()):
     return "".join(parts)
 
 
-def _write_summary_csv(records, path):
+def _write_summary_csv(records, path, order):
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -494,7 +500,7 @@ def _write_summary_csv(records, path):
                 "masd_q3",
             ]
         )
-        for key, results in sorted(records.items(), key=_experiment_order):
+        for key, results in sorted(records.items(), key=order):
             model, adaptation, trained_on, fold = key
             report_model = MODEL_NAMES.get(model, model)
             report_adaptation = describe_run(adaptation)
@@ -626,6 +632,7 @@ def main():
     thead tr:first-child th:first-child,thead tr:first-child th:nth-child(4){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
+    order = _experiment_order(args.models, args.train_datasets, args.configs)
     # One page per statistic; `suffix` becomes part of the file name.
     statistics = {"mean_sd": "Mean ± SD", "median_iqr": "Median (Q1–Q3)"}
     bodies = {suffix: "" for suffix in statistics}
@@ -665,7 +672,7 @@ def main():
         for suffix, statistic in statistics.items():
             bodies[suffix] += (
                 f"<section><h1>{html.escape(family)}</h1>"
-                + _render_table(family_records, family_datasets, statistic, in_domain)
+                + _render_table(family_records, family_datasets, statistic, order, in_domain)
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
                     f"{html.escape(_dataset_label(dataset))}</h1>"
@@ -680,7 +687,7 @@ def main():
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _write_summary_csv(records, output.with_suffix(".csv"))
+    _write_summary_csv(records, output.with_suffix(".csv"), order)
     for suffix, page_body in bodies.items():
         if not page_body:
             continue

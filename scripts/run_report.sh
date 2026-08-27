@@ -8,20 +8,20 @@ results_dir=models
 # carry it. An empty list keeps every value that part can take. Entries match exactly, as a glob or
 # as a `_suffix` tag, and a dataset by its number alone.
 models=(
-    dinov3
-    sam3
     nnUNet
+    sam3
+    dinov3
 )
 
 train_datasets=(
     Dataset105_lesion_eric_gfap_resized
-    Dataset207_lesion_katie_contusion_smi_gfap
-    Dataset208_lesion_MYKE_smi_gfap
-    Dataset209_lesion_MYE_smi_gfap
-    Dataset213_lesion_KE_smi_gfap
-    Dataset217_lesion_MY_smi_gfap
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset209_lesion_MYE_smi_gfap
+    # Dataset213_lesion_KE_smi_gfap
+    # Dataset217_lesion_MY_smi_gfap
     Dataset218_lesion_eric_smi_gfap
-    Dataset219_lesion_MYK_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 
@@ -47,16 +47,16 @@ configs=(
     # nonlinear_finetune
     # upernet
     # upernet_inj
-    upernet_ours
-    upernet_inj_ours
+    # upernet_ours
+    # upernet_inj_ours
     upernet_inj_ft_ours
-    upernet_inj_ft_dropsmi_ours
-    upernet_inj_ft_dropany_ours
+    # upernet_inj_ft_dropsmi_ours
+    # upernet_inj_ft_dropany_ours
     upernet_inj_ft_balanced_ours
-    upernet_inj_ft_balanced_dropany_ours
-    upernet_inj_ft_balanced_aug_ours
-    upernet_inj_ft_balanced_dropsmi_aug_ours
-    upernet_inj_ft_balanced_aug_gfap_ours
+    # upernet_inj_ft_balanced_dropany_ours
+    # upernet_inj_ft_balanced_aug_ours
+    # upernet_inj_ft_balanced_dropsmi_aug_ours
+    # upernet_inj_ft_balanced_aug_gfap_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # upernet_inj_ft_vitb_ours

@@ -4,8 +4,10 @@ from pathlib import Path
 
 import numpy as np
 
+from fm_adaptation.selection import select_runs
+
 try:
-    from fm_adaptation.compare_qualitative import _columns, _common_cases, _evaluation_sets, resolve_runs
+    from fm_adaptation.compare_qualitative import _columns, _common_cases, _evaluation_sets
 except ImportError as error:  # pragma: no cover - environment, not behaviour
     # Drawing needs scikit-image, which only the SAM3 environment carries; the rest of the suite runs
     # under .venv-mm. Skipping keeps one interpreter from failing to collect what the other checks.
@@ -97,7 +99,7 @@ def _fold(root, model, trained_on, run_name, columns):
 
 
 class RunSelectionTests(unittest.TestCase):
-    """Naming a column by its path, which is how a row of the results table is identified."""
+    """Which runs become columns, and in what order."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -112,22 +114,15 @@ class RunSelectionTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_runs_resolve_in_the_order_given(self):
-        """The list is the column order. Sorting by anything else would mean the script cannot say
-        which column goes where, which is the whole point of naming them one by one."""
-        for order in ([self.myk, self.myke], [self.myke, self.myk]):
-            asked = [str(path.relative_to(self.root)) for path in order]
-            self.assertEqual(resolve_runs(self.root, asked), list(order))
+    def test_columns_follow_the_order_the_lists_put_them_in(self):
+        for order in (["Dataset219_MYK", "Dataset208_MYKE"], ["Dataset208_MYKE", "Dataset219_MYK"]):
+            runs = select_runs(self.root, train_datasets=order)
+            self.assertEqual([run.parents[1].name for run in runs], order)
 
-    def test_a_glob_expands_to_the_runs_it_matches(self):
-        self.assertEqual(
-            resolve_runs(self.root, ["*/Dataset2*/balanced_aug/fold_0"]),
-            sorted([self.myke, self.myk]),
-        )
-
-    def test_no_match_is_an_error_rather_than_a_missing_column(self):
-        with self.assertRaises(SystemExit):
-            resolve_runs(self.root, ["dinov3/Dataset999_nothing/*/fold_0"])
+    def test_every_part_narrows_and_an_empty_list_does_not(self):
+        self.assertEqual(select_runs(self.root, train_datasets=["Dataset208_MYKE"]), [self.myke])
+        self.assertEqual(len(select_runs(self.root)), 2)
+        self.assertEqual(select_runs(self.root, configs=["nothing_like_this"]), [])
 
     def test_only_sets_every_run_evaluated_are_offered(self):
         """A run's own training set is one the other rows never predicted, so it cannot be a figure."""

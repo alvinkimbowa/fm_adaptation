@@ -5,15 +5,13 @@ does this case better?" -- reading that off separate figures fails because each 
 Here the cases are chosen once and every model is drawn on the same ones, so a row is a like-for-like
 comparison across the columns.
 
-`--experiments` is a flat list of runs, each named by its path under `--results-dir`, and the order
-given is the column order. A run is a model, a training set, a configuration and a fold, so any
-combination of them can be put side by side -- they need not share a training set or a configuration.
-`--datasets` says which evaluation sets to draw.
+Runs are selected the way `plot_qualitative` selects them -- a list per part of a run directory --
+and each selected run becomes a column rather than a figure of its own.
 
     python -m fm_adaptation.compare_qualitative \
-        --experiments dinov3/Dataset208_lesion_MYKE_smi_gfap/upernet_inj_ft_balanced_aug_ours/fold_0 \
-                      dinov3/Dataset219_lesion_MYK_smi_gfap/upernet_inj_ft_balanced_aug_gfap_ours/fold_0 \
-        --datasets Dataset211_lesion_paul_widefield_smi_gfap --splits test --rows 5
+        --models dinov3 --train-datasets Dataset208_lesion_MYKE_smi_gfap Dataset219_lesion_MYK_smi_gfap \
+        --configs upernet_inj_ft_balanced_aug_ours --folds 0 \
+        --test-datasets Dataset211_lesion_paul_widefield_smi_gfap --splits test --rows 5
 
 Drawing is `qualitative.py`'s: the same styles, the same colours, the same channel handling. Only the
 arrangement is new.
@@ -56,7 +54,7 @@ from .qualitative import (
     style_from_arguments,
 )
 from .datasets import dataset_dir as resolve_dataset_dir, split_cases
-from .selection import matches as _matches, resolve_runs
+from .selection import matches as _matches, select_runs
 
 
 def _columns(run_dirs, kind, tested_on):
@@ -157,6 +155,21 @@ def _fit(array, target_width, nearest):
         array, (int(round(width * scale)), max(1, int(round(height * scale)))),
         interpolation=cv2.INTER_NEAREST if nearest else cv2.INTER_AREA,
     )
+
+
+# Height of one line of an 8pt header, in points, leading included.
+HEADER_LINE_POINTS = 11.0
+
+
+def _header(name):
+    """A column header stacked one term to a line.
+
+    A run's name is a list of terms and reads as well down as across, while set on one line it
+    decides how wide the column has to be and squeezes the panels underneath it. Stacking spends
+    height instead, which is the direction a comparison figure has to spare, and nothing has to be
+    cut to fit.
+    """
+    return "\n".join(name.split(" + "))
 
 
 def _distinct(labels):
@@ -293,12 +306,12 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
                 )
             column += 1
 
+    # Every block gets its own headers, since each is a complete set of columns.
+    headings = [_header(name) for name in columns]
     for column in range(grid_columns):
-        # The column header names the model; the per-cell title is that case's Dice, so both fit.
-        # Every block gets its own headers, since each is a complete set of columns.
-        axes[0][column].annotate(_shorten(columns[column % len(columns)], 46), xy=(0.5, 1.0),
-                                 xytext=(0, 18), xycoords="axes fraction",
-                                 textcoords="offset points",
+        axes[0][column].annotate(headings[column % len(columns)], xy=(0.5, 1.0),
+                                 xytext=(0, 8), xycoords="axes fraction",
+                                 textcoords="offset points", linespacing=1.35,
                                  ha="center", va="bottom", fontsize=8, fontweight="bold")
 
     names = class_names or {}
@@ -314,8 +327,11 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
     if title:
         figure.suptitle(title)
     # Zero padding everywhere: the panels are the figure, and the row gaps are what the layout is for.
+    # The top is reserved for the headers, from however many lines the tallest of them runs to.
     inches = figure.get_size_inches()[1]
-    figure.tight_layout(pad=0, h_pad=0, w_pad=0, rect=(0, 0.34 / inches, 1, 1))
+    header = max((name.count("\n") + 1 for name in headings), default=1) * HEADER_LINE_POINTS / 72
+    figure.tight_layout(pad=0, h_pad=0, w_pad=0,
+                        rect=(0, 0.34 / inches, 1, max(0.5, 1 - (header + 0.2) / inches)))
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=dpi, bbox_inches="tight", pad_inches=0)
     plt.close(figure)
@@ -329,11 +345,17 @@ def main():
                              "same way, so naming it here is all it takes.")
     parser.add_argument("--raw-data-dir", default=None,
                         help="where the datasets live, for runs that ship no config.yaml of their own")
-    parser.add_argument("--experiments", nargs="*", default=[],
-                        help="one column each, as `<model>/<trained-on>/<run>/fold_<n>` under "
-                             "--results-dir. Globs allowed; the order given is the column order. "
-                             "Empty takes every run.")
-    parser.add_argument("--datasets", nargs="*", default=[],
+    # One list per part of a run directory, `<model>/<train dataset>/<config>/fold_<n>`, plus the
+    # evaluation set. Each selected run is a column, ordered as the lists order it.
+    parser.add_argument("--models", nargs="*", default=[])
+    parser.add_argument("--train-datasets", nargs="*", default=[],
+                        help="what a run was trained on")
+    parser.add_argument("--configs", nargs="*", default=[],
+                        help="configurations to draw. A run with no config.yaml of its own is not "
+                             "filtered by this; --models decides whether it is drawn.")
+    parser.add_argument("--folds", nargs="*", default=[],
+                        help="folds to draw, by number; empty draws every one")
+    parser.add_argument("--test-datasets", nargs="*", default=[],
                         help="evaluation sets to draw. Empty takes every set the chosen runs share.")
     parser.add_argument("--splits", nargs="*", default=["test"], choices=("validation", "test"))
     parser.add_argument("--output-dir", default="results/qualitative",
@@ -351,12 +373,14 @@ def main():
     style = style_from_arguments(args)
 
     drawn = skipped = 0
-    run_dirs = resolve_runs(args.results_dir, args.experiments)
+    run_dirs = select_runs(
+        args.results_dir, args.models, args.train_datasets, args.configs, args.folds
+    )
     for kind in args.splits:
         # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
         # `test_datasets` later shows up without editing this.
         available = _evaluation_sets(run_dirs, kind)
-        targets = [d for d in available if _matches(d, args.datasets)]
+        targets = [d for d in available if _matches(d, args.test_datasets)]
         for tested_on in targets:
             runs, missing = _columns(run_dirs, kind, tested_on)
             if runs is None:

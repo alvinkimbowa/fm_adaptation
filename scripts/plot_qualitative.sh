@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Each run's own qualitative figure, written beside its predictions as
 # models/<model>/<trained on>/<run>/fold_<n>/<split>/<evaluation set>/qualitative.png.
-# Comparing runs against each other is scripts/compare_qualitative.sh, which writes to
+# Comparing runs against each other is scripts/plot_comparison_qualitative.sh, which writes to
 # results/qualitative/ -- one script per question, rather than one script with a mode switch.
 
 export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
@@ -45,16 +45,16 @@ configs=(
     # nonlinear
     # upernet
     # upernet_inj
-    upernet_ours
-    upernet_inj_ours
+    # upernet_ours
+    # upernet_inj_ours
     upernet_inj_ft_ours
-    upernet_inj_ft_dropsmi_ours
-    upernet_inj_ft_dropany_ours
-    upernet_inj_ft_balanced_ours
-    upernet_inj_ft_balanced_dropany_ours
-    upernet_inj_ft_balanced_aug_ours
-    upernet_inj_ft_balanced_dropsmi_aug_ours
-    upernet_inj_ft_balanced_aug_gfap_ours
+    # upernet_inj_ft_dropsmi_ours
+    # upernet_inj_ft_dropany_ours
+    # upernet_inj_ft_balanced_ours
+    # upernet_inj_ft_balanced_dropany_ours
+    # upernet_inj_ft_balanced_aug_ours
+    # upernet_inj_ft_balanced_dropsmi_aug_ours
+    # upernet_inj_ft_balanced_aug_gfap_ours
     # m2f
 )
 
@@ -89,14 +89,14 @@ cols=4          # samples per row
 # mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=masks
+layout=split
 
 # contour | overlay | centerline
 gt_style=contour
-pred_style=overlay
+pred_style=contour
 # red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
 gt_color=white
-pred_color=red
+pred_color=yellow
 gt_width=1
 pred_width=2
 alpha=0.5

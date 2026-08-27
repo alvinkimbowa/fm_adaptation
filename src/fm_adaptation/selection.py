@@ -18,27 +18,45 @@ def matches(name, patterns):
     )
 
 
-def resolve_runs(results_dir, patterns):
-    """Run directories, in the order asked for, from `<model>/<trained-on>/<run>/fold_<n>` patterns.
+def list_order(value, listed):
+    """Sort key placing `value` where `listed` puts it, and after everything it names when absent.
 
-    A run is a model, a training set, a configuration and a fold, and on disk that is exactly one
-    directory, in any of the result trees `results_dir` names. Naming runs by their path means any set of them can be selected -- they need not
-    share a training set or a configuration, and the order asked for is the order returned.
-
-    Globs are honoured, so `*/Dataset219*/*aug*/fold_0` picks a family. Empty takes every run.
+    An empty list means "keep everything", so it has no opinion on order; the value's own name then
+    decides, which at least keeps the result stable between runs.
     """
-    roots = [Path(results_dir)] if isinstance(results_dir, (str, Path)) else [Path(r) for r in results_dir]
-    resolved = []
-    for pattern in patterns or ["*/*/*/fold_*"]:
-        found = sorted(
-            path
-            for root in roots
-            for path in root.glob(pattern)
-            if path.is_dir() and any(path.glob("*/*/pred*"))
-        )
-        if not found:
-            raise SystemExit(f"no run under {', '.join(map(str, roots))} matches {pattern!r}")
-        for path in found:
-            if path not in resolved:
-                resolved.append(path)
-    return resolved
+    listed = list(listed)
+    return (listed.index(value), "") if value in listed else (len(listed), value)
+
+
+def select_runs(results_dirs, models=(), train_datasets=(), configs=(), folds=()):
+    """Run directories matching every named part, in the order the lists put them.
+
+    A run is one directory, `<model>/<train dataset>/<configuration>/fold_<n>`, in any of the trees
+    `results_dirs` names. A part with an empty list is not narrowed. Ordering follows the parts in
+    the order the path writes them: model, then training set, then configuration.
+
+    A run that ships no `config.yaml` names its directory in its trainer's vocabulary rather than
+    this project's, so `configs` cannot name it and `models` alone decides whether it is kept.
+    """
+    roots = [Path(results_dirs)] if isinstance(results_dirs, (str, Path)) else [Path(r) for r in results_dirs]
+    found = {}
+    for root in roots:
+        for run_dir in root.glob("*/Dataset*/*/fold_*"):
+            if not any(run_dir.glob("*/*/pred*")):
+                continue
+            model, trained_on, config = (
+                run_dir.parents[2].name, run_dir.parents[1].name, run_dir.parent.name
+            )
+            if not (matches(model, models) and matches(trained_on, train_datasets)):
+                continue
+            if (run_dir / "config.yaml").is_file() and not matches(config, configs):
+                continue
+            if not matches(run_dir.name.removeprefix("fold_"), folds):
+                continue
+            found[run_dir] = (
+                list_order(model, models),
+                list_order(trained_on, train_datasets),
+                list_order(config, configs),
+                run_dir.name,
+            )
+    return sorted(found, key=found.get)

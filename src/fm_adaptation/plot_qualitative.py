@@ -14,7 +14,7 @@ from .config import describe_run_dir
 from .data import load_dataset_json, rgb_planes, trained_planes
 from .qualitative import add_style_arguments, render, style_from_arguments
 from .datasets import dataset_dir as resolve_dataset_dir, split_cases
-from .selection import matches as _matches
+from .selection import matches as _matches, select_runs
 
 
 def _classes(cfg, dataset_name):
@@ -94,6 +94,9 @@ def main():
 
     # Selecting the work up front means the progress bar knows its total, and a run that matches nothing
     # says so immediately instead of after a silent walk of the results tree.
+    selected = set(select_runs(
+        args.results_dir, args.models, args.train_datasets, args.configs, args.folds
+    ))
     jobs = []
     # Driven by the predictions rather than the metrics: a dataset with no labels is never scored, so
     # it has no metrics.csv, and keying off that would silently skip every figure it could draw.
@@ -111,15 +114,7 @@ def main():
         dataset_name, kind = output_dir.name, output_dir.parent.name
         if not _matches(dataset_name, args.test_datasets):
             continue
-        if not _matches(fold_dir.parents[2].name, args.models):
-            continue
-        if not _matches(fold_dir.parents[1].name, args.train_datasets):
-            continue
-        # A run that ships no config of its own names its directory in its trainer's vocabulary
-        # rather than this project's, so `--configs` cannot name it and `--models` decides.
-        if (fold_dir / "config.yaml").is_file() and not _matches(fold_dir.parent.name, args.configs):
-            continue
-        if not _matches(fold_dir.name.removeprefix("fold_"), args.folds):
+        if fold_dir not in selected:
             continue
         if not _matches(kind, args.splits):
             continue
