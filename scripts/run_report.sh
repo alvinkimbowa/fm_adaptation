@@ -14,6 +14,7 @@ models=(
 )
 
 train_datasets=(
+    Dataset105_lesion_eric_gfap_resized
     Dataset207_lesion_katie_contusion_smi_gfap
     Dataset208_lesion_MYKE_smi_gfap
     Dataset209_lesion_MYE_smi_gfap
@@ -21,7 +22,6 @@ train_datasets=(
     Dataset217_lesion_MY_smi_gfap
     Dataset218_lesion_eric_smi_gfap
     Dataset219_lesion_MYK_smi_gfap
-    Dataset105_lesion_eric_gfap_resized
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 

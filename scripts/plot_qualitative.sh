@@ -29,6 +29,7 @@ results_dirs=(
 raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 
 train_datasets=(
+    Dataset105_lesion_eric_gfap_resized
     Dataset207_lesion_katie_contusion_smi_gfap
     Dataset208_lesion_MYKE_smi_gfap
     Dataset209_lesion_MYE_smi_gfap
