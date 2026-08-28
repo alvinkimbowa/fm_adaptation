@@ -208,10 +208,15 @@ def _layer_id(name: str, blocks: int) -> int:
     """Which layer a trunk parameter belongs to, for layer-wise learning-rate decay.
 
     0 is the embedding, 1..blocks are the transformer blocks and blocks+1 is everything after them --
-    the same partition ViT-Adapter's `LayerDecayOptimizerConstructor` uses.
+    the same partition ViT-Adapter's `LayerDecayOptimizerConstructor` uses. A ConvNeXt trunk is
+    partitioned the same way over its four stages: the stem is the embedding, and the downsampler in
+    front of a stage belongs with it.
     """
     if name.startswith("blocks."):
         return int(name.split(".")[1]) + 1
+    if name.startswith(("stages.", "downsample_layers.")):
+        stage = int(name.split(".")[1])
+        return stage if name.startswith("downsample_layers.") and stage == 0 else stage + 1
     embedding = ("patch_embed", "pos_embed", "cls_token", "storage_tokens", "mask_token", "rope_embed")
     return 0 if name.startswith(embedding) else blocks + 1
 
@@ -225,7 +230,7 @@ def _param_groups(model, cfg):
         return [p for p in model.parameters() if p.requires_grad]
     trunk = model.encoder.trunk
     trunk_params = {id(p) for p in trunk.parameters()}
-    blocks = len(trunk.blocks)
+    blocks = len(getattr(trunk, "blocks", None) or trunk.stages)
     groups = {}
     for name, param in trunk.named_parameters():
         if not param.requires_grad:
@@ -449,12 +454,13 @@ def main():
                 # A trunk that trains is no longer recoverable from its pretrained checkpoint, so it is
                 # stored whole under the key the finetuning runs already use.
                 weights["encoder"] = model.encoder.trunk.state_dict()
-            if encoder_trains:
+            adapter = getattr(model.encoder, "adapter", None)
+            if adapter is not None:
                 # Only what trains: the frozen trunk is 300M parameters and is rebuilt from its own
                 # checkpoint. `encoder` is reserved for the finetuning runs, which store the whole trunk.
                 weights["adapter"] = {
                     key: value
-                    for key, value in model.encoder.adapter.state_dict().items()
+                    for key, value in adapter.state_dict().items()
                     if not key.startswith("backbone.")
                 }
             # `last.pt` carries the training state as well, so an interrupted run can be picked up; the

@@ -9,7 +9,7 @@ class DescribeRunTests(unittest.TestCase):
     def test_tokens_read_in_the_order_the_name_writes_them(self):
         self.assertEqual(
             describe_run("upernet_inj_ft_balanced_aug_ours"),
-            "Adapter + UperNet + Inj + FT + balanced + aug + ours",
+            "UperNet + Inj + FT + balanced + aug + ours",
         )
 
     def test_an_unknown_token_survives_verbatim(self):
@@ -17,11 +17,23 @@ class DescribeRunTests(unittest.TestCase):
         itself, and giving its new idea a nicer word later is an improvement, not a prerequisite."""
         self.assertEqual(
             describe_run("upernet_inj_ft_wobble_ours"),
-            "Adapter + UperNet + Inj + FT + wobble + ours",
+            "UperNet + Inj + FT + wobble + ours",
         )
 
     def test_a_name_of_only_unknown_tokens_still_reads(self):
         self.assertEqual(describe_run("frobnicate_v2"), "frobnicate + v2")
+
+
+    def test_a_trunk_that_is_not_the_default_vit_is_named(self):
+        self.assertEqual(
+            describe_run("convnext_upernet_ft_p512_ours"),
+            "ConvNeXt-L + UperNet + FT + 512px patches + ours",
+        )
+
+    def test_each_convnext_size_reads_as_itself(self):
+        """The four sizes are compared against each other, so the row has to say which one it is."""
+        self.assertEqual(describe_run("convnextt_upernet_ours"), "ConvNeXt-T + UperNet + ours")
+        self.assertEqual(describe_run("convnextb_upernet_ours"), "ConvNeXt-B + UperNet + ours")
 
 
 class RunOrderTests(unittest.TestCase):

@@ -25,11 +25,17 @@ MODEL_NAMES = {
 # then what was done to it. Order matters twice over -- it is the display order within a name and
 # the sort order between names -- so a token belongs where its idea belongs, not alphabetically.
 TOKENS = (
+    # The trunk, where it is not the default ViT. ConvNeXt names its size, since the four differ by
+    # an order of magnitude and are compared against each other.
+    ("convnext", "ConvNeXt-L"),
+    ("convnextb", "ConvNeXt-B"),
+    ("convnexts", "ConvNeXt-S"),
+    ("convnextt", "ConvNeXt-T"),
     # The probe or decoder.
     ("linear", "LP"),
     ("nonlinear", "NLP"),
-    ("upernet", "Adapter + UperNet"),
-    ("m2f", "Adapter + Mask2Former"),
+    ("upernet", "UperNet"),
+    ("m2f", "Mask2Former"),
     # What was added to it.
     ("inj", "Inj"),
     ("kd", "KD"),
@@ -38,6 +44,8 @@ TOKENS = (
     # Trunk size, where it is not the default ViT-L.
     ("vitb", "ViT-B"),
     ("vits", "ViT-S"),
+    # Patch size, where it is not the encoder's own input size.
+    ("p512", "512px patches"),
     # Schedule and initialisation.
     ("poly", "poly"),
     ("init", "init"),

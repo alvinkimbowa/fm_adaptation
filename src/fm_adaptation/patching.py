@@ -3,8 +3,14 @@
 Whole-slide images are read lazily through memory maps, so a patch never costs more than the pixels it
 covers. Which patches are worth taking is decided once per case from a coarse block-occupancy map of the
 region of interest (everything above ``roi_threshold``); the masked-out surround is never sampled.
+
+Training patches are augmented by cutting a larger patch than the one asked for, turning that, and
+taking the requested size out of its middle -- see ``_source_size``. A patch already cut to its final
+size cannot be turned without fill arriving in its corners, and the margin a slide offers around a
+patch is free, so this is the one place where a rotation costs no tissue at all.
 """
 
+import math
 from pathlib import Path
 
 from .datasets import dataset_dir as resolve_dataset_dir
@@ -142,7 +148,9 @@ def build_index(raw_dir, dataset_name, split, fold, subset, patch_cfg, cache_dir
 
 
 def patch_loader(cfg, preprocess, subset, shuffle=False):
-    """Random patches for training, a deterministic overlapping grid for validation."""
+    """Random patches for training, a deterministic overlapping grid for validation.
+
+    Only the training subset is augmented: validation has to measure the same patches every epoch."""
     from torch.utils.data import DataLoader
 
     from .data import collate_cases
@@ -157,7 +165,7 @@ def patch_loader(cfg, preprocess, subset, shuffle=False):
         cfg.patch_cache_dir(cfg.train_dataset),
     )
     if subset == "train":
-        dataset = RandomPatchDataset(cases, cfg.patching, preprocess)
+        dataset = RandomPatchDataset(cases, cfg.patching, preprocess, cfg.augment)
     else:
         dataset = GridPatchDataset(cases, cfg.patching, preprocess)
     return DataLoader(
@@ -176,8 +184,75 @@ def _to_rgb(patch: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(patch, cv2.COLOR_BGR2RGB)
 
 
-def _prepare(case, y, x, patch_cfg, preprocess, roi_threshold):
-    image, label = case.crop(y, x, patch_cfg.patch_size)
+def _source_size(patch_size, augment):
+    """Side to cut before augmenting, so the patch that survives the turn is all real image.
+
+    A square of side `S` turned by `a` holds a centred, axis-aligned square of side
+    `S / (|cos a| + |sin a|)`, worst at 45 degrees where the factor is sqrt(2). Zooming out past 1.0
+    pulls in more still, by the same ratio.
+    """
+    if augment is None:
+        return patch_size
+    turning = augment.rotation or augment.zoom_min < 1.0
+    if not turning:
+        return patch_size
+    angle = math.radians(min(abs(augment.rotation), 45.0))
+    margin = (math.cos(angle) + math.sin(angle)) / min(1.0, augment.zoom_min)
+    return int(math.ceil(patch_size * margin))
+
+
+def _centre_crop(array, size):
+    top = (array.shape[0] - size) // 2
+    left = (array.shape[1] - size) // 2
+    return array[top : top + size, left : left + size]
+
+
+def _augment_patch(image, label, patch_size, augment, rng):
+    """Flip and turn an oversized patch, then take `patch_size` out of its middle.
+
+    The centre square is inside the turned source by construction, so `warpAffine`'s border value
+    never reaches the output and the model is never shown a corner that was not imaged. Where the
+    case was too small to widen the crop, the angle is drawn from what the margin actually supports
+    rather than from the configured range.
+    """
+    if augment.hflip and rng.random() < augment.flip_p:
+        image, label = image[:, ::-1], label[:, ::-1]
+    if augment.vflip and rng.random() < augment.flip_p:
+        image, label = image[::-1], label[::-1]
+    limit = _supported_rotation(min(image.shape[:2]), patch_size, augment)
+    zooming = (augment.zoom_min, augment.zoom_max) != (1.0, 1.0)
+    if limit > 0 or zooming:
+        angle = rng.uniform(-limit, limit)
+        scale = rng.uniform(augment.zoom_min, augment.zoom_max) if zooming else 1.0
+        centre = ((image.shape[1] - 1) / 2, (image.shape[0] - 1) / 2)
+        matrix = cv2.getRotationMatrix2D(centre, angle, scale)
+        size = (image.shape[1], image.shape[0])
+        image = cv2.warpAffine(np.ascontiguousarray(image), matrix, size, flags=cv2.INTER_LINEAR)
+        label = cv2.warpAffine(np.ascontiguousarray(label), matrix, size, flags=cv2.INTER_NEAREST)
+    return _centre_crop(image, patch_size), _centre_crop(label, patch_size)
+
+
+def _supported_rotation(source, patch_size, augment):
+    """The widest angle the margin actually available allows, capped at what was configured."""
+    if not augment.rotation or source <= patch_size:
+        return 0.0
+    # Invert `_source_size` for the angle: cos a + sin a = sqrt(2) sin(a + 45).
+    ratio = min(source / patch_size, math.sqrt(2.0))
+    return min(augment.rotation, math.degrees(math.asin(ratio / math.sqrt(2.0))) - 45.0)
+
+
+def _prepare(case, y, x, patch_cfg, preprocess, roi_threshold, augment=None, rng=None):
+    size = patch_cfg.patch_size
+    if augment is not None:
+        # Widen the crop around the anchor's centre, clamped into the case; the anchor itself is
+        # still drawn against `patch_size`, so `min_roi_fraction` keeps its meaning.
+        source = min(_source_size(size, augment), *case.shape[:2])
+        y = int(np.clip(y - (source - size) // 2, 0, max(case.shape[0] - source, 0)))
+        x = int(np.clip(x - (source - size) // 2, 0, max(case.shape[1] - source, 0)))
+        size = source
+    image, label = case.crop(y, x, size)
+    if augment is not None:
+        image, label = _augment_patch(image, label, patch_cfg.patch_size, augment, rng)
     if patch_cfg.ignore_masked_out:
         label = np.where(image > roi_threshold, label, -1).astype(np.int16)
     image_t, label_t, geometry = preprocess(_to_rgb(image), label)
@@ -187,10 +262,11 @@ def _prepare(case, y, x, patch_cfg, preprocess, roi_threshold):
 class RandomPatchDataset(Dataset):
     """`patches_per_case` random ROI patches per case per epoch, uniform over valid anchors."""
 
-    def __init__(self, cases, patch_cfg, preprocess):
+    def __init__(self, cases, patch_cfg, preprocess, augment=None):
         self.cases = cases
         self.patch_cfg = patch_cfg
         self.preprocess = preprocess
+        self.augment = augment
         self.anchors = [case.anchors(patch_cfg.patch_size, patch_cfg.min_roi_fraction) for case in cases]
         self.usable = [index for index, anchors in enumerate(self.anchors) if len(anchors)]
         if not self.usable:
@@ -209,7 +285,8 @@ class RandomPatchDataset(Dataset):
         # Jitter within the block so sampling is not locked to the occupancy lattice.
         y = int(np.clip(y + rng.integers(case.block), 0, case.shape[0] - self.patch_cfg.patch_size))
         x = int(np.clip(x + rng.integers(case.block), 0, case.shape[1] - self.patch_cfg.patch_size))
-        return _prepare(case, y, x, self.patch_cfg, self.preprocess, self.patch_cfg.roi_threshold)
+        return _prepare(case, y, x, self.patch_cfg, self.preprocess, self.patch_cfg.roi_threshold,
+                        self.augment, rng)
 
 
 class GridPatchDataset(Dataset):
