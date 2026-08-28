@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 
 from .config import describe_run_dir
 from .data import active_planes, load_dataset_json, rgb_planes
-from .naming import MODEL_NAMES, dataset_tag, describe_run
+from .naming import MODEL_NAMES, describe_run
 from .metrics import read_case_metrics
 from .qualitative import (
     IMAGE_SUFFIXES,
@@ -54,7 +54,7 @@ from .qualitative import (
     select_cases,
     style_from_arguments,
 )
-from .datasets import dataset_dir as resolve_dataset_dir, split_cases
+from .datasets import dataset_dir as resolve_dataset_dir, dataset_id, split_cases
 from .selection import matches as _matches, select_runs
 
 
@@ -82,7 +82,7 @@ def _columns(run_dirs, kind, tested_on):
         label = " + ".join((
             MODEL_NAMES.get(model, model),
             describe_run(run_dir.parent.name),
-            f"trained on {dataset_tag(run_dir.parents[1].name)}",
+            f"trained on {dataset_id(run_dir.parents[1].name)}",
         ))
         columns.append((label, run_dir, prediction_dir, prediction_dir.parent / "metrics.csv"))
     return columns, None

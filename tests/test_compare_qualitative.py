@@ -144,11 +144,12 @@ class RunSelectionTests(unittest.TestCase):
         self.assertEqual([case for case, _ in cases], ["e_held"])
 
     def test_a_column_is_labelled_by_its_configuration_and_its_training_set(self):
-        """Read off the path, so a run the figure has never seen before still labels itself."""
+        """Read off the path, so a run the figure has never seen before still labels itself. The
+        training set is named by its id: the rest of a directory name is too wide for a header."""
         columns, _ = _columns([self.myke, self.myk], "test", "Dataset211_paul")
         self.assertEqual([label for label, *_ in columns],
-                         ["DINOv3 + balanced + aug + trained on MYKE",
-                          "DINOv3 + balanced + aug + trained on MYK"])
+                         ["DINOv3 + balanced + aug + trained on 208",
+                          "DINOv3 + balanced + aug + trained on 219"])
 
 
 if __name__ == "__main__":
