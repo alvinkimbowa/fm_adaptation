@@ -38,6 +38,24 @@ train_datasets=(
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
+)
+
+# Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
+# never saw costs nothing.
+test_datasets=(
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset210_lesion_interrater_MY_smi_gfap
+    # Dataset211_lesion_paul_widefield_smi_gfap
+    # Dataset212_lesion_katie_dorsal_column_smi_gfap
+    # Dataset214_lesion_mohammad_smi_gfap
+    # Dataset215_lesion_yvonne_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
 )
 
 configs=(
@@ -63,20 +81,6 @@ folds=(
     0
 )
 
-# Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
-# never saw costs nothing.
-test_datasets=(
-    # Dataset207_lesion_katie_contusion_smi_gfap
-    # Dataset208_lesion_MYKE_smi_gfap
-    # Dataset210_lesion_interrater_MY_smi_gfap
-    # Dataset211_lesion_paul_widefield_smi_gfap
-    # Dataset212_lesion_katie_dorsal_column_smi_gfap
-    # Dataset214_lesion_mohammad_smi_gfap
-    # Dataset215_lesion_yvonne_smi_gfap
-    # Dataset218_lesion_eric_smi_gfap
-    # Dataset219_lesion_MYK_smi_gfap
-    Dataset203_neurites_yvonne_smi_2px_scaleaug
-)
 
 splits=(
     validation

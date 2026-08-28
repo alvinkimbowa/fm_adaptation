@@ -23,6 +23,7 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     Dataset219_lesion_MYK_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -35,7 +36,7 @@ test_datasets=(
     Dataset214_lesion_mohammad_smi_gfap
     Dataset215_lesion_yvonne_smi_gfap
     Dataset211_lesion_paul_widefield_smi_gfap
-    # Dataset210_lesion_interrater_MY_smi_gfap
+    Dataset300_neurite_yvonne_smi
 )
 
 

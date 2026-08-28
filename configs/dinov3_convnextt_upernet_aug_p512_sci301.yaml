@@ -1,9 +1,9 @@
 data:
   raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
   results_dir: models
-  train_dataset: Dataset203_neurites_yvonne_smi_2px_scaleaug
+  train_dataset: Dataset301_neurite_yvonne_b2_smi
   test_datasets:
-    - Dataset203_neurites_yvonne_smi_2px_scaleaug
+    - Dataset301_neurite_yvonne_b2_smi
     - Dataset300_neurite_yvonne_smi
   test_split: all
   fold: 0
@@ -21,8 +21,8 @@ model:
   # ConvNeXt's four stages are the feature pyramid UperNet wants, so there is no adapter to inject into.
   variant: convnextt
   injector: false
-  train_encoder: true
-  run_name: convnextt_upernet_ft_aug_p512_ours
+  train_encoder: false
+  run_name: convnextt_upernet_aug_p512_ours
   checkpoint: null
 
 training:
@@ -34,8 +34,6 @@ training:
   encoder_batch_size: 4
   num_workers: 4
   learning_rate: 0.001
-  encoder_learning_rate: 0.00001
-  encoder_layer_decay: 0.9
   weight_decay: 0.01
   seed: 0
   device: cuda

@@ -4,7 +4,8 @@ data:
   train_dataset: Dataset203_neurites_yvonne_smi_2px_scaleaug
   test_datasets:
     - Dataset203_neurites_yvonne_smi_2px_scaleaug
-  test_split: Tr
+    - Dataset300_neurite_yvonne_smi
+  test_split: all
   fold: 0
 
 model:

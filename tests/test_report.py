@@ -4,14 +4,25 @@ from pathlib import Path
 
 import numpy as np
 
-from fm_adaptation.report import (_best_values, _experiment_order, _in_domain, _model_matches,
-                                  _pool_folds, nnunet_label)
+from fm_adaptation.report import (_best_values, _dataset_family, _experiment_order, _in_domain,
+                                  _model_matches, _pool_folds, nnunet_label)
 from fixtures import DatasetFixture
 
 
 def column(cases, dice):
     dice = np.asarray(dice, dtype=float)
     return {"dice": dice, "masd": dice.copy(), "cases": np.array(cases)}
+
+
+class DatasetFamilyTests(unittest.TestCase):
+    """Which table a run lands in, and which metrics that table carries."""
+
+    def test_the_second_token_names_the_family(self):
+        self.assertEqual(_dataset_family("Dataset207_lesion_katie_contusion_smi_gfap"), "lesion")
+
+    def test_the_neurite_sets_answer_to_one_family_however_they_are_named(self):
+        self.assertEqual(_dataset_family("Dataset203_neurites_yvonne_smi_2px_scaleaug"), "neurites")
+        self.assertEqual(_dataset_family("Dataset300_neurite_yvonne_smi"), "neurites")
 
 
 class NnunetLabelTests(unittest.TestCase):

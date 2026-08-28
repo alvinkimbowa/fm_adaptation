@@ -220,10 +220,14 @@ def _render_interrater(rows, unpaired, statistic):
 def _shorten_name(name, limit=46):
     return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
+# Datasets sometimes name the same task two ways; an alias keeps them in one table.
+FAMILY_ALIASES = {"neurite": "neurites"}
+
 
 def _dataset_family(dataset):
     """The second token of the dataset name, which is what puts a run in one table or another."""
-    return dataset.split("_", maxsplit=2)[1]
+    family = dataset.split("_", maxsplit=2)[1]
+    return FAMILY_ALIASES.get(family, family)
 
 
 PARAMETER_COUNTS = {}

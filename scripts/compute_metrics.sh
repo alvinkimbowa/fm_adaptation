@@ -32,6 +32,7 @@ datasets=(          # what a run was trained on
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
 )
 
 experiments=(       # the adaptation, i.e. the run name
@@ -42,6 +43,12 @@ experiments=(       # the adaptation, i.e. the run name
     convnext_upernet_ft_p512_ours
     upernet_inj_ft_ours
     upernet_inj_ft_p512_ours
+    convnext_upernet_ft_aug_p512_ours
+    convnextb_upernet_ft_aug_p512_ours
+    convnexts_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_ours
+    convnextb_upernet_aug_p512_ours
+    convnextt_upernet_aug_p512_ours
     # _ours                        # every run whose name ends in `ours`
 )
 
