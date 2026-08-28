@@ -28,6 +28,7 @@ class JobTests(unittest.TestCase):
                 raw_data_dir=self.root,
                 train_dataset=data.name,
                 test_split="Tr",
+                test_splits={},
                 fold="0",
             )
             jobs = _jobs(cfg, [data.name])
@@ -48,6 +49,7 @@ class JobTests(unittest.TestCase):
 
             cfg = SimpleNamespace(
                 raw_data_dir=self.root, train_dataset=train.name, test_split="all", fold="0",
+ test_splits={},
             )
             jobs = [job for job in _jobs(cfg, [other.name]) if job[0] == other.name]
             self.assertEqual(sorted(job[1] for job in jobs), ["Tr", "Ts"])
@@ -57,6 +59,7 @@ class JobTests(unittest.TestCase):
             # The default is unchanged, so no column that already exists moves.
             cfg = SimpleNamespace(
                 raw_data_dir=self.root, train_dataset=train.name, test_split="Tr", fold="0",
+ test_splits={},
             )
             jobs = [job for job in _jobs(cfg, [other.name]) if job[0] == other.name]
             self.assertEqual([job[1] for job in jobs], ["Tr"])
@@ -94,6 +97,7 @@ class JobTests(unittest.TestCase):
             untouched.add("Yvonne__held", split="Ts", planes={0: 1, 1: 2})
             cfg = SimpleNamespace(
                 raw_data_dir=self.root, train_dataset=train.name, test_split="all", fold="0",
+ test_splits={},
             )
             return cfg, source, untouched
 
@@ -114,6 +118,15 @@ class JobTests(unittest.TestCase):
             jobs = [job for job in _jobs(cfg, [untouched.name], seen) if job[0] == untouched.name]
             self.assertEqual(sorted(job[1] for job in jobs), ["Tr", "Ts"])
             self.assertEqual({job[4] for job in jobs}, {untouched.name})
+
+        def test_a_named_split_overrides_the_rule_for_that_dataset_alone(self):
+            """The overlap rule reads case ids, so a set that reuses the same images under other
+            ids looks untouched. Naming its split says what the ids cannot."""
+            cfg, _, untouched = self._overlap_fixtures()
+            cfg.test_splits = {untouched.name: "Ts"}
+            jobs = [job for job in _jobs(cfg, [untouched.name], _seen_in_training(cfg))
+                    if job[0] == untouched.name]
+            self.assertEqual([job[1] for job in jobs], ["Ts"])
 
         def test_the_rule_needs_seen_so_older_callers_are_unaffected(self):
             """`seen` defaults to empty, which is the pre-existing `test_split`-only behaviour --

@@ -75,6 +75,8 @@ nnunet_tested_on=(
     # Dataset215_lesion_yvonne_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
     # The older lesion and traced sets these runs also predicted are left out: they belong to
     # families no table here shows.
 )

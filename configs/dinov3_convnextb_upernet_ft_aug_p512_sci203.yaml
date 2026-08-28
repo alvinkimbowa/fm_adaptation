@@ -5,7 +5,10 @@ data:
   test_datasets:
     - Dataset203_neurites_yvonne_smi_2px_scaleaug
     - Dataset300_neurite_yvonne_smi
+    - Dataset301_neurite_yvonne_b2_smi
   test_split: all
+  test_splits:
+    Dataset301_neurite_yvonne_b2_smi: Ts
   fold: 0
   # Flips both ways and any angle. Patchwise training cuts a wider patch than it needs, turns that
   # and takes the middle out, so no rotation brings fill into frame -- see `patching._source_size`.

@@ -157,6 +157,18 @@ class InDomainTests(unittest.TestCase):
         pairs = _in_domain(self.records, self.names, self.raw_dirs)
         self.assertNotIn(("Dataset208_combined", "Dataset211_paul"), pairs)
 
+    def test_sets_declared_to_hold_the_same_images_are_in_domain_without_sharing_a_case_id(self):
+        """Two builds of one collection name their cases differently, so ids cannot answer this."""
+        from fm_adaptation import report
+
+        original = report.SHARED_IMAGES
+        report.SHARED_IMAGES = (frozenset({"Dataset208_combined", "Dataset211_paul"}),)
+        try:
+            pairs = _in_domain(self.records, self.names, self.raw_dirs)
+        finally:
+            report.SHARED_IMAGES = original
+        self.assertIn(("Dataset208_combined", "Dataset211_paul"), pairs)
+
     def test_a_training_set_is_in_domain_against_itself(self):
         """The rule is the same for every column: a set the run trained on is in-domain, so a run
         shown against its own training set reads greyed there as well."""

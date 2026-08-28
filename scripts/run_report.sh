@@ -37,6 +37,7 @@ test_datasets=(
     Dataset215_lesion_yvonne_smi_gfap
     Dataset211_lesion_paul_widefield_smi_gfap
     Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
 )
 
 

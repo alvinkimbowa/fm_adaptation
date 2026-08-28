@@ -45,6 +45,7 @@ class ExperimentConfig:
     train_dataset: str
     test_datasets: tuple[str, ...]
     test_split: str
+    test_splits: dict[str, str]
     fold: str
     model_name: str
     checkpoint: str | None
@@ -102,6 +103,10 @@ class ExperimentConfig:
             train_dataset=resolve(raw_data_dir, data["train_dataset"]),
             test_datasets=tuple(resolve(raw_data_dir, x) for x in data.get("test_datasets", [])),
             test_split=str(data.get("test_split", "Tr")),
+            # `test_split` is the default for every evaluation set; a set needing a different
+            # one names its own here.
+            test_splits={resolve(raw_data_dir, name): str(split)
+                         for name, split in (data.get("test_splits") or {}).items()},
             fold=str(data["fold"]),
             model_name=str(model["name"]),
             checkpoint=model.get("checkpoint"),
@@ -206,7 +211,8 @@ class ExperimentConfig:
 # other external trainers write `<model>/<train dataset>/<configuration>/fold_<n>` the same way this
 # project does, but keep their own plans files instead of a config.yaml, so everything here is read
 # off the directory and the raw data directory the caller names.
-PLAIN_RUN_FIELDS = ("raw_data_dir", "train_dataset", "test_split", "patching", "stains")
+PLAIN_RUN_FIELDS = ("raw_data_dir", "train_dataset", "test_split", "test_splits", "patching",
+                    "stains")
 
 
 def describe_run_dir(fold_dir, raw_data_dir=None):
@@ -225,6 +231,7 @@ def describe_run_dir(fold_dir, raw_data_dir=None):
         raw_data_dir=Path(raw_data_dir),
         train_dataset=Path(fold_dir).parents[1].name,
         test_split="",
+        test_splits={},
         patching=None,
         stains=(),
     )

@@ -323,11 +323,24 @@ def _experiment_order(models, train_datasets, configs):
     return key
 
 
-def _in_domain(records, datasets, raw_dirs):
-    """(training set, evaluation set) pairs that share at least one case.
+# Datasets built from the same underlying images under different case ids, which no comparison of
+# ids can discover. Every member is in-domain against every other, whichever one a run trained on.
+SHARED_IMAGES = (
+    frozenset({"Dataset203_neurites_yvonne_smi_2px_scaleaug", "Dataset301_neurite_yvonne_b2_smi"}),
+)
 
-    A cell for such a pair is scored on images the run's training set also holds, so it is shown for
-    reference but kept out of the ranking and the average.
+
+def _shares_images(dataset):
+    """The declared group `dataset` belongs to, or nothing when it stands on its own."""
+    return next((group for group in SHARED_IMAGES if dataset in group), frozenset())
+
+
+def _in_domain(records, datasets, raw_dirs):
+    """(training set, evaluation set) pairs scored on images the training set also holds.
+
+    A cell for such a pair is shown for reference but kept out of the ranking and the average. Case
+    ids answer this wherever two sets name the same image the same way; where they do not,
+    `SHARED_IMAGES` says so instead.
     """
     def cases(dataset):
         directory = resolve_dataset_dir(raw_dirs.get(dataset, Path()), dataset)
@@ -336,10 +349,9 @@ def _in_domain(records, datasets, raw_dirs):
     pairs = set()
     for trained_on in {key[2] for key in records}:
         training_cases = cases(trained_on)
-        if not training_cases:
-            continue
+        declared = _shares_images(trained_on)
         for dataset in datasets:
-            if training_cases & cases(dataset):
+            if dataset in declared or (training_cases and training_cases & cases(dataset)):
                 pairs.add((trained_on, dataset))
     return pairs
 

@@ -92,7 +92,13 @@ def _jobs(cfg, datasets, seen=frozenset()):
             # nothing else, whatever `test_split` says -- the rest of it was either fitted or helped
             # pick the model. A dataset it never touched is evaluated whole, both splits under one
             # column, because none of it was seen and none of it took part in model selection.
-            if seen and any(split_cases(dataset_dir, s) & set(seen) for s in available):
+            if dataset_name in cfg.test_splits:
+                # An explicit answer for this set alone, which is the only thing that covers an
+                # overlap the rule below cannot see: a set that reuses the same sections under
+                # different case ids shares no id with `seen` while sharing every image.
+                split = cfg.test_splits[dataset_name]
+                splits = [split] if _has_cases(dataset_dir, split) else []
+            elif seen and any(split_cases(dataset_dir, s) & set(seen) for s in available):
                 splits = ["Ts"] if "Ts" in available else []
             elif cfg.test_split == "all":
                 splits = available
