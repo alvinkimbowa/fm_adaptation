@@ -69,34 +69,63 @@ def _slots(layout, has_labels=True):
 
 # --------------------------------------------------------------------------------------- drawing
 
-def draw(canvas, mask, style, color, width=2, alpha=0.4):
-    """Paint a binary mask onto an RGB float canvas in place."""
+def coverage(mask, style, width=2.0, alpha=0.4, size=None):
+    """How much of each pixel a mask covers under one style, in [0, 1].
+
+    The style is applied at the mask's own resolution and only then resampled to `size`. That order
+    is the point: a skeleton of a shrunk mask is the medial axis of the wrong shape, and a contour of
+    it is the wrong contour -- both have to be found on the pixels the annotator drew. `width` is in
+    panel pixels, so it is scaled up to match while drawing and comes back out at the size asked for.
+
+    Resampling the coverage rather than the mask is what keeps a one-pixel line visible: averaging
+    turns it into a fainter line instead of dropping it the way nearest neighbour would.
+    """
     if not mask.any():
-        return
-    color = np.array(color, dtype=np.float32)
+        return None
+    height, wide = mask.shape[:2]
+    ratio = 1.0 if size is None else max(1.0, wide / max(size[0], 1))
     if style == "overlay":
-        canvas[mask] = (1.0 - alpha) * canvas[mask] + alpha * color
+        painted = np.where(mask, np.float32(alpha), np.float32(0.0))
     elif style == "contour":
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        if width == int(width):
-            cv2.drawContours(canvas, contours, -1, color.tolist(), max(1, int(width)))
-        else:
-            # OpenCV strokes in whole pixels, so a half step is drawn at double scale and averaged
-            # back down; the coverage that falls out is the line's antialiasing.
-            scale = 2
-            height, wide = mask.shape[:2]
-            large = np.zeros((height * scale, wide * scale), dtype=np.float32)
-            cv2.drawContours(large, [c * scale for c in contours], -1, 1.0,
-                             max(1, round(width * scale)), lineType=cv2.LINE_AA)
-            coverage = cv2.resize(large, (wide, height), interpolation=cv2.INTER_AREA)[..., None]
-            canvas[:] = (1.0 - coverage) * canvas + coverage * color
+        painted = _contour_coverage(mask, width * ratio)
     elif style == "centerline":
         line = skeletonize(mask)
-        if width > 1:
-            line = binary_dilation(line, iterations=int(width) // 2)
-        canvas[line] = color
+        iterations = int(round(width * ratio)) // 2
+        if iterations:
+            line = binary_dilation(line, iterations=iterations)
+        painted = line.astype(np.float32)
     else:
         raise ValueError(f"Unknown style: {style} (expected one of {STYLES})")
+    if size is not None and (wide, height) != tuple(size):
+        painted = cv2.resize(painted, tuple(size), interpolation=cv2.INTER_AREA)
+    return painted[..., None]
+
+
+def _contour_coverage(mask, width):
+    """The mask's outline as coverage. OpenCV strokes in whole pixels, so a fractional width is drawn
+    at double scale and averaged back down; the coverage that falls out is the line's antialiasing."""
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    height, wide = mask.shape[:2]
+    scale = 1 if width == int(width) else 2
+    canvas = np.zeros((height * scale, wide * scale), dtype=np.float32)
+    cv2.drawContours(canvas, [c * scale for c in contours] if scale > 1 else contours, -1, 1.0,
+                     max(1, round(width * scale)), lineType=cv2.LINE_AA if scale > 1 else cv2.LINE_8)
+    if scale == 1:
+        return canvas
+    return cv2.resize(canvas, (wide, height), interpolation=cv2.INTER_AREA)
+
+
+def draw(canvas, mask, style, color, width=2, alpha=0.4, size=None):
+    """Paint a binary mask onto an RGB float canvas in place.
+
+    `canvas` is already at panel size; `mask` may be larger, and `size` says what to reduce it to
+    once the style has been applied to the pixels it was drawn on.
+    """
+    painted = coverage(mask, style, width, alpha, size)
+    if painted is None:
+        return
+    color = np.array(color, dtype=np.float32)
+    canvas[:] = (1.0 - painted) * canvas + painted * color
 
 
 def mask_colors(classes, style):
@@ -118,7 +147,7 @@ def mask_colors(classes, style):
     return {value: style["gt_color"] for value in classes}, palette
 
 
-def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
+def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors, size=None):
     """The panels for one sample, as (title suffix, RGB uint8 array) pairs.
 
     `gt` and `prediction` are integer label maps; 0 is background and every other value is painted in
@@ -131,10 +160,14 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
         if slot == "image":
             panel = plain.copy()
         elif slot in ("gt_mask", "prediction_mask"):
+            # A mask slot differs from its overlay only in what sits underneath: black rather than
+            # the image. How a mask is painted is `gt_style`/`pred_style`, the same as everywhere.
             source, colors = (gt, gt_colors) if slot == "gt_mask" else (prediction, pred_colors)
+            painted = style["gt_style"] if slot == "gt_mask" else style["pred_style"]
+            width = style["gt_width"] if slot == "gt_mask" else style["pred_width"]
             panel = np.zeros_like(plain)
             for value, color in colors.items():
-                panel[source == value] = color
+                draw(panel, source == value, painted, color, width, style["alpha"], size)
         else:
             # `both_mask` is the same drawing without the image under it, so the masks are read on
             # their own. Alpha applies here too, against the black rather than against the image.
@@ -143,11 +176,11 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
             if slot in ("both", "both_mask", "prediction"):
                 for value, color in pred_colors.items():
                     draw(panel, prediction == value, style["pred_style"], color,
-                         style["pred_width"], style["alpha"])
+                         style["pred_width"], style["alpha"], size)
             if gt is not None and slot in ("both", "both_mask", "gt"):
                 for value, color in gt_colors.items():
                     draw(panel, gt == value, style["gt_style"], color,
-                         style["gt_width"], style["alpha"])
+                         style["gt_width"], style["alpha"], size)
         out.append((slot, panel.clip(0, 255).astype(np.uint8)))
     return out
 
@@ -315,24 +348,20 @@ def panel_aspect(images, case_id, crop, channel_planes=None):
     return float(np.clip(probe.shape[0] / probe.shape[1], 0.35, 3.0))
 
 
-def _to_panel(image, label, prediction, size):
-    """Everything reduced to the pixels the panel actually has, before anything is drawn on it.
+def _to_panel(image, size):
+    """The image reduced to the pixels the panel actually has, and the size the masks reduce to.
 
-    A contour is drawn in pixels of the array it is drawn on. Drawn at slide resolution and left to
-    the figure to shrink, a 2px outline on a 9000px section lands well under one pixel and disappears;
-    the mask work also costs a hundred times what it needs to. The image is averaged down, the masks
-    take nearest so no class is invented along an edge.
+    Only the image is resampled here. The masks stay at the resolution they were drawn at until their
+    style has been applied to them -- see `coverage` -- because a skeleton or a contour found on a
+    shrunk mask describes a different shape. Their coverage is what gets resized, so a line survives
+    the reduction as a fainter line rather than being dropped.
     """
     height, width = np.asarray(image).shape[:2]
     scale = min(size[0] / width, size[1] / height)
     if scale >= 1.0:
-        return image, label, prediction
+        return image, None
     target = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
-    image = cv2.resize(np.asarray(image), target, interpolation=cv2.INTER_AREA)
-    prediction = cv2.resize(np.asarray(prediction), target, interpolation=cv2.INTER_NEAREST)
-    if label is not None:
-        label = cv2.resize(np.asarray(label), target, interpolation=cv2.INTER_NEAREST)
-    return image, label, prediction
+    return cv2.resize(np.asarray(image), target, interpolation=cv2.INTER_AREA), target
 
 
 def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, metrics=None,
@@ -389,10 +418,10 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
                                  image.shape[:2], crop, rng)
             image, prediction = image[window], prediction[window]
             label = None if label is None else label[window]
-        image, label, prediction = _to_panel(image, label, prediction, panel_size)
+        image, target = _to_panel(image, panel_size)
         panels = _panels(
             np.asarray(image), None if label is None else np.asarray(label),
-            np.asarray(prediction), layout, style, gt_colors, pred_colors,
+            np.asarray(prediction), layout, style, gt_colors, pred_colors, target,
         )
         row, column = divmod(index, cols)
         base = per_sample * column

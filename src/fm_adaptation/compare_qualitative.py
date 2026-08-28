@@ -37,6 +37,7 @@ from .data import active_planes, load_dataset_json, rgb_planes
 from .naming import MODEL_NAMES, dataset_tag, describe_run
 from .metrics import read_case_metrics
 from .qualitative import (
+    IMAGE_SUFFIXES,
     MAX_FIGURE_INCHES,
     MAX_FIGURE_PIXELS,
     _classes_in,
@@ -100,7 +101,9 @@ def _common_cases(runs, count, reference, rng):
     """Cases every run predicted, sampled across the reference run's Dice range."""
     shared = None
     for _, _, prediction_dir, _ in runs:
-        stems = {p.stem for p in prediction_dir.iterdir() if p.suffix.lower() == ".png"}
+        # Whatever the trainer chose to write: ours saves PNG, an external one may save TIFF, and a
+        # column read as holding nothing empties the intersection and drops the whole figure.
+        stems = {p.stem for p in prediction_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES}
         shared = stems if shared is None else (shared & stems)
     shared = shared or set()
     # `select_cases` spans the quality range rather than taking the first few, which is what makes a
@@ -139,12 +142,11 @@ def _case_dice(metrics_path, case_id):
 
 
 def _fit(array, target_width, nearest):
-    """Scale to roughly the pixels the panel will occupy, before anything is drawn onto it.
+    """Scale to roughly the pixels the panel will occupy.
 
-    Drawing at native resolution and letting the figure scale it down is the expensive way round: a
-    lesion slide is tens of megapixels and the cell it lands in is a few hundred pixels wide, so all
-    but a fraction of the contouring and blending is discarded. Labels and predictions take nearest
-    neighbour, which keeps class values as values rather than blending them into new ones.
+    Only the image goes through this. A mask keeps its own resolution until its style has been
+    applied, since a contour or a skeleton found on a shrunk mask describes a different shape; see
+    `qualitative.coverage`, which resizes the drawn coverage instead.
     """
     array = np.asarray(array)
     height, width = array.shape[:2]
@@ -159,6 +161,8 @@ def _fit(array, target_width, nearest):
 
 # Height of one line of an 8pt header, in points, leading included.
 HEADER_LINE_POINTS = 11.0
+# Gap between one case's row of panels and the next, in points.
+ROW_GAP_POINTS = 2.0
 
 
 def _header(name):
@@ -176,18 +180,26 @@ def _distinct(labels):
     """Column headers cut down to the part that tells the runs apart.
 
     Every column here is the same architecture on the same dataset, so the labels share a long
-    prefix and a header truncated from the right reads identically in all of them -- which is the
-    one thing a comparison figure must not do. Drop the shared leading terms instead.
+    prefix and often a trailing `trained on ...` as well; a header truncated from the right reads
+    identically in all of them, which is the one thing a comparison figure must not do. Drop the
+    terms every column agrees on, at both ends, and keep whatever is left.
     """
     parts = [label.split(" + ") for label in labels]
     if len(parts) < 2:
         return list(labels)
-    common = 0
-    while all(len(p) > common + 1 for p in parts) and len({p[common] for p in parts}) == 1:
-        common += 1
-    if not common:
+
+    def shared(index):
+        return len({p[index] for p in parts}) == 1
+
+    lead, tail = 0, 0
+    while all(len(p) > lead + tail + 1 for p in parts) and shared(lead):
+        lead += 1
+    while all(len(p) > lead + tail + 1 for p in parts) and shared(-1 - tail):
+        tail += 1
+    if not (lead or tail):
         return list(labels)
-    return ["… + " + " + ".join(p[common:]) for p in parts]
+    kept = [p[lead : len(p) - tail] for p in parts]
+    return [("… + " if lead else "") + " + ".join(k) + (" + …" if tail else "") for k in kept]
 
 
 def render_comparison(images, labels, runs, cases, output, style, crop=None, seed=0,
@@ -202,10 +214,12 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
     figure: a `mask` layout paints on black instead of over the image, and `overlay` drops the raw
     image column.
     """
+    # A layout says how the panels are arranged and what sits under a mask -- black or the image --
+    # and nothing else. How a mask is painted is `gt_style`/`pred_style`, in every layout.
     on_black = layout in ("masks", "mask_pair")
-    # `masks` paints the label maps flat, exactly as `qualitative.LAYOUTS` does for its mask slots --
-    # no style and no alpha, so the mask is read as a shape rather than as a blend.
-    flat = layout == "masks"
+    # `masks` keeps the truth in its own column, as `qualitative.LAYOUTS` does; every other layout
+    # repeats it over each prediction so a column can be read without looking back at the second one.
+    overlay_truth = layout != "masks"
     show_image = layout != "overlay"
     rng = np.random.default_rng(seed)
     if classes is None:
@@ -254,9 +268,12 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
         if window:
             image = np.asarray(image)[window]
             label = None if label is None else np.asarray(label)[window]
+        # Only the image is reduced here. The masks keep the resolution they were drawn at until
+        # their style has been applied -- a skeleton or a contour of a shrunk mask is the wrong one --
+        # and it is their coverage that gets resized, inside `draw`.
         image = _fit(image, panel_width, nearest=False)
-        label = None if label is None else _fit(label, panel_width, nearest=True)
         plain = _to_rgb(np.asarray(image))
+        panel_size = (plain.shape[1], plain.shape[0])
 
         column = first
         if show_image:
@@ -265,11 +282,8 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
         if scored:
             truth = np.zeros_like(plain) if on_black else plain.copy()
             for value, color in gt_colors.items():
-                if flat:
-                    truth[label == value] = color
-                else:
-                    draw(truth, label == value, style["gt_style"], color,
-                         style["gt_width"], style["alpha"])
+                draw(truth, label == value, style["gt_style"], color,
+                     style["gt_width"], style["alpha"], panel_size)
             axes[row][column].imshow(truth.clip(0, 255).astype(np.uint8))
             column += 1
         axes[row][first].annotate(_shorten(case_id, 20), xy=(0, 0.5), xytext=(-6, 0),
@@ -280,20 +294,14 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
             prediction = np.asarray(read_image(_find(prediction_dir, case_id)))
             if window:
                 prediction = prediction[window]
-            prediction = _fit(prediction, panel_width, nearest=True)
             panel = np.zeros_like(plain) if on_black else plain.copy()
             for value, color in pred_colors.items():
-                if flat:
-                    panel[prediction == value] = color
-                else:
-                    draw(panel, prediction == value, style["pred_style"], color,
-                         style["pred_width"], style["alpha"])
-            if scored and not flat:
-                # The ground truth goes over every prediction too, so a column is read against the
-                # truth without looking back at the second column. A flat mask has no room for it.
+                draw(panel, prediction == value, style["pred_style"], color,
+                     style["pred_width"], style["alpha"], panel_size)
+            if scored and overlay_truth:
                 for value, color in gt_colors.items():
                     draw(panel, label == value, style["gt_style"], color,
-                         style["gt_width"], style["alpha"])
+                         style["gt_width"], style["alpha"], panel_size)
             axes[row][column].imshow(panel.clip(0, 255).astype(np.uint8))
             dice = _case_dice(metrics_path, case_id)
             if dice is not None:
@@ -326,11 +334,12 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
                   frameon=False, fontsize=9)
     if title:
         figure.suptitle(title)
-    # Zero padding everywhere: the panels are the figure, and the row gaps are what the layout is for.
+    # Columns stay flush -- the panels of one case belong together -- but the rows are separate cases
+    # and need a gap, or a column of small panels reads as one continuous strip.
     # The top is reserved for the headers, from however many lines the tallest of them runs to.
     inches = figure.get_size_inches()[1]
     header = max((name.count("\n") + 1 for name in headings), default=1) * HEADER_LINE_POINTS / 72
-    figure.tight_layout(pad=0, h_pad=0, w_pad=0,
+    figure.tight_layout(pad=0, h_pad=ROW_GAP_POINTS, w_pad=0,
                         rect=(0, 0.34 / inches, 1, max(0.5, 1 - (header + 0.2) / inches)))
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=dpi, bbox_inches="tight", pad_inches=0)
@@ -421,9 +430,19 @@ def main():
             if channel_planes and keep is not None:
                 channel_planes = {stored: rgb for stored, rgb in channel_planes.items()
                                   if rgb in keep}
+            # One window has to serve every column, so `auto` takes the smallest patch any column
+            # was trained on: it fits inside the field of view of the wider ones, while the widest
+            # would show the narrower columns more than they ever saw. A column with no patching --
+            # a baseline that carries no config of its own -- has no say either way rather than
+            # dropping the whole figure back to the slide.
+            patch_sizes = [
+                run_cfg.patching.patch_size
+                for run_cfg in (describe_run_dir(run[1], args.raw_data_dir) for run in runs)
+                if run_cfg is not None and run_cfg.patching is not None
+            ]
             crop = None if args.crop == "full" else (
-                cfg.patching.patch_size if args.crop == "auto" and cfg.patching else
-                None if args.crop == "auto" else int(args.crop)
+                (min(patch_sizes) if patch_sizes else None) if args.crop == "auto"
+                else int(args.crop)
             )
             # A negative seed asks for a fresh sample of cases every run, overwriting the
             # figure that was there. Pin a seed to keep drawing the same cases.
@@ -458,7 +477,7 @@ def main():
             # How many cases each column holds, when they differ. A row that trained on part of this
             # set has only its `imagesTs`, a row that never touched it has the whole thing, and the
             # figure is drawn on the intersection -- 8 of 73 should not read the same as 8 of 8.
-            held = [len([q for q in p.iterdir() if q.suffix.lower() == ".png"])
+            held = [len([q for q in p.iterdir() if q.suffix.lower() in IMAGE_SUFFIXES])
                     for _, _, p, _ in runs]
             note = "" if len(set(held)) == 1 else f", columns hold {'/'.join(map(str, held))}"
             print(f"wrote {path}  ({len(runs)} models x {len(cases)} cases, seed {seed}{note})")

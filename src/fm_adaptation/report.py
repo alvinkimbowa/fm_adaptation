@@ -4,6 +4,7 @@ import html
 import json
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -30,12 +31,42 @@ def _read_run(run_dir: Path):
 
 
 def _read_metrics(path: Path):
+    """Every metric column the file carries. A run scored before a metric existed simply has no
+    column for it, and the tables that ask for it read '\u2014'."""
     rows = read_case_metrics(path)
-    return {
-        "dice": np.array([float(row["dice"]) for row in rows]),
-        "masd": np.array([float(row["masd"]) for row in rows]),
-        "cases": np.array([row["case_id"] for row in rows]),
+    metrics = {
+        key: np.array([float(row[key]) for row in rows])
+        for key in METRICS
+        if rows and key in rows[0]
     }
+    return {**metrics, "cases": np.array([row["case_id"] for row in rows])}
+
+
+@dataclass(frozen=True)
+class Metric:
+    """A metric column: where it comes from, how it reads, and which end of it is good."""
+
+    label: str
+    scale: float = 1.0
+    higher_is_better: bool = False
+
+
+# Every metric the tables can show. What each task is judged on is `FAMILY_METRICS` below.
+METRICS = {
+    "dice": Metric("Dice \u2191", 100, higher_is_better=True),
+    "cldice": Metric("clDice \u2191", 100, higher_is_better=True),
+    "masd": Metric("MASD (px) \u2193"),
+    "hd95": Metric("HD95 (px) \u2193"),
+}
+# Tracing is judged on whether the same paths were followed, not on where a two-pixel-wide trace
+# landed, so the neurite tables carry clDice and no surface distance. Everything else is scored on
+# overlap and boundary.
+FAMILY_METRICS = {"neurites": ("dice", "cldice")}
+DEFAULT_METRICS = ("dice", "masd")
+
+
+def _family_metrics(family):
+    return FAMILY_METRICS.get(family, DEFAULT_METRICS)
 
 
 # How each plans variant is written in the tables, where the directory name reads badly.
@@ -44,25 +75,36 @@ NNUNET_VARIANT_NAMES = {"ResEncUNetM": "Res Enc M"}
 # prefix. The xtiny widths (`xtiny8`, `xtiny32`) share one name: no dataset was trained with more than
 # one of them, and the Params column already separates them.
 NNUNET_MODEL_NAMES = {r"xtiny\d*": "XTinyUNet"}
+# How a trainer's tag is written, where the directory name reads badly.
+NNUNET_TRAINER_NAMES = {"100epochs": "100 epochs", "SkeletonRecall": "Skeleton Recall"}
 
 
 def nnunet_label(trainer_dir_name):
-    """`nnUNetTrainer__nnUNetResEncUNetMPlans__2d` -> `nnU-Net (Res Enc M)`.
+    """`nnUNetTrainer_100epochs__nnUNetResEncUNetMPlans__2d` -> `nnU-Net (Res Enc M, 100 epochs)`.
 
-    Each plans/configuration pair is a different network -- the Res Enc M and the xtiny plans differ by
-    two orders of magnitude in size -- so each earns its own row. Whatever distinguishes the directory
-    from the default `nnUNetPlans__2d` becomes the label, and the stock 2d plan stays plain `nnU-Net`.
+    Each trainer/plans/configuration triple is a different network -- the Res Enc M and the xtiny
+    plans differ by two orders of magnitude in size, and a skeleton-recall trainer optimises
+    something else again -- so each earns its own row. Whatever distinguishes the directory from the
+    stock `nnUNetTrainer__nnUNetPlans__2d` becomes the label, and the stock 2d plan stays plain
+    `nnU-Net`.
     """
-    _, _, rest = trainer_dir_name.partition("__")
+    trainer, _, rest = trainer_dir_name.partition("__")
     plans, _, configuration = rest.partition("__")
     variant = plans.removeprefix("nnUNet").removesuffix("Plans")
     variant = NNUNET_VARIANT_NAMES.get(variant, variant)
     configuration = configuration.removeprefix("2d").lstrip("_")
-    for pattern, name in NNUNET_MODEL_NAMES.items():
+    trainer = " ".join(
+        NNUNET_TRAINER_NAMES.get(part, part)
+        for part in trainer.removeprefix("nnUNetTrainer").split("_")
+        if part
+    )
+    name = "nnU-Net"
+    for pattern, model_name in NNUNET_MODEL_NAMES.items():
         if re.fullmatch(pattern, configuration):
-            return name
-    suffix = " ".join(filter(None, (variant, configuration)))
-    return f"nnU-Net ({suffix})" if suffix else "nnU-Net"
+            name, variant, configuration = model_name, "", ""
+            break
+    suffix = ", ".join(filter(None, (variant, configuration, trainer)))
+    return f"{name} ({suffix})" if suffix else name
 
 
 def _add_nnunet_records(records, results_dir):
@@ -298,7 +340,7 @@ def _in_domain(records, datasets, raw_dirs):
     return pairs
 
 
-def _best_values(records, datasets, reducer, in_domain=(), averaged=()):
+def _best_values(records, datasets, reducer, in_domain=(), averaged=(), metrics=DEFAULT_METRICS):
     """Maps each column to its (best, second best) values over every row of the table.
 
     Blanked cells are skipped and the average is taken over the same columns the table averages, so
@@ -308,13 +350,15 @@ def _best_values(records, datasets, reducer, in_domain=(), averaged=()):
     if len(records) < 2:
         return {}
     for (_, _, trained_on, _), results in records.items():
-        cross = {"dice": [], "masd": []}
+        cross = {name: [] for name in metrics}
         for dataset in datasets:
-            metrics = _column_metrics(results, dataset, trained_on)
-            if metrics is None or (trained_on, dataset) in in_domain:
+            values = _column_metrics(results, dataset, trained_on)
+            if values is None or (trained_on, dataset) in in_domain:
                 continue
-            for metric in ("dice", "masd"):
-                value = _reduce(metrics[metric], reducer)
+            for metric in metrics:
+                if metric not in values:
+                    continue
+                value = _reduce(values[metric], reducer)
                 if np.isnan(value):
                     continue
                 seen[(dataset, metric)].append(value)
@@ -328,7 +372,7 @@ def _best_values(records, datasets, reducer, in_domain=(), averaged=()):
                 seen[("cross", metric)].append(value)
     ranked = {}
     for key, values in seen.items():
-        ordered = sorted(set(values), reverse=key[1] == "dice")
+        ordered = sorted(set(values), reverse=METRICS[key[1]].higher_is_better)
         ranked[key] = (ordered[0], ordered[1] if len(ordered) > 1 else None)
     return ranked
 
@@ -376,7 +420,7 @@ def _column_metrics(results, dataset, trained_on):
     return results.get(trained_on if dataset == OWN_TEST else dataset)
 
 
-def _render_table(records, datasets, statistic, order, in_domain=()):
+def _render_table(records, datasets, statistic, order, in_domain=(), metrics=DEFAULT_METRICS):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
     # Every row reports its own held-out split under `Test`, whatever else it is shown against.
@@ -397,19 +441,23 @@ def _render_table(records, datasets, statistic, order, in_domain=()):
         )
         > 1
     )
-    best = _best_values(records, datasets, reducer, in_domain, averaged)
+    best = _best_values(records, datasets, reducer, in_domain, averaged, metrics)
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
     for index, dataset in enumerate(datasets):
         last = index == len(datasets) - 1 and show_average
-        parts.append(f"<th colspan='2'{_sep(last)}>{html.escape(_dataset_label(dataset))}</th>")
+        parts.append(
+            f"<th colspan='{len(metrics)}'{_sep(last)}>{html.escape(_dataset_label(dataset))}</th>"
+        )
     if show_average:
-        parts.append("<th colspan='2'>Cross-dataset average</th>")
+        parts.append(f"<th colspan='{len(metrics)}'>Cross-dataset average</th>")
     parts.append("</tr><tr>")
     for index in range(len(datasets) + show_average):
         last = index == len(datasets) - 1 and show_average
-        parts.append(f"<th>Dice ↑</th><th{_sep(last)}>MASD (px) ↓</th>")
+        for position, metric in enumerate(metrics):
+            separator = last and position == len(metrics) - 1
+            parts.append(f"<th{_sep(separator)}>{METRICS[metric].label}</th>")
     parts.append("</tr></thead><tbody>")
     for key, results in sorted(records.items(), key=order):
         model, probe, trained_on, fold = key
@@ -421,57 +469,40 @@ def _render_table(records, datasets, statistic, order, in_domain=()):
             f"<td>{html.escape(_dataset_label(trained_on))}</td>"
             f"<td class='sep'>{html.escape(fold)}</td>"
         )
-        cross_dice, cross_masd = [], []
+        cross = {metric: [] for metric in metrics}
         for index, dataset in enumerate(datasets):
             last = index == len(datasets) - 1 and show_average
-            metrics = _column_metrics(results, dataset, trained_on)
-            if metrics is None:
-                parts.append(f"<td>—</td><td{_sep(last)}>—</td>")
-                continue
-            reference = (trained_on, dataset) in in_domain
-            dice_value = _reduce(metrics["dice"], reducer)
-            masd_value = _reduce(metrics["masd"], reducer)
-            parts.append(
-                _metric_cell(
-                    fmt(metrics["dice"], 100),
-                    dice_value,
-                    best.get((dataset, "dice")),
-                    reference=reference,
+            values = _column_metrics(results, dataset, trained_on)
+            reference = values is not None and (trained_on, dataset) in in_domain
+            for position, metric in enumerate(metrics):
+                separator = last and position == len(metrics) - 1
+                if values is None or metric not in values:
+                    parts.append(f"<td{_sep(separator)}>—</td>")
+                    continue
+                value = _reduce(values[metric], reducer)
+                parts.append(
+                    _metric_cell(
+                        fmt(values[metric], METRICS[metric].scale),
+                        value,
+                        best.get((dataset, metric)),
+                        separator=separator,
+                        reference=reference,
+                    )
                 )
-            )
-            parts.append(
-                _metric_cell(
-                    fmt(metrics["masd"]),
-                    masd_value,
-                    best.get((dataset, "masd")),
-                    separator=last,
-                    reference=reference,
+                if dataset in averaged and not reference:
+                    cross[metric].append(value)
+        if show_average:
+            for metric in metrics:
+                if not cross[metric]:
+                    parts.append("<td>—</td>")
+                    continue
+                parts.append(
+                    _metric_cell(
+                        fmt(np.asarray(cross[metric]), METRICS[metric].scale),
+                        _reduce(cross[metric], reducer),
+                        best.get(("cross", metric)),
+                    )
                 )
-            )
-            if dataset in averaged and not reference:
-                cross_dice.append(dice_value)
-                cross_masd.append(masd_value)
-        if not show_average:
-            pass
-        elif cross_dice:
-            cross_dice_value = _reduce(cross_dice, reducer)
-            cross_masd_value = _reduce(cross_masd, reducer)
-            parts.append(
-                _metric_cell(
-                    fmt(np.asarray(cross_dice), 100),
-                    cross_dice_value,
-                    best.get(("cross", "dice")),
-                )
-            )
-            parts.append(
-                _metric_cell(
-                    fmt(np.asarray(cross_masd)),
-                    cross_masd_value,
-                    best.get(("cross", "masd")),
-                )
-            )
-        else:
-            parts.append("<td>—</td><td>—</td>")
         parts.append("</tr>")
     parts.append("</tbody></table>")
     return "".join(parts)
@@ -488,24 +519,28 @@ def _write_summary_csv(records, path, order):
                 "fold",
                 "tested_on",
                 "n",
-                "dice_mean",
-                "dice_sd",
-                "dice_median",
-                "dice_q1",
-                "dice_q3",
-                "masd_mean",
-                "masd_sd",
-                "masd_median",
-                "masd_q1",
-                "masd_q3",
+                *(f"{metric}_{statistic}" for metric in METRICS
+                  for statistic in ("mean", "sd", "median", "q1", "q3")),
             ]
         )
         for key, results in sorted(records.items(), key=order):
             model, adaptation, trained_on, fold = key
             report_model = MODEL_NAMES.get(model, model)
             report_adaptation = describe_run(adaptation)
-            for tested_on, metrics in sorted(results.items()):
-                dice, masd = metrics["dice"], metrics["masd"]
+            for tested_on, values in sorted(results.items()):
+                summary = []
+                for metric in METRICS:
+                    # A run scored before the metric existed has no column, and leaves blanks.
+                    if metric not in values:
+                        summary += [""] * 5
+                        continue
+                    column = values[metric]
+                    summary += [
+                        np.mean(column),
+                        np.inf if np.isinf(column).any() else np.std(column, ddof=1),
+                        np.median(column),
+                        *np.percentile(column, [25, 75]),
+                    ]
                 writer.writerow(
                     [
                         report_model,
@@ -513,15 +548,8 @@ def _write_summary_csv(records, path, order):
                         trained_on,
                         fold,
                         tested_on,
-                        len(dice),
-                        np.mean(dice),
-                        np.std(dice, ddof=1),
-                        np.median(dice),
-                        *np.percentile(dice, [25, 75]),
-                        np.mean(masd),
-                        np.inf if np.isinf(masd).any() else np.std(masd, ddof=1),
-                        np.median(masd),
-                        *np.percentile(masd, [25, 75]),
+                        len(values["dice"]),
+                        *summary,
                     ]
                 )
 
@@ -672,7 +700,8 @@ def main():
         for suffix, statistic in statistics.items():
             bodies[suffix] += (
                 f"<section><h1>{html.escape(family)}</h1>"
-                + _render_table(family_records, family_datasets, statistic, order, in_domain)
+                + _render_table(family_records, family_datasets, statistic, order, in_domain,
+                                _family_metrics(family))
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
                     f"{html.escape(_dataset_label(dataset))}</h1>"

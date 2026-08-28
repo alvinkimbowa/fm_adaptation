@@ -7,6 +7,9 @@ set -euo pipefail
 #
 results_dir=models
 metrics_venv=${metrics_venv:-.venv-mm}
+# The two stages are independent: runs under `results_dir`, then the nnU-Net trees named below.
+# `score_runs=0` scores the baselines alone; an empty `nnunet_dirs` scores our runs alone.
+score_runs=${score_runs:-1}
 # A column whose metrics are newer than its predictions is left alone; set overwrite=1 to redo it.
 overwrite=${overwrite:-0}
 dry_run=${dry_run:-0}
@@ -15,42 +18,31 @@ dry_run=${dry_run:-0}
 # globs, or a `_suffix` tag. Leave a list empty to keep everything it selects.
 models=(
     dinov3
-    sam3
-    # The baselines ship their own per-case metrics, so there is nothing here to compute for them.
+    # sam3
+    # nnU-Net is not selected here -- it lives outside `results_dir` and is picked up by
+    # `nnunet_dirs` below, by its own directory layout.
 )
 
 datasets=(          # what a run was trained on
-    # Dataset080_BUSBRA_GE_Logiq_5
-    # Dataset082_BUSBRA_Toshiba_Aplio_300
-    # Dataset083_BUSBRA_U_Systems
-    # Dataset084_KidneyUS_Philips
-    # Dataset086_MMOTU_2D
-    # Dataset090_Echo_EchoCP
-    Dataset105_lesion_eric_gfap_resized
-    Dataset208_lesion_MYKE_smi_gfap
-    Dataset209_lesion_MYE_smi_gfap
-    Dataset213_lesion_KE_smi_gfap
-    Dataset217_lesion_MY_smi_gfap
-    Dataset218_lesion_eric_smi_gfap
-    Dataset219_lesion_MYK_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    # Dataset105_lesion_eric_gfap_resized
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset209_lesion_MYE_smi_gfap
+    # Dataset213_lesion_KE_smi_gfap
+    # Dataset217_lesion_MY_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 
 experiments=(       # the adaptation, i.e. the run name
-    # linear
-    # upernet
-    # upernet_inj
-    upernet_ours
-    upernet_inj_ours
+    linear
+    upernet
+    m2f
+    convnext_upernet_p512_ours
+    convnext_upernet_ft_p512_ours
     upernet_inj_ft_ours
-    upernet_inj_ft_dropsmi_ours
-    upernet_inj_ft_dropany_ours
-    upernet_inj_ft_balanced_ours
-    upernet_inj_ft_balanced_dropany_ours
-    upernet_inj_ft_init_ours
-    # upernet_inj_ft_vit*_ours      # every ViT sweep at once
+    upernet_inj_ft_p512_ours
     # _ours                        # every run whose name ends in `ours`
-    # m2f
 )
 
 splits=(
@@ -75,6 +67,7 @@ nnunet_tested_on=(
     Dataset214_lesion_mohammad_smi_gfap
     Dataset215_lesion_yvonne_smi_gfap
     Dataset218_lesion_eric_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
     # The older lesion and traced sets these runs also predicted are left out: they belong to
     # families no table here shows.
 )
@@ -93,9 +86,11 @@ args=()
 
 python=${metrics_venv/#\~/$HOME}/bin/python
 
-"$python" -m fm_adaptation.compute_metrics \
-    --results-dir "$results_dir" \
-    ${args[@]+"${args[@]}"}
+if [[ "$score_runs" -eq 1 ]]; then
+    "$python" -m fm_adaptation.compute_metrics \
+        --results-dir "$results_dir" \
+        ${args[@]+"${args[@]}"}
+fi
 
 if [[ ${#nnunet_dirs[@]} -gt 0 ]]; then
     nnunet_args=()

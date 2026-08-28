@@ -4,13 +4,38 @@ from pathlib import Path
 
 import numpy as np
 
-from fm_adaptation.report import _best_values, _experiment_order, _in_domain, _model_matches, _pool_folds
+from fm_adaptation.report import (_best_values, _experiment_order, _in_domain, _model_matches,
+                                  _pool_folds, nnunet_label)
 from fixtures import DatasetFixture
 
 
 def column(cases, dice):
     dice = np.asarray(dice, dtype=float)
     return {"dice": dice, "masd": dice.copy(), "cases": np.array(cases)}
+
+
+class NnunetLabelTests(unittest.TestCase):
+    """What tells one nnU-Net directory from another ends up in its row's name."""
+
+    def test_the_stock_trainer_plans_and_configuration_read_plainly(self):
+        self.assertEqual(nnunet_label("nnUNetTrainer__nnUNetPlans__2d"), "nnU-Net")
+
+    def test_a_plans_variant_is_named(self):
+        self.assertEqual(nnunet_label("nnUNetTrainer__nnUNetResEncUNetMPlans__2d"),
+                         "nnU-Net (Res Enc M)")
+
+    def test_a_non_stock_trainer_is_named_too(self):
+        """Neurites train for 100 epochs, lesions for the default 1000: same plans, different runs,
+        so the label has to keep them apart."""
+        self.assertEqual(nnunet_label("nnUNetTrainer_100epochs__nnUNetResEncUNetMPlans__2d"),
+                         "nnU-Net (Res Enc M, 100 epochs)")
+        self.assertEqual(
+            nnunet_label("nnUNetTrainerSkeletonRecall_100epochs__nnUNetResEncUNetMPlans__2d"),
+            "nnU-Net (Res Enc M, Skeleton Recall 100 epochs)",
+        )
+
+    def test_a_configuration_that_is_its_own_network_keeps_its_own_name(self):
+        self.assertEqual(nnunet_label("nnUNetTrainer__nnUNetPlans__2d_xtiny8"), "XTinyUNet")
 
 
 class ModelMatchTests(unittest.TestCase):

@@ -21,33 +21,42 @@ models=(
 )
 
 train_datasets=(
-    Dataset105_lesion_eric_gfap_resized
+    # Dataset105_lesion_eric_gfap_resized
     # Dataset207_lesion_katie_contusion_smi_gfap
     # Dataset208_lesion_MYKE_smi_gfap
     # Dataset209_lesion_MYE_smi_gfap
     # Dataset213_lesion_KE_smi_gfap
     # Dataset217_lesion_MY_smi_gfap
-    Dataset218_lesion_eric_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+)
+
+# Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.
+# A set that one column trained on is still comparable: that column holds its imagesTs while the
+# others hold the whole dataset, and the figure is drawn on the cases they share.
+test_datasets=(
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset211_lesion_paul_widefield_smi_gfap
+    # Dataset214_lesion_mohammad_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
 )
 
 configs=(
     # linear
-    # nonlinear
     # upernet
     # upernet_inj
-    # upernet_ours
-    # upernet_inj_ours
-    upernet_inj_ft_ours
-    # upernet_inj_ft_dropsmi_ours
-    # upernet_inj_ft_dropany_ours
-    # upernet_inj_ft_balanced_ours
-    # upernet_inj_ft_balanced_dropany_ours
-    # upernet_inj_ft_balanced_aug_ours
     # upernet_inj_ft_balanced_dropsmi_aug_ours
     # upernet_inj_ft_balanced_aug_gfap_ours
     # m2f
+    # upernet_inj_ft_p512_ours
+    # convnext_upernet_p512_ours
+    # convnext_upernet_ft_p512_ours
+    # convnext_upernet_ft_init_p512_ours
+    convnext_upernet_ft_aug_p512_ours
+    # convnextb_upernet_ft_aug_p512_ours
+    # convnexts_upernet_ft_aug_p512_ours
+    # convnextt_upernet_ft_aug_p512_ours
 )
 
 folds=(
@@ -63,14 +72,6 @@ results_dirs=(
 )
 raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 
-# Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.
-# A set that one column trained on is still comparable: that column holds its imagesTs while the
-# others hold the whole dataset, and the figure is drawn on the cases they share.
-test_datasets=(
-    Dataset210_lesion_interrater_MY_smi_gfap
-    Dataset212_lesion_katie_dorsal_column_smi_gfap
-    Dataset211_lesion_paul_widefield_smi_gfap
-)
 
 splits=(
     test
@@ -87,14 +88,16 @@ seed=-1
 # mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=split
+layout=masks
 
+# How a mask is painted, in every layout -- a layout only arranges the panels and decides
+# whether a mask sits on black or over the image.
 # contour | overlay | centerline
-gt_style=contour
-pred_style=contour
+gt_style=${gt_style:-contour}
+pred_style=${pred_style:-contour}
 # red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
-gt_color=white
-pred_color=yellow
+gt_color=${gt_color:-white}
+pred_color=${pred_color:-yellow}
 gt_width=1
 pred_width=2
 alpha=0.5

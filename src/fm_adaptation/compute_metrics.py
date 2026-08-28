@@ -7,8 +7,8 @@ produced the bug this replaces: the old inference loop measured against the labe
 shrunk onto the encoder's square canvas and blown back up, which for a lesion slide is a ~7.5x round
 trip that costs about 1.2 dice of boundary before a model is involved at all.
 
-Dice, HD95 and mean average surface distance per case, background excluded. Nothing is resized here:
-the predictions must already be in the space of the labels.
+Dice, centreline Dice, HD95 and mean average surface distance per case, background excluded. Nothing
+is resized here: the predictions must already be in the space of the labels.
 
     PYTHONPATH=src python -m fm_adaptation.compute_metrics \
         --results-dir models --datasets 209 --folds 0
@@ -30,6 +30,7 @@ from monai.metrics import (
 )
 from monai.networks.utils import one_hot
 from PIL import Image
+from skimage.morphology import skeletonize
 
 from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, resolve
@@ -47,6 +48,7 @@ MASK_SUFFIXES = {".png", ".tif", ".tiff"}
 class CaseMetrics:
     image_id: str
     dice: float
+    cldice: float
     hd95: float
     masd: float
 
@@ -80,12 +82,38 @@ def index_by_stem(directory: Path):
     }
 
 
+def _cldice(prediction, target, num_classes):
+    """Centreline Dice, averaged over the foreground classes.
+
+    Shit et al.'s clDice: the harmonic mean of how much of the prediction's skeleton lies inside the
+    truth and how much of the truth's skeleton lies inside the prediction. Overlap Dice on a structure
+    two pixels wide is dominated by whether a trace is placed exactly right; clDice asks instead
+    whether the same paths were followed, which is what tracing is judged on.
+    """
+    scores = []
+    for value in range(1, num_classes):
+        pred, truth = prediction == value, target == value
+        if not pred.any() or not truth.any():
+            # No foreground to trace on one side: undefined rather than zero, and `_nanmean` drops it.
+            scores.append(np.nan)
+            continue
+        pred_skeleton, truth_skeleton = skeletonize(pred), skeletonize(truth)
+        precision = (pred_skeleton & truth).sum() / pred_skeleton.sum()
+        sensitivity = (truth_skeleton & pred).sum() / truth_skeleton.sum()
+        scores.append(
+            0.0 if precision + sensitivity == 0
+            else 2 * precision * sensitivity / (precision + sensitivity)
+        )
+    return _nanmean(scores)
+
+
 def compute_case_metrics(prediction, target, num_classes, ignore_empty=True):
-    """(dice, hd95, masd) averaged over the foreground classes, background excluded."""
+    """(dice, cldice, hd95, masd) averaged over the foreground classes, background excluded."""
     if prediction.shape != target.shape:
         raise ValueError(f"prediction/target shape mismatch: {prediction.shape} vs {target.shape}")
     if num_classes < 2:
         raise ValueError(f"num_classes must be >= 2, got {num_classes}")
+    cldice = _cldice(np.asarray(prediction), np.asarray(target), num_classes)
     # one_hot expects (batch, channel, ...), so both gain two leading axes.
     prediction = one_hot(torch.as_tensor(prediction, dtype=torch.long)[None, None], num_classes)
     target = one_hot(torch.as_tensor(target, dtype=torch.long)[None, None], num_classes)
@@ -97,7 +125,8 @@ def compute_case_metrics(prediction, target, num_classes, ignore_empty=True):
     masd = compute_average_surface_distance(
         prediction, target, include_background=False, symmetric=True
     )
-    return tuple(_nanmean(x.detach().cpu().numpy().reshape(-1)) for x in (dice, hd95, masd))
+    overlap = tuple(_nanmean(x.detach().cpu().numpy().reshape(-1)) for x in (dice, hd95, masd))
+    return (overlap[0], cldice) + overlap[1:]
 
 
 def write_csv(rows: list[CaseMetrics], path: Path, add_aggregate_row=True):
@@ -108,17 +137,19 @@ def write_csv(rows: list[CaseMetrics], path: Path, add_aggregate_row=True):
         return "" if value is None or np.isnan(value) else f"{value:.6f}"
 
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["image_id", "dice", "hd95", "masd"])
+        writer = csv.DictWriter(f, fieldnames=["image_id", "dice", "cldice", "hd95", "masd"])
         writer.writeheader()
         for row in rows:
             writer.writerow({
                 "image_id": row.image_id,
-                "dice": fmt(row.dice), "hd95": fmt(row.hd95), "masd": fmt(row.masd),
+                "dice": fmt(row.dice), "cldice": fmt(row.cldice),
+                "hd95": fmt(row.hd95), "masd": fmt(row.masd),
             })
         if add_aggregate_row and rows:
             writer.writerow({
                 "image_id": "MEAN",
                 "dice": fmt(_nanmean(r.dice for r in rows)),
+                "cldice": fmt(_nanmean(r.cldice for r in rows)),
                 "hd95": fmt(_nanmean(r.hd95 for r in rows)),
                 "masd": fmt(_nanmean(r.masd for r in rows)),
             })

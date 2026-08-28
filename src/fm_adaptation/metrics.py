@@ -42,7 +42,7 @@ def write_metrics(rows: list[CaseMetrics], path: Path):
             writer.writerow([row.case_id, row.dice, row.masd])
 
 
-METRIC_FIELDS = ("dice", "hd95", "masd")
+METRIC_FIELDS = ("dice", "cldice", "hd95", "masd")
 
 
 def read_case_metrics(path: Path) -> list[dict]:
