@@ -60,13 +60,13 @@ nnunet_dirs=(
 )
 nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 nnunet_tested_on=(
-    Dataset105_lesion_eric_gfap_resized
-    Dataset207_lesion_katie_contusion_smi_gfap
-    Dataset210_lesion_interrater_MY_smi_gfap
-    Dataset211_lesion_paul_widefield_smi_gfap
-    Dataset214_lesion_mohammad_smi_gfap
-    Dataset215_lesion_yvonne_smi_gfap
-    Dataset218_lesion_eric_smi_gfap
+    # Dataset105_lesion_eric_gfap_resized
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset210_lesion_interrater_MY_smi_gfap
+    # Dataset211_lesion_paul_widefield_smi_gfap
+    # Dataset214_lesion_mohammad_smi_gfap
+    # Dataset215_lesion_yvonne_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     # The older lesion and traced sets these runs also predicted are left out: they belong to
     # families no table here shows.

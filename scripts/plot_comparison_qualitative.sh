@@ -53,10 +53,12 @@ configs=(
     # convnext_upernet_p512_ours
     # convnext_upernet_ft_p512_ours
     # convnext_upernet_ft_init_p512_ours
-    convnext_upernet_ft_aug_p512_ours
+    # convnext_upernet_ft_aug_p512_ours
     # convnextb_upernet_ft_aug_p512_ours
     # convnexts_upernet_ft_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_ours
+    # convnextb_upernet_aug_p512_ours
+    convnextt_upernet_aug_p512_ours
 )
 
 folds=(

@@ -47,5 +47,22 @@ class SamplingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "uncached"):
                 _validate_data_mode(cfg, encoder_trains=False)
 
+            # A frozen trunk on the patchwise path caches nothing -- every patch is cut and perturbed
+            # fresh -- so perturbing it is not the mistake the guard is there to catch.
+            single = DatasetFixture(self.root, "Dataset300_single", {"0": "R"})
+            single.add("Eric__case", planes={0: 0})
+            single.split(["Eric__case"])
+            patched = SimpleNamespace(
+                raw_data_dir=self.root,
+                train_dataset=single.name,
+                patching=object(),
+                channel_dropout=(),
+                augment=object(),
+            )
+            _validate_data_mode(patched, encoder_trains=False)
+            patched.patching = None
+            with self.assertRaisesRegex(ValueError, "uncached"):
+                _validate_data_mode(patched, encoder_trains=False)
+
 if __name__ == "__main__":
     unittest.main()

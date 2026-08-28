@@ -67,12 +67,15 @@ def _validate_data_mode(cfg, encoder_trains=None):
     )
     if cfg.patching is not None and declared_stains is not None and len(declared_stains) > 1:
         raise ValueError("patchwise loading is not supported for multi-stain datasets")
-    if encoder_trains is False and cfg.channel_dropout:
-        raise ValueError("channel_dropout requires an uncached, trainable encoder")
-    # Cached features were computed once, from the unaugmented image; augmenting would silently do
-    # nothing, since the cached loader never opens an image again.
-    if encoder_trains is False and cfg.augment is not None:
-        raise ValueError("augment requires an uncached, trainable encoder")
+    # What rules perturbation out is caching, not a frozen trunk: features cached once, from the
+    # unaugmented image, would make any perturbation silently do nothing, since the cached loader
+    # never opens an image again. Patching is cut fresh every epoch and so never caches, and neither
+    # does a trainable encoder -- either one leaves the image there to perturb.
+    cached = encoder_trains is False and cfg.patching is None
+    if cached and cfg.channel_dropout:
+        raise ValueError("channel_dropout requires an uncached encoder")
+    if cached and cfg.augment is not None:
+        raise ValueError("augment requires an uncached encoder")
 
 
 def _cache_features(cfg, encoder, dataset, device):
