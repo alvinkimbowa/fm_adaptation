@@ -30,6 +30,7 @@ from monai.metrics import (
 )
 from monai.networks.utils import one_hot
 from PIL import Image
+from tqdm import tqdm
 from skimage.morphology import skeletonize
 
 from . import agreement
@@ -276,7 +277,9 @@ def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=F
         CaseMetrics(case_id, *compute_case_metrics(
             read_mask(predictions[case_id]), read_mask(ground_truth[case_id]), classes
         ))
-        for case_id in case_ids
+        # Skeletonising a whole slide takes seconds, so a column of them is long enough that a
+        # silent run is indistinguishable from a stalled one.
+        for case_id in tqdm(case_ids, desc=label, unit="case", leave=False)
     ]
     write_csv(rows, metrics_path)
     return f"{label}: measured {len(rows)}" + (f" ({missing} without a label)" if missing else "")
