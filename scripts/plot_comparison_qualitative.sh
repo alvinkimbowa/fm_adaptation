@@ -41,8 +41,8 @@ test_datasets=(
     # Dataset211_lesion_paul_widefield_smi_gfap
     # Dataset214_lesion_mohammad_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
-    Dataset300_neurite_yvonne_smi
     Dataset301_neurite_yvonne_b2_smi
+    Dataset300_neurite_yvonne_smi
 )
 
 configs=(
