@@ -89,11 +89,22 @@ def _columns(run_dirs, kind, tested_on):
 
 
 def _evaluation_sets(run_dirs, kind):
-    """Evaluation sets every selected run has predictions for, so a figure has every column."""
+    """Evaluation sets every selected run has predictions for, so a figure has every column.
+
+    An empty intersection means the selection cannot be drawn at all, so what each run holds is
+    reported: the usual cause is a column trained on a different dataset, which was never evaluated
+    on anything the others were.
+    """
     shared = None
+    per_run = {}
     for run_dir in run_dirs:
         here = {p.parent.name for p in (run_dir / kind).glob("*/pred*") if p.is_dir()}
+        per_run[run_dir] = here
         shared = here if shared is None else (shared & here)
+    if not shared:
+        print(f"no {kind} set is shared by every selected run:")
+        for run_dir, here in per_run.items():
+            print(f"  {run_dir}: {', '.join(sorted(here)) or 'nothing'}")
     return sorted(shared or ())
 
 
