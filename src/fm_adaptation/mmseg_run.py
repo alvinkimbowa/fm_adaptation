@@ -22,7 +22,6 @@ from .config import ExperimentConfig
 from .datasets import dataset_dir as resolve_dataset_dir
 from .data import _case_ids, load_dataset_json, num_classes
 from .dinov3_mmseg import head_cfg
-from .metrics import CaseMetrics, compute_metrics, write_metrics
 
 
 def _pipelines(cfg, crop_size, ending):
@@ -134,54 +133,42 @@ def _runner_cfg(cfg, head, crop_size, work_dir, epochs, batch_size, lr, amp_dtyp
     )
 
 
-def _predict(runner, cfg, test_pipeline, run_dir, classes, ending):
-    """Per-case inference through the trained model, written in the repo's metrics.csv format."""
+def _predict(runner, cfg, test_pipeline, run_dir):
+    """Per-case inference through the trained model, written at each case's native resolution.
+
+    Which datasets and splits an evaluation covers comes from `predict._jobs`, so a run trained here
+    is evaluated on exactly what the same config would be evaluated on through the repo's own loop.
+    Scoring is a separate stage: `fm_adaptation.compute_metrics` reads these predictions off disk.
+    """
     import cv2
     from mmengine.dataset import Compose, default_collate
 
+    from .patching import open_image
+    from .predict import _jobs, _seen_in_training
+
     model = runner.model
     model.eval()
-    # LoadAnnotations would need the label at inference; the metrics are computed separately below.
+    # LoadAnnotations would need the label at inference, which nothing here reads.
     pipeline = Compose([step for step in test_pipeline if step["type"] != "LoadAnnotations"])
     datasets = cfg.test_datasets or (cfg.train_dataset,)
-    jobs = []
-    for name in datasets:
-        if name != cfg.train_dataset:
-            jobs.append((name, cfg.test_split, "eval", "test"))
-            continue
-        if cfg.fold != "all":
-            jobs.append((name, "Tr", "val", "validation"))
-        if (resolve_dataset_dir(cfg.raw_data_dir, name) / "imagesTs").is_dir():
-            jobs.append((name, "Ts", "eval", "test"))
 
-    for dataset_name, split, subset, kind in jobs:
+    for dataset_name, split, subset, kind, column in _jobs(cfg, datasets, _seen_in_training(cfg)):
         dataset_dir = cfg.raw_data_dir / dataset_name
+        ending = load_dataset_json(dataset_dir)["file_ending"]
         case_ids = _case_ids(dataset_dir, split, cfg.fold, subset)
-        output_dir = run_dir / kind / dataset_name
-        (output_dir / "predictions").mkdir(parents=True, exist_ok=True)
-        rows = []
-        for case_id in tqdm(case_ids, desc=f"{kind} {dataset_name}"):
+        output_dir = run_dir / kind / column / "predictions"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for case_id in tqdm(case_ids, desc=f"{kind} {column} images{split}"):
             image_path = dataset_dir / f"images{split}" / f"{case_id}_0000{ending}"
-            label_path = dataset_dir / f"labels{split}" / f"{case_id}{ending}"
             data = pipeline({"img_path": str(image_path), "seg_fields": [], "reduce_zero_label": False})
             with torch.no_grad():
                 result = model.test_step(default_collate([data]))[0]
             prediction = result.pred_sem_seg.data[0].cpu().numpy().astype(np.uint8)
-            target = _read_label(label_path)
-            if prediction.shape != target.shape:
-                prediction = cv2.resize(prediction, (target.shape[1], target.shape[0]),
-                                        interpolation=cv2.INTER_NEAREST)
-            cv2.imwrite(str(output_dir / "predictions" / f"{case_id}.png"), prediction)
-            dice, masd = compute_metrics(prediction, target, classes)
-            rows.append(CaseMetrics(case_id, dice, masd))
-        write_metrics(rows, output_dir / "metrics.csv")
-        print(f"Wrote {len(rows)} predictions and metrics to {output_dir}")
-
-
-def _read_label(path):
-    from .patching import open_image
-
-    return np.asarray(open_image(path))
+            height, width = open_image(image_path).shape[:2]
+            if prediction.shape != (height, width):
+                prediction = cv2.resize(prediction, (width, height), interpolation=cv2.INTER_NEAREST)
+            cv2.imwrite(str(output_dir / f"{case_id}.png"), prediction)
+        print(f"Wrote {len(case_ids)} predictions to {output_dir}")
 
 
 def main():
@@ -231,8 +218,7 @@ def main():
 
     ending = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["file_ending"]
     _, test_pipeline = _pipelines(cfg, args.crop_size, ending)
-    _predict(runner, cfg, test_pipeline, run_dir,
-             num_classes(cfg.raw_data_dir / cfg.train_dataset), ending)
+    _predict(runner, cfg, test_pipeline, run_dir)
 
 
 def _write_run_config(source, run_name, destination):
