@@ -379,7 +379,9 @@ def main():
                         help="evaluation sets to draw. Empty takes every set the chosen runs share.")
     parser.add_argument("--splits", nargs="*", default=["test"], choices=("validation", "test"))
     parser.add_argument("--output-dir", default="results/qualitative",
-                        help="figures land in <output-dir>/<split>__<tested-on>.png")
+                        help="figures land in <output-dir>/<split>__<tested-on>.<format>")
+    parser.add_argument("--format", default="png",
+                        help="figure file format, as matplotlib names it: png, svg, pdf")
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
     parser.add_argument("--per-row", type=int, default=1,
                         help="cases side by side on one row, each with its own set of columns")
@@ -469,7 +471,7 @@ def main():
             names = {int(v): k for k, v in label_values.items() if int(v) != 0}
             # Flat: with a list of rows there is no one training set to file the figure under, so the
             # split and the evaluation set name it outright.
-            output = Path(args.output_dir) / f"{kind}__{tested_on}.png"
+            output = Path(args.output_dir) / f"{kind}__{tested_on}.{args.format}"
             # An unscored dataset has no metrics.csv anywhere, so freshness comes from the
             # predictions themselves rather than from a file that will never exist.
             stamps = [m.stat().st_mtime for *_, m in runs if m.exists()]
