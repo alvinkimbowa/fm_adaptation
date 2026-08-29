@@ -24,6 +24,7 @@ train_datasets=(
     Dataset219_lesion_MYK_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -38,6 +39,7 @@ test_datasets=(
     Dataset211_lesion_paul_widefield_smi_gfap
     Dataset301_neurite_yvonne_b2_smi
     Dataset300_neurite_yvonne_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
 )
 
 
@@ -71,8 +73,8 @@ configs=(
     convnext_upernet_ft_aug_p512_ours
     convnextb_upernet_ft_aug_p512_ours
     convnexts_upernet_ft_aug_p512_ours
-    convnextt_upernet_ft_aug_p512_ours
     # convnextb_upernet_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_ours
     convnextt_upernet_aug_p512_ours
 )
 

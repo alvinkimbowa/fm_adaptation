@@ -37,8 +37,9 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
 )
 
 # Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
@@ -56,6 +57,7 @@ test_datasets=(
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset300_neurite_yvonne_smi
     Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
 )
 
 configs=(
@@ -75,6 +77,7 @@ configs=(
     convnextb_upernet_ft_aug_p512_ours
     convnexts_upernet_ft_aug_p512_ours
     convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_aug_p512_ours
 )
 
 folds=(

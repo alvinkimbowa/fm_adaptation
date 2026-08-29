@@ -4,6 +4,7 @@ data:
   train_dataset: Dataset301_neurite_yvonne_b2_smi
   test_datasets:
     - Dataset301_neurite_yvonne_b2_smi
+    - Dataset302_neurite_yvonne_b2_smi_1px
     - Dataset300_neurite_yvonne_smi
   test_split: all
   fold: 0

@@ -33,6 +33,7 @@ datasets=(          # what a run was trained on
     # Dataset219_lesion_MYK_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
 )
 
 experiments=(       # the adaptation, i.e. the run name
