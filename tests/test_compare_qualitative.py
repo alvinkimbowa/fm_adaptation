@@ -7,7 +7,9 @@ import numpy as np
 from fm_adaptation.selection import select_runs
 
 try:
-    from fm_adaptation.compare_qualitative import _columns, _common_cases, _evaluation_sets
+    from fm_adaptation.qualitative import crop_window, _window_overlap
+    from fm_adaptation.compare_qualitative import (_columns, _common_cases, _evaluation_sets,
+                                                   _repeat_cases)
 except ImportError as error:  # pragma: no cover - environment, not behaviour
     # Drawing needs scikit-image, which only the SAM3 environment carries; the rest of the suite runs
     # under .venv-mm. Skipping keeps one interpreter from failing to collect what the other checks.
@@ -150,6 +152,46 @@ class RunSelectionTests(unittest.TestCase):
         self.assertEqual([label for label, *_ in columns],
                          ["DINOv3 + balanced + aug + trained on 208",
                           "DINOv3 + balanced + aug + trained on 219"])
+
+
+class RepeatCasesTests(unittest.TestCase):
+    """Filling a patchwise figure from an evaluation set with only a case or two in it."""
+
+    def test_a_set_that_already_fills_the_figure_is_left_alone(self):
+        cases = [("a", 0.1), ("b", 0.2), ("c", 0.3)]
+        self.assertEqual(_repeat_cases(cases, 3), cases)
+        self.assertEqual(_repeat_cases(cases, 2), cases)
+
+    def test_too_few_cases_are_cycled_so_repeats_sit_apart(self):
+        cases = [("a", 0.1), ("b", 0.2)]
+        self.assertEqual([c for c, _ in _repeat_cases(cases, 5)], ["a", "b", "a", "b", "a"])
+
+    def test_nothing_to_repeat_stays_empty(self):
+        self.assertEqual(_repeat_cases([], 4), [])
+
+
+class CropWindowTests(unittest.TestCase):
+    """A case drawn more than once has to show somewhere else each time."""
+
+    def setUp(self):
+        self.label = np.zeros((2000, 2000), dtype=np.uint8)
+        self.label[::40, :] = 1          # annotation spread over the whole image
+        self.rng = np.random.default_rng(0)
+
+    def test_a_window_avoids_the_ones_already_taken(self):
+        first = crop_window(self.label, self.label.shape, 256, self.rng)
+        taken = [(first[0].start, first[1].start)]
+        second = crop_window(self.label, self.label.shape, 256, self.rng, avoid=taken)
+        overlap = _window_overlap((second[0].start, second[1].start), taken[0], 256)
+        self.assertLess(overlap, 0.25)
+
+    def test_an_annotation_confined_to_one_spot_still_yields_a_window(self):
+        """Nothing else to show, so the least overlapping try is taken rather than raising."""
+        label = np.zeros((600, 600), dtype=np.uint8)
+        label[300, 300] = 1
+        taken = [(172, 172)]
+        window = crop_window(label, label.shape, 256, self.rng, avoid=taken)
+        self.assertEqual((window[0].start, window[1].start), (172, 172))
 
 
 if __name__ == "__main__":

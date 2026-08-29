@@ -84,9 +84,10 @@ splits=(
     test
 )
 
-rows=8            # cases down the figure
+rows=10            # cases down the figure
 per_row=2         # cases side by side, each with its own image / gt / model columns
 output_dir=results/qualitative
+format=${format:-svg}      # png | svg | pdf
 # -1 draws a new sample of cases every run, overwriting the previous figure. Set a number to pin one.
 seed=-1
 
@@ -106,8 +107,8 @@ pred_style=${pred_style:-contour}
 gt_color=${gt_color:-white}
 pred_color=${pred_color:-yellow}
 gt_width=1
-pred_width=2
-alpha=0.5
+pred_width=1
+alpha=1
 
 crop=auto         # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 
@@ -127,6 +128,7 @@ python -m fm_adaptation.compare_qualitative \
     --rows "$rows" \
     --per-row "$per_row" \
     --output-dir "$output_dir" \
+    --format "$format" \
     --layout "$layout" \
     --gt-style "$gt_style" \
     --pred-style "$pred_style" \

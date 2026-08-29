@@ -283,17 +283,38 @@ def select_cases(prediction_dir, count, metrics=None, rng=None):
     return [(stem, None) for stem in stems[:count]]
 
 
-def crop_window(label, shape, size, rng):
-    """A `size` window centred on a random labelled pixel, or on the image centre when there is none."""
+def _window_overlap(a, b, size):
+    """Fraction of a `size` window at `a` that a window at `b` covers."""
+    down = size - abs(a[0] - b[0])
+    across = size - abs(a[1] - b[1])
+    return max(down, 0) * max(across, 0) / float(size * size)
+
+
+def crop_window(label, shape, size, rng, avoid=(), tolerance=0.25, attempts=32):
+    """A `size` window centred on a random labelled pixel, or on the image centre when there is none.
+
+    `avoid` names windows already taken from this image, as (top, left). A candidate is accepted once
+    it covers less than `tolerance` of every one of them; failing that the least overlapping of
+    `attempts` tries is returned, so an image whose annotation occupies one small region still yields
+    a window rather than raising.
+    """
     height, width = shape
     rows, cols = np.nonzero(label)
-    if len(rows):
-        index = rng.integers(len(rows))
-        center_y, center_x = int(rows[index]), int(cols[index])
-    else:
-        center_y, center_x = height // 2, width // 2
-    top = int(np.clip(center_y - size // 2, 0, max(0, height - size)))
-    left = int(np.clip(center_x - size // 2, 0, max(0, width - size)))
+    best = best_overlap = None
+    for _ in range(attempts if avoid else 1):
+        if len(rows):
+            index = rng.integers(len(rows))
+            center_y, center_x = int(rows[index]), int(cols[index])
+        else:
+            center_y, center_x = height // 2, width // 2
+        top = int(np.clip(center_y - size // 2, 0, max(0, height - size)))
+        left = int(np.clip(center_x - size // 2, 0, max(0, width - size)))
+        overlap = max((_window_overlap((top, left), taken, size) for taken in avoid), default=0.0)
+        if best is None or overlap < best_overlap:
+            best, best_overlap = (top, left), overlap
+        if overlap < tolerance:
+            break
+    top, left = best
     return slice(top, top + size), slice(left, left + size)
 
 

@@ -108,6 +108,18 @@ def _evaluation_sets(run_dirs, kind):
     return sorted(shared or ())
 
 
+def _repeat_cases(cases, count):
+    """Cases repeated round-robin up to `count`, for a set too small to fill the figure.
+
+    Patchwise rows show a window rather than a whole slide, so an evaluation set of two sections
+    still has plenty left to show; the second visit to a case is cropped somewhere else, which
+    `crop_window` arranges. Round-robin rather than blocked, so repeats of one case sit apart.
+    """
+    if not cases or len(cases) >= count:
+        return cases
+    return [cases[index % len(cases)] for index in range(count)]
+
+
 def _common_cases(runs, count, reference, rng):
     """Cases every run predicted, sampled across the reference run's Dice range."""
     shared = None
@@ -262,6 +274,9 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
     # A row decodes one source image plus one prediction per column, and the lesion slides are tens of
     # megapixels each -- without this a figure looks like a hang for minutes at a time.
     progress = tqdm(list(enumerate(cases)), desc=Path(output).stem, unit="case", leave=False)
+    # Where each case has already been cropped, so a case drawn more than once shows a different
+    # part of the slide each time -- see `_repeat_cases`.
+    taken = {}
     for index, (case_id, _) in progress:
         # A case owns one block of `len(columns)` panels; `per_row` blocks share a row.
         row, block = divmod(index, per_row)
@@ -274,9 +289,11 @@ def render_comparison(images, labels, runs, cases, output, style, crop=None, see
         )
         label = read_image(_find(labels, case_id)) if scored else None
         reference = label if scored else read_image(_find(runs[0][2], case_id))
-        window = (crop_window(np.asarray(reference), np.asarray(image).shape[:2], crop, rng)
+        window = (crop_window(np.asarray(reference), np.asarray(image).shape[:2], crop, rng,
+                              avoid=taken.get(case_id, ()))
                   if crop else None)
         if window:
+            taken.setdefault(case_id, []).append((window[0].start, window[1].start))
             image = np.asarray(image)[window]
             label = None if label is None else np.asarray(label)[window]
         # Only the image is reduced here. The masks keep the resolution they were drawn at until
@@ -467,6 +484,8 @@ def main():
             if not cases:
                 print(f"skipped {kind}/{tested_on} (no cases shared by all runs)")
                 continue
+            if crop:
+                cases = _repeat_cases(cases, args.rows)
             label_values = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
             names = {int(v): k for k, v in label_values.items() if int(v) != 0}
             # Flat: with a list of rows there is no one training set to file the figure under, so the
