@@ -1,4 +1,6 @@
 results_analysis/
+logs/
+*.jsonl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
