@@ -2,13 +2,13 @@ data:
   raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
   results_dir: models
   # Resolve the final Dataset304_* directory name from its stable nnU-Net dataset id.
-  train_dataset: 304
+  train_dataset: "304"
   test_datasets:
-    - 304
-    - 300
-    - 301
-    - 302
-    - 303
+    - "304"
+    - "300"
+    - "301"
+    - "302"
+    - "303"
   test_split: all
   fold: 0
   augment:
