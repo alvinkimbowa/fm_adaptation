@@ -40,6 +40,7 @@ train_datasets=(
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 # Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
@@ -55,10 +56,11 @@ test_datasets=(
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset300_neurite_yvonne_smi
-    # Dataset301_neurite_yvonne_b2_smi
-    # Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
     Dataset303_neurite_yvonne_in_vitro_smi
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 configs=(

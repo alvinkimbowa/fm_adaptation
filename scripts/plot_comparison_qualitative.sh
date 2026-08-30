@@ -29,9 +29,10 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
     # Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 # Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.
@@ -42,10 +43,11 @@ test_datasets=(
     # Dataset211_lesion_paul_widefield_smi_gfap
     # Dataset214_lesion_mohammad_smi_gfap
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset301_neurite_yvonne_b2_smi
-    # Dataset300_neurite_yvonne_smi
-    # Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset300_neurite_yvonne_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
     Dataset303_neurite_yvonne_in_vitro_smi
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 configs=(
