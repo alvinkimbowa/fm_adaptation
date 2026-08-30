@@ -22,7 +22,8 @@ from .models import load_trained_model, restore_prediction
 from .patching import build_index, predict_case
 
 
-def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, overwrite):
+def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device, amp, output_dir,
+                       overwrite, keep_planes):
     """Overlapping-patch inference at native resolution, one case at a time."""
     cases = build_index(
         cfg.raw_data_dir,
@@ -32,6 +33,7 @@ def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device,
         subset,
         cfg.patching,
         cfg.patch_cache_dir(dataset_name),
+        keep_planes if cfg.patching.respect_channels else None,
     )
     prediction_dir = output_dir / "predictions"
     prediction_dir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +185,8 @@ def main():
         labelled = _has_labels(cfg.raw_data_dir / dataset_name, split)
         if cfg.patching is not None:
             count = _predict_patchwise(
-                cfg, model, dataset_name, split, subset, classes, device, amp, output_dir, args.overwrite
+                cfg, model, dataset_name, split, subset, classes, device, amp, output_dir,
+                args.overwrite, keep_planes
             )
             _write_source(output_dir, dataset_name, split)
             print(f"Wrote {count} predictions to {output_dir}")

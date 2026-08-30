@@ -78,6 +78,7 @@ configs=(
     # convnextb_upernet_aug_p512_ours
     # convnextt_upernet_aug_p512_ours
     convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_red_ours
 )
 
 # One fold gives that fold's row; several are pooled into a single row, labelled with the folds each

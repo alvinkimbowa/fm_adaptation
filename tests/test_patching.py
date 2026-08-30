@@ -1,12 +1,15 @@
 import math
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
 import numpy as np
 
 from fm_adaptation.config import AugmentConfig, PatchConfig
-from fm_adaptation.patching import _augment_patch, _prepare, _source_size
+from fixtures import DatasetFixture
+from fm_adaptation.patching import _augment_patch, _prepare, _source_size, build_index
 
 
 def _augment(**overrides):
@@ -118,6 +121,35 @@ class PrepareTests(unittest.TestCase):
         """No margin to be had, so the angle is cut back to what the case supports rather than the
         crop being padded out to the size the rotation would like."""
         self.assertEqual(self.prepare(self.case(side=520), _augment(rotation=180.0)), (512, 512))
+
+
+class ChannelLayoutTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = DatasetFixture(self.root, "Dataset001_stains", {"0": "SMI", "1": "GFAP"})
+        self.data.add("case", planes={0: 31, 1: 47})
+        self.data.split(["case"])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def crop(self, respect_channels):
+        cfg = PatchConfig(patch_size=8, respect_channels=respect_channels)
+        case = build_index(
+            self.root, self.data.name, "Tr", "0", "train", cfg,
+            self.root / f"cache_{respect_channels}",
+        )[0]
+        return case.crop(0, 0, 8)[0]
+
+    def test_patch_channels_are_opt_in(self):
+        grayscale = self.crop(False)
+        self.assertTrue(np.all(grayscale == 31))
+
+        channels = self.crop(True)
+        self.assertTrue(np.all(channels[..., 0] == 31))
+        self.assertFalse(channels[..., 1].any())
+        self.assertTrue(np.all(channels[..., 2] == 47))
 
 
 if __name__ == "__main__":

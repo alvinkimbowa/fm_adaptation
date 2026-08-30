@@ -65,6 +65,7 @@ configs=(
     # convnextb_upernet_aug_p512_ours
     # convnextt_upernet_aug_p512_ours
     convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_red_ours
 )
 
 folds=(

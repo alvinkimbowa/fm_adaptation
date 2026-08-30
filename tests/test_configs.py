@@ -49,5 +49,16 @@ class ConfigTests(unittest.TestCase):
                     (True, True, 10.0, 0.5, 1.5), name,
                 )
 
+        def test_patch_channel_configs_are_explicit(self):
+            repo = Path(__file__).resolve().parents[1]
+            paths = sorted((repo / "configs").glob(
+                "dinov3_convnextt_upernet_ft_aug_p512_red_sci*.yaml"
+            ))
+            configs = [ExperimentConfig.from_yaml(path) for path in paths]
+            self.assertEqual([cfg.train_dataset[:10] for cfg in configs],
+                             ["Dataset301", "Dataset302", "Dataset304"])
+            self.assertTrue(all(cfg.patching.respect_channels for cfg in configs))
+            self.assertTrue(all(cfg.run_name.endswith("_red_ours") for cfg in configs))
+
 if __name__ == "__main__":
     unittest.main()

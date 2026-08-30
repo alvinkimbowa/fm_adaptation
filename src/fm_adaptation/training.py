@@ -65,8 +65,11 @@ def _validate_data_mode(cfg, encoder_trains=None):
     declared_stains = stain_planes(
         load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"]
     )
-    if cfg.patching is not None and declared_stains is not None and len(declared_stains) > 1:
+    if (cfg.patching is not None and not cfg.patching.respect_channels
+            and declared_stains is not None and len(declared_stains) > 1):
         raise ValueError("patchwise loading is not supported for multi-stain datasets")
+    if cfg.patching is not None and cfg.channel_dropout:
+        raise ValueError("channel_dropout is not supported with patchwise loading")
     # What rules perturbation out is caching, not a frozen trunk: features cached once, from the
     # unaugmented image, would make any perturbation silently do nothing, since the cached loader
     # never opens an image again. Patching is cut fresh every epoch and so never caches, and neither

@@ -17,6 +17,8 @@ class PatchConfig:
     roi_threshold: int = 0
     overlap: float = 0.5
     ignore_masked_out: bool = False
+    # Compose known stain files into their declared RGB planes instead of replicating _0000.
+    respect_channels: bool = False
 
     @property
     def stride(self) -> int:
@@ -183,6 +185,7 @@ class ExperimentConfig:
                     roi_threshold=int(patching.get("roi_threshold", 0)),
                     overlap=float(patching.get("overlap", 0.5)),
                     ignore_masked_out=bool(patching.get("ignore_masked_out", False)),
+                    respect_channels=bool(patching.get("respect_channels", False)),
                 )
                 if patching.get("enabled")
                 else None
