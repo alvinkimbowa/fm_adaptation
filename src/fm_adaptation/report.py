@@ -327,7 +327,8 @@ def _experiment_order(models, train_datasets, configs):
 # ids can discover. Every member is in-domain against every other, whichever one a run trained on.
 SHARED_IMAGES = (
     frozenset({"Dataset203_neurites_yvonne_smi_2px_scaleaug", "Dataset301_neurite_yvonne_b2_smi",
-               "Dataset302_neurite_yvonne_b2_smi_1px"}),
+               "Dataset302_neurite_yvonne_b2_smi_1px",
+               "Dataset304_neurite_yvonne_b2_smi_1px_scaleaug"}),
 )
 
 

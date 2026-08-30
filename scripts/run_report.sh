@@ -25,6 +25,7 @@ train_datasets=(
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     # Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -40,6 +41,7 @@ test_datasets=(
     Dataset301_neurite_yvonne_b2_smi
     Dataset300_neurite_yvonne_smi
     Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 
