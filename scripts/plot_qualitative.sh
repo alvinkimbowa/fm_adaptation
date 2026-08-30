@@ -37,7 +37,7 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
 )
@@ -54,10 +54,11 @@ test_datasets=(
     # Dataset215_lesion_yvonne_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    Dataset203_neurites_yvonne_smi_2px_scaleaug
-    Dataset300_neurite_yvonne_smi
-    Dataset301_neurite_yvonne_b2_smi
-    Dataset302_neurite_yvonne_b2_smi_1px
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    # Dataset300_neurite_yvonne_smi
+    # Dataset301_neurite_yvonne_b2_smi
+    # Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset303_neurite_yvonne_in_vitro_smi
 )
 
 configs=(

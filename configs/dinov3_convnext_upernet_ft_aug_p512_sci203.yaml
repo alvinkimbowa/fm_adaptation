@@ -6,6 +6,7 @@ data:
     - Dataset203_neurites_yvonne_smi_2px_scaleaug
     - Dataset300_neurite_yvonne_smi
     - Dataset301_neurite_yvonne_b2_smi
+    - Dataset303_neurite_yvonne_in_vitro_smi
   test_split: all
   test_splits:
     Dataset301_neurite_yvonne_b2_smi: Ts

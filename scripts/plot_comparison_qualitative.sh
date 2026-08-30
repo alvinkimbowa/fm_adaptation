@@ -29,8 +29,8 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    Dataset203_neurites_yvonne_smi_2px_scaleaug
-    Dataset301_neurite_yvonne_b2_smi
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    # Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
 )
 
@@ -41,10 +41,11 @@ test_datasets=(
     # Dataset207_lesion_katie_contusion_smi_gfap
     # Dataset211_lesion_paul_widefield_smi_gfap
     # Dataset214_lesion_mohammad_smi_gfap
-    Dataset203_neurites_yvonne_smi_2px_scaleaug
-    Dataset301_neurite_yvonne_b2_smi
-    Dataset300_neurite_yvonne_smi
-    Dataset302_neurite_yvonne_b2_smi_1px
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    # Dataset301_neurite_yvonne_b2_smi
+    # Dataset300_neurite_yvonne_smi
+    # Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset303_neurite_yvonne_in_vitro_smi
 )
 
 configs=(
@@ -101,8 +102,8 @@ layout=masks
 # How a mask is painted, in every layout -- a layout only arranges the panels and decides
 # whether a mask sits on black or over the image.
 # contour | overlay | centerline
-gt_style=${gt_style:-contour}
-pred_style=${pred_style:-contour}
+gt_style=${gt_style:-centerline}
+pred_style=${pred_style:-centerline}
 # red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
 gt_color=${gt_color:-white}
 pred_color=${pred_color:-yellow}

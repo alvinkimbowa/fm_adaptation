@@ -23,7 +23,7 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     Dataset219_lesion_MYK_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
-    Dataset301_neurite_yvonne_b2_smi
+    # Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
 )
 
@@ -66,16 +66,16 @@ configs=(
     # upernet_inj_ft_vitb_ours
     # upernet_inj_ft_vits_ours
     # m2f
-    upernet_inj_ft_p512_ours
-    convnext_upernet_p512_ours
-    convnext_upernet_ft_p512_ours
+    # upernet_inj_ft_p512_ours
+    # convnext_upernet_p512_ours
+    # convnext_upernet_ft_p512_ours
     # convnext_upernet_ft_init_p512_ours
     convnext_upernet_ft_aug_p512_ours
     convnextb_upernet_ft_aug_p512_ours
     convnexts_upernet_ft_aug_p512_ours
     # convnextb_upernet_aug_p512_ours
+    # convnextt_upernet_aug_p512_ours
     convnextt_upernet_ft_aug_p512_ours
-    convnextt_upernet_aug_p512_ours
 )
 
 # One fold gives that fold's row; several are pooled into a single row, labelled with the folds each
