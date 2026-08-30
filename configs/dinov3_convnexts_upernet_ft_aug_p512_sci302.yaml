@@ -1,0 +1,52 @@
+data:
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset302_neurite_yvonne_b2_smi_1px
+  test_datasets:
+    - Dataset302_neurite_yvonne_b2_smi_1px
+    - Dataset300_neurite_yvonne_smi
+    - Dataset301_neurite_yvonne_b2_smi
+    - Dataset303_neurite_yvonne_in_vitro_smi
+  test_split: all
+  fold: 0
+  # Flips both ways and any angle. Patchwise training cuts a wider patch than it needs, turns that
+  # and takes the middle out, so no rotation brings fill into frame -- see `patching._source_size`.
+  augment:
+    hflip: true
+    vflip: true
+    rotation: 180
+    flip_p: 0.5
+
+model:
+  name: dinov3
+  probe: upernet
+  # ConvNeXt's four stages are the feature pyramid UperNet wants, so there is no adapter to inject into.
+  variant: convnexts
+  injector: false
+  train_encoder: true
+  run_name: convnexts_upernet_ft_aug_p512_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  weight_decay: 0.01
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  seed: 0
+  device: cuda
+
+# Whole slides are far too large to resize to the encoder's input; train and predict on patches cut
+# at native resolution. 512 is the resolution ConvNeXt segments at, so a patch reaches it unscaled.
+patching:
+  enabled: true
+  patch_size: 512
+  patches_per_case: 16
+  min_roi_fraction: 0.05
+  overlap: 0.5
