@@ -7,6 +7,7 @@ data:
     - Dataset300_neurite_yvonne_smi
     - Dataset301_neurite_yvonne_b2_smi
     - Dataset303_neurite_yvonne_in_vitro_smi
+    - Dataset305_neurite_yvonne_in_vitro_smi_slices
   test_split: all
   fold: 0
   # Flips both ways and any angle. Patchwise training cuts a wider patch than it needs, turns that

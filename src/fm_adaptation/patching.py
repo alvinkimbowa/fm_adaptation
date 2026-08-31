@@ -118,7 +118,7 @@ class CaseIndex:
             self._label = open_image(self.label_path)
         return self._label
 
-    def crop(self, y: int, x: int, patch_size: int):
+    def crop(self, y: int, x: int, patch_size: int, require_label: bool = True):
         if self.channel_layout is None:
             raw = np.asarray(self.images[0][1][y : y + patch_size, x : x + patch_size])
             image = _to_rgb(raw)
@@ -128,7 +128,7 @@ class CaseIndex:
                               min(patch_size, first.shape[1] - x), 3), dtype=first.dtype)
             for rgb, plane in self.images:
                 image[..., rgb] = plane[y : y + patch_size, x : x + patch_size]
-        label = np.asarray(self.label[y : y + patch_size, x : x + patch_size])
+        label = np.asarray(self.label[y : y + patch_size, x : x + patch_size]) if require_label else None
         return image, label
 
     def roi_fractions(self, patch_size: int) -> np.ndarray:
@@ -433,7 +433,7 @@ def predict_case(model, case, patch_cfg, classes, device, amp, batch_size, prepr
         batch = anchors[start : start + batch_size]
         tensors, geometries = [], []
         for y, x in batch:
-            image, _ = case.crop(int(y), int(x), patch_cfg.patch_size)
+            image, _ = case.crop(int(y), int(x), patch_cfg.patch_size, require_label=False)
             image_t, _, geometry = preprocess(image, empty)
             tensors.append(image_t)
             geometries.append(geometry)
