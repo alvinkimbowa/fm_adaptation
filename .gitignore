@@ -1,6 +1,8 @@
 results_analysis/
 logs/
 *.jsonl
+.local/
+.pooria/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
