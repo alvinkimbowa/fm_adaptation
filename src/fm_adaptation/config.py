@@ -74,6 +74,10 @@ class ExperimentConfig:
     lr_power: float
     accumulation_steps: int
     weight_decay: float
+    skeleton_recall_weight: float
+    skeleton_tube: bool
+    distance_weight_tau: float
+    distance_weight_floor: float
     seed: int
     device: str
     patching: "PatchConfig | None"
@@ -155,6 +159,12 @@ class ExperimentConfig:
             lr_power=float(training.get("lr_power", 1.0)),
             accumulation_steps=int(training.get("accumulation_steps", 1)),
             weight_decay=float(training.get("weight_decay", 0.0)),
+            skeleton_recall_weight=float(training.get("skeleton_recall_weight", 0.0)),
+            skeleton_tube=bool(training.get("skeleton_tube", True)),
+            # Weights the cross entropy by distance to the nearest annotated pixel, over a band
+            # `distance_weight_tau` pixels wide; 0 weights every pixel alike.
+            distance_weight_tau=float(training.get("distance_weight_tau", 0.0)),
+            distance_weight_floor=float(training.get("distance_weight_floor", 0.1)),
             seed=int(training.get("seed", 0)),
             device=str(training.get("device", "cuda")),
             # The stains the training images actually carry, where that is narrower than what the

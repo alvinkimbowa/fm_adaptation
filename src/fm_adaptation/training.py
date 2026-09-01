@@ -389,7 +389,7 @@ def main():
     # Optimiser steps, not batches: accumulation folds several batches into one step.
     steps_per_epoch = -(-len(train_loader) // cfg.accumulation_steps)
     scheduler = _lr_scheduler(optimizer, cfg, steps_per_epoch)
-    loss_fn = DiceCrossEntropyLoss()
+    loss_fn = build_loss(cfg)
 
     cfg.run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.config, cfg.run_dir / "config.yaml")

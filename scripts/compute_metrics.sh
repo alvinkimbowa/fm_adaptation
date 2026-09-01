@@ -52,6 +52,12 @@ experiments=(       # the adaptation, i.e. the run name
     convnextb_upernet_ft_aug_p512_ours
     convnexts_upernet_ft_aug_p512_ours
     convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_skelrec_ours
+    convnextt_upernet_ft_aug_p512_red_skelrec_ours
+    convnextt_upernet_ft_aug_p512_red_distw_ours
+    convnextt_upernet_ft_aug_p512_red_skelrec_distw_ours
+    convnextt_upernet_ft_aug_p512_red_distw10_ours
+    convnextt_upernet_ft_aug_p512_red_skelrec_distw10_ours
     convnextt_upernet_ft_aug_p512_red_ours
     convnextb_upernet_aug_p512_ours
     convnextt_upernet_aug_p512_ours

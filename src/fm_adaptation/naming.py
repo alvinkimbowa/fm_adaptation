@@ -49,6 +49,9 @@ TOKENS = (
     # Schedule and initialisation.
     ("poly", "poly"),
     ("init", "init"),
+    # The training objective, where it is not plain Dice and cross entropy.
+    ("skelrec", "SkelRecall"),
+    ("distw", "dist-weighted"),
     # How the training set was sampled and perturbed.
     ("balanced", "balanced"),
     ("aug", "aug"),
