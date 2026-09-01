@@ -31,6 +31,8 @@ datasets=(          # what a run was trained on
     # Dataset217_lesion_MY_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
+    Dataset214_lesion_mohammad_smi_gfap
+    Dataset215_lesion_yvonne_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
@@ -44,6 +46,7 @@ experiments=(       # the adaptation, i.e. the run name
     convnext_upernet_p512_ours
     convnext_upernet_ft_p512_ours
     upernet_inj_ft_ours
+    upernet_inj_ft_balanced_aug_ours
     upernet_inj_ft_p512_ours
     convnext_upernet_ft_aug_p512_ours
     convnextb_upernet_ft_aug_p512_ours

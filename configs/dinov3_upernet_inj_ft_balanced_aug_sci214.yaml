@@ -1,0 +1,52 @@
+data:
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  train_dataset: Dataset214_lesion_mohammad_smi_gfap
+  results_dir: models
+  test_datasets:
+    - Dataset214_lesion_mohammad_smi_gfap
+    - Dataset215_lesion_yvonne_smi_gfap
+    - Dataset207_lesion_katie_contusion_smi_gfap
+    - Dataset210_lesion_interrater_MY_smi_gfap
+    - Dataset211_lesion_paul_widefield_smi_gfap
+    - Dataset212_lesion_katie_dorsal_column_smi_gfap
+    - Dataset218_lesion_eric_smi_gfap
+  # An evaluation set's own split boundary means nothing to a model that never trained on it, so
+  # `all` scores every case of each.
+  test_split: all
+  fold: 0
+  # Flips, rotation and zoom, on the square canvas the encoder sees. A rotation is cropped back to
+  # what is real image in every row and column, so nothing invented reaches the model; 10 degrees is
+  # where that crop still leaves a usable section, since these are four times taller than wide. A
+  # zoom that would carry the annotation off the canvas is reduced until it fits.
+  augment:
+    hflip: true
+    vflip: true
+    rotation: 10
+    zoom_min: 0.5
+    zoom_max: 1.5
+  # Every case carries the same source prefix here, so this only makes an epoch a draw with
+  # replacement rather than a permutation; it is kept so the recipe matches the pooled runs.
+  balance_sources: true
+
+model:
+  name: dinov3
+  probe: upernet
+  injector: true
+  train_encoder: true
+  run_name: upernet_inj_ft_balanced_aug_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda

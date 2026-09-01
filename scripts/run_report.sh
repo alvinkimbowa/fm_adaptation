@@ -22,6 +22,8 @@ train_datasets=(
     # Dataset213_lesion_KE_smi_gfap
     # Dataset217_lesion_MY_smi_gfap
     Dataset219_lesion_MYK_smi_gfap
+    Dataset214_lesion_mohammad_smi_gfap
+    Dataset215_lesion_yvonne_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     # Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
