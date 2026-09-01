@@ -1,6 +1,7 @@
 import argparse
 import json
 from contextlib import nullcontext
+from dataclasses import replace
 
 import cv2
 import torch
@@ -155,8 +156,11 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", choices=("best", "final", "last"), default="best")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--fold", help="cross-validation fold to predict with, overriding the config's")
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
+    if args.fold is not None:
+        cfg = replace(cfg, fold=str(args.fold))
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
     model = load_trained_model(cfg, args.checkpoint, device, classes)

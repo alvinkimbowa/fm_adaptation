@@ -309,7 +309,7 @@ def main():
         args.models = [cfg["model"]["name"]]
         args.datasets = [cfg["data"]["train_dataset"]]
         args.experiments = [cfg["model"].get("run_name", cfg["model"]["probe"])]
-        args.folds = [str(cfg["data"]["fold"])]
+        args.folds = args.folds or [str(cfg["data"]["fold"])]
 
     columns = _columns(Path(args.results_dir), args) if not args.nnunet_results_dir else []
     for results_dir in args.nnunet_results_dir:

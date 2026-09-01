@@ -3,6 +3,7 @@ import csv
 import random
 import shutil
 from contextlib import nullcontext
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -19,7 +20,7 @@ from .data import (
     stain_planes,
     trained_planes,
 )
-from .losses import DiceCrossEntropyLoss, mean_foreground_dice
+from .losses import build_loss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader as _patch_loader
 
@@ -327,8 +328,11 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--resume", action="store_true",
                         help="continue this run from its own last.pt instead of training from scratch")
+    parser.add_argument("--fold", help="cross-validation fold to train, overriding the config's")
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
+    if args.fold is not None:
+        cfg = replace(cfg, fold=str(args.fold))
 
     _validate_data_mode(cfg)
 
