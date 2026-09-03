@@ -18,7 +18,7 @@ models=(
     # monounet*     # all three MonoUNets
 )
 
-datasets=(
+train_datasets=(
     Dataset080_BUSBRA_GE_Logiq_5
     Dataset082_BUSBRA_Toshiba_Aplio_300
     Dataset083_BUSBRA_U_Systems
