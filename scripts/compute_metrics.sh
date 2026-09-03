@@ -38,6 +38,7 @@ datasets=(          # what a run was trained on
     Dataset302_neurite_yvonne_b2_smi_1px
     Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
     Dataset070_Clarius_L15
+    Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
     Dataset073_GE_LE
 )
