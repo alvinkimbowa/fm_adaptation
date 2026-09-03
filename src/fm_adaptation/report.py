@@ -84,13 +84,13 @@ NNUNET_TRAINER_NAMES = {"100epochs": "100 epochs", "SkeletonRecall": "Skeleton R
 
 
 def nnunet_label(trainer_dir_name):
-    """`nnUNetTrainer_100epochs__nnUNetResEncUNetMPlans__2d` -> `nnU-Net (Res Enc M, 100 epochs)`.
+    """`nnUNetTrainer_100epochs__nnUNetResEncUNetMPlans__2d` -> `nnU-Net Res Enc M (100 epochs)`.
 
-    Each trainer/plans/configuration triple is a different network -- the Res Enc M and the xtiny
-    plans differ by two orders of magnitude in size, and a skeleton-recall trainer optimises
-    something else again -- so each earns its own row. Whatever distinguishes the directory from the
-    stock `nnUNetTrainer__nnUNetPlans__2d` becomes the label, and the stock 2d plan stays plain
-    `nnU-Net`.
+    The plans is the network: the stock configuration and the residual-encoder preset are trained by
+    the same code but are different architectures, so the plans names the model and each is selected
+    on its own. What is left -- the trainer's tag, the configuration -- says how that network was
+    trained and stays a parenthesised suffix, and the stock `nnUNetTrainer__nnUNetPlans__2d` keeps
+    the bare name `nnU-Net`.
     """
     trainer, _, rest = trainer_dir_name.partition("__")
     plans, _, configuration = rest.partition("__")
@@ -102,12 +102,12 @@ def nnunet_label(trainer_dir_name):
         for part in trainer.removeprefix("nnUNetTrainer").split("_")
         if part
     )
-    name = "nnU-Net"
+    name = f"nnU-Net {variant}" if variant else "nnU-Net"
     for pattern, model_name in NNUNET_MODEL_NAMES.items():
         if re.fullmatch(pattern, configuration):
-            name, variant, configuration = model_name, "", ""
+            name, configuration = model_name, ""
             break
-    suffix = ", ".join(filter(None, (variant, configuration, trainer)))
+    suffix = ", ".join(filter(None, (configuration, trainer)))
     return f"{name} ({suffix})" if suffix else name
 
 
@@ -323,15 +323,16 @@ def _config_label(model, adaptation):
 def _model_matches(model, patterns):
     """`--models` matched leniently, since the internal keys are not what anyone types.
 
-    Case, hyphens and underscores are ignored, so `nnunet`, `nnU-Net` and `nnu_net` all name the same
-    rows. A model carrying a parenthesised variant is matched on its base name too, so `nnU-Net`
-    takes every plans variant while `nnU-Net (xtiny32)` or `*xtiny*` narrows it to one.
+    Case, hyphens, underscores and spaces are ignored, so `nnunet`, `nnU-Net` and `nnu_net` all name
+    the same rows, and `nnUNetResEncM` names `nnU-Net Res Enc M` without needing to be quoted. A
+    model carrying a parenthesised suffix is matched on the name before it too, so `nnU-Net` takes
+    every way the stock plans was trained while `nnUNet*` widens to the other plans as well.
     """
     if not patterns:
         return True
 
     def normalise(name):
-        return re.sub(r"[-_]", "", name).lower()
+        return re.sub(r"[-_ ]", "", name).lower()
 
     patterns = [normalise(pattern) for pattern in patterns]
     names = {normalise(model), normalise(model.split(" (")[0])}

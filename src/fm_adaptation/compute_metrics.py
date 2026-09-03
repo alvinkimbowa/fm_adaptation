@@ -34,7 +34,7 @@ from tqdm import tqdm
 from skimage.morphology import skeletonize
 
 from . import agreement
-from .datasets import dataset_dir as resolve_dataset_dir, resolve
+from .datasets import dataset_dir as resolve_dataset_dir, dataset_root, resolve
 from .selection import matches
 
 # Paul's widefield strips are 29739x6240 -- 186 megapixels against PIL's 89 megapixel ceiling, which
@@ -235,12 +235,15 @@ def _columns(results_dir: Path, args):
     return selected
 
 
-def _nnunet_columns(results_dir: Path, raw_data_dir: Path, args):
+def _nnunet_columns(results_dir: Path, raw_data_dirs, args):
     """Every (predictions dir, raw data dir) an nnU-Net results tree holds for this selection.
 
     nnU-Net runs are trained elsewhere and carry no config of ours, so the selection comes from the
     layout: `nnunet/<trained on>/<trainer>/fold_N/test/<tested on>/preds`. The predictions are written
     at the case's native resolution, which is all this needs.
+
+    A column is measured against the labels of the set it was evaluated on, so each one takes the raw
+    data directory holding that set rather than one root standing for the whole tree.
     """
     selected = []
     for prediction_dir in sorted(results_dir.glob("nnunet/Dataset*/*/fold_*/test/Dataset*/preds")):
@@ -251,11 +254,12 @@ def _nnunet_columns(results_dir: Path, raw_data_dir: Path, args):
             and matches(fold, args.folds)
             and matches(prediction_dir.parent.name, args.tested_on)
         ):
-            selected.append((prediction_dir, raw_data_dir, None))
+            root = dataset_root(raw_data_dirs, prediction_dir.parent.name)
+            selected.append((prediction_dir, root, None))
     return selected
 
 
-def _monounet_columns(results_dir: Path, raw_data_dir: Path, args):
+def _monounet_columns(results_dir: Path, raw_data_dirs, args):
     """Every (predictions dir, raw data dir, reader) a MonoUNet architecture directory holds.
 
     Same arrangement as the nnU-Net trees -- trained elsewhere, no config of ours, selected from the
@@ -272,7 +276,8 @@ def _monounet_columns(results_dir: Path, raw_data_dir: Path, args):
             and matches(fold, args.folds)
             and matches(prediction_dir.parent.name, args.tested_on)
         ):
-            selected.append((prediction_dir, raw_data_dir, binary_mask_in_label_space))
+            root = dataset_root(raw_data_dirs, prediction_dir.parent.name)
+            selected.append((prediction_dir, root, binary_mask_in_label_space))
     return selected
 
 
@@ -352,7 +357,10 @@ def main():
         "--monounet-results-dir", nargs="*", default=[],
         help="MonoUNet architecture directories to measure as well, selected the same way",
     )
-    parser.add_argument("--raw-data-dir", help="where the other projects' trees' datasets live")
+    parser.add_argument(
+        "--raw-data-dir", nargs="*", default=[],
+        help="where the other projects' trees' datasets live; several roots are searched by number",
+    )
     parser.add_argument("--overwrite", action="store_true", help="redo columns already current")
     parser.add_argument("--dry-run", action="store_true", help="list the columns, measure nothing")
     args = parser.parse_args()
@@ -372,12 +380,16 @@ def main():
     for find_columns, results_dir in foreign:
         if not args.raw_data_dir:
             raise RuntimeError("a results tree of another project needs --raw-data-dir")
-        found = find_columns(Path(results_dir), Path(args.raw_data_dir), args)
+        found = find_columns(Path(results_dir), args.raw_data_dir, args)
+        # One selection is asked of every tree named, and no selection worth making covers all of
+        # them, so a tree with nothing to say about this one is reported and passed over. Finding
+        # nothing anywhere is the real error, and it is raised below.
         if not found:
-            raise RuntimeError(f"No predictions under {results_dir} for this selection")
+            print(f"{results_dir}: nothing for this selection", flush=True)
         columns += found
     if not columns:
-        raise RuntimeError(f"No predictions under {args.results_dir} for this selection")
+        searched = ", ".join(str(d) for _, d in foreign) or args.results_dir
+        raise RuntimeError(f"No predictions under {searched} for this selection")
     for prediction_dir, raw_data_dir, prepare in columns:
         print(
             measure(prediction_dir, raw_data_dir, args.overwrite, args.dry_run, prepare), flush=True

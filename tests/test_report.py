@@ -31,18 +31,19 @@ class NnunetLabelTests(unittest.TestCase):
     def test_the_stock_trainer_plans_and_configuration_read_plainly(self):
         self.assertEqual(nnunet_label("nnUNetTrainer__nnUNetPlans__2d"), "nnU-Net")
 
-    def test_a_plans_variant_is_named(self):
+    def test_the_plans_names_the_model(self):
+        """A plans is a different network, not a way of training one, so it belongs to the name."""
         self.assertEqual(nnunet_label("nnUNetTrainer__nnUNetResEncUNetMPlans__2d"),
-                         "nnU-Net (Res Enc M)")
+                         "nnU-Net Res Enc M")
 
     def test_a_non_stock_trainer_is_named_too(self):
         """Neurites train for 100 epochs, lesions for the default 1000: same plans, different runs,
         so the label has to keep them apart."""
         self.assertEqual(nnunet_label("nnUNetTrainer_100epochs__nnUNetResEncUNetMPlans__2d"),
-                         "nnU-Net (Res Enc M, 100 epochs)")
+                         "nnU-Net Res Enc M (100 epochs)")
         self.assertEqual(
             nnunet_label("nnUNetTrainerSkeletonRecall_100epochs__nnUNetResEncUNetMPlans__2d"),
-            "nnU-Net (Res Enc M, Skeleton Recall 100 epochs)",
+            "nnU-Net Res Enc M (Skeleton Recall 100 epochs)",
         )
 
     def test_a_configuration_that_is_its_own_network_keeps_its_own_name(self):
@@ -56,9 +57,19 @@ class ModelMatchTests(unittest.TestCase):
         self.assertTrue(_model_matches("nnU-Net", ["nnunet"]))
         self.assertTrue(_model_matches("nnU-Net", ["nnU_net"]))
 
-    def test_a_plans_variant_answers_to_its_base_name(self):
-        self.assertTrue(_model_matches("nnU-Net (Res Enc M)", ["nnunet"]))
-        self.assertFalse(_model_matches("nnU-Net (Res Enc M)", ["dinov3"]))
+    def test_each_plans_is_selected_on_its_own(self):
+        """The stock plans and the residual-encoder preset are separate rows to ask for."""
+        self.assertTrue(_model_matches("nnU-Net Res Enc M", ["nnUNetResEncM"]))
+        self.assertFalse(_model_matches("nnU-Net Res Enc M", ["nnunet"]))
+        self.assertFalse(_model_matches("nnU-Net", ["nnUNetResEncM"]))
+        self.assertFalse(_model_matches("nnU-Net Res Enc M", ["dinov3"]))
+
+    def test_a_glob_takes_every_plans_at_once(self):
+        self.assertTrue(_model_matches("nnU-Net Res Enc M", ["nnUNet*"]))
+        self.assertTrue(_model_matches("nnU-Net", ["nnUNet*"]))
+
+    def test_how_a_network_was_trained_does_not_change_what_it_answers_to(self):
+        self.assertTrue(_model_matches("nnU-Net Res Enc M (100 epochs)", ["nnUNetResEncM"]))
 
     def test_a_glob_can_narrow_to_one_variant(self):
         self.assertTrue(_model_matches("nnU-Net (xtiny32)", ["*xtiny*"]))

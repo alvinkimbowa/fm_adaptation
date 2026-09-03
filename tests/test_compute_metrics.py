@@ -142,7 +142,7 @@ class NnunetColumnTests(unittest.TestCase):
             args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
             return [
                 (path.parents[4].name, path.parent.name)
-                for path, _, _ in _nnunet_columns(self.results, self.root, args)
+                for path, _, _ in _nnunet_columns(self.results, [self.root], args)
             ]
 
         def test_every_column_is_found_without_a_selection(self):
@@ -205,7 +205,7 @@ class MonounetColumnTests(unittest.TestCase):
             args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
             return [
                 (path.parents[3].name, path.parent.name)
-                for path, _, _ in _monounet_columns(self.results, self.root, args)
+                for path, _, _ in _monounet_columns(self.results, [self.root], args)
             ]
 
         def test_every_column_is_found_without_a_selection(self):
@@ -229,7 +229,7 @@ class MonounetColumnTests(unittest.TestCase):
             from fm_adaptation.compute_metrics import _monounet_columns
 
             args = Namespace(datasets=[], folds=[], tested_on=[])
-            return _monounet_columns(self.results, self.root, args)
+            return _monounet_columns(self.results, [self.root], args)
 
 
 @needs_scoring

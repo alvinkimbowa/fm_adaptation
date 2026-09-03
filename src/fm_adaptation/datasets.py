@@ -73,6 +73,37 @@ def dataset_dir(raw_data_dir, value):
     return Path(raw_data_dir) / resolve(raw_data_dir, value)
 
 
+def dataset_root(raw_data_dirs, value):
+    """Which of several raw data directories holds a dataset.
+
+    A number identifies a dataset everywhere, so two roots naming it differently means two different
+    datasets wearing one number, and every path built from either would be a guess -- that is an
+    error, the same one `_by_id` raises for a single root holding a number twice. The same name under
+    several roots is one dataset mirrored, which is how a project reads another's data, and the first
+    root wins. A number no root knows falls back to the last, so what a caller reports still names a
+    real place rather than nothing.
+    """
+    roots = [Path(directory) for directory in raw_data_dirs]
+    if not roots:
+        raise ValueError(f"no raw data directory to resolve {value} against")
+    found = {}
+    for root in roots:
+        try:
+            name = resolve(root, value)
+        except RuntimeError:
+            # A root carrying some other number twice cannot be searched by number at all. That says
+            # nothing about the dataset being looked for, so the remaining roots still answer, and a
+            # fully named dataset is found in it either way -- `resolve` takes an exact directory
+            # name without indexing its siblings.
+            continue
+        if (root / name).is_dir():
+            found.setdefault(name, root)
+    if len(found) > 1:
+        places = ", ".join(f"{name} under {root}" for name, root in found.items())
+        raise RuntimeError(f"Dataset {dataset_id(value)} is two datasets: {places}")
+    return next(iter(found.values()), roots[-1])
+
+
 def split_cases(dataset_dir, split):
     """Case ids in one split of a dataset, read off the image filenames.
 

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fm_adaptation.datasets import dataset_dir, dataset_id, resolve
+from fm_adaptation.datasets import dataset_dir, dataset_id, dataset_root, resolve
 from fm_adaptation.selection import matches
 
 
@@ -60,6 +60,42 @@ class ResolveTests(unittest.TestCase):
             resolve(self.root, "Dataset217_lesion_MY_smi_gfap"),
             "Dataset217_lesion_MY_smi_gfap",
         )
+
+
+class DatasetRootTests(unittest.TestCase):
+    """Which of several raw data directories a dataset is read from."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.first, self.second = self.root / "first", self.root / "second"
+        (self.first / "Dataset217_lesion_MY_smi_gfap").mkdir(parents=True)
+        (self.second / "Dataset217_lesion_MY_smi_gfap").mkdir(parents=True)
+        (self.second / "Dataset080_BUSBRA_GE_Logiq_5").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_takes_the_root_that_holds_the_dataset(self):
+        self.assertEqual(dataset_root([self.first, self.second], "080"), self.second)
+
+    def test_a_dataset_mirrored_under_both_roots_comes_from_the_first(self):
+        self.assertEqual(dataset_root([self.first, self.second], "217"), self.first)
+
+    def test_refuses_a_number_naming_two_different_datasets(self):
+        (self.second / "Dataset300_one").mkdir()
+        (self.first / "Dataset300_another").mkdir()
+        with self.assertRaises(RuntimeError):
+            dataset_root([self.first, self.second], "300")
+
+    def test_a_number_no_root_knows_still_names_a_root(self):
+        self.assertEqual(dataset_root([self.first, self.second], "999"), self.second)
+
+    def test_an_ambiguous_root_does_not_stop_the_others_answering(self):
+        """A root carrying some other number twice says nothing about the dataset being looked for."""
+        (self.first / "Dataset075_first").mkdir()
+        (self.first / "Dataset075_second").mkdir()
+        self.assertEqual(dataset_root([self.first, self.second], "080"), self.second)
 
 
 class SelectionTests(unittest.TestCase):

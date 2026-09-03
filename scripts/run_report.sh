@@ -7,9 +7,12 @@ results_dir=models
 # <model>/<train dataset>/<configuration>/fold_<n> -- so comment a line out to drop the rows that
 # carry it. An empty list keeps every value that part can take. Entries match exactly, as a glob or
 # as a `_suffix` tag, and a dataset by its number alone.
+# A plans is a network of its own, so each is named here separately: `nnUNet` takes the stock 2d
+# plans, `nnUNetResEncM` the residual-encoder preset, and `nnUNet*` every plans at once.
 models=(
     nnUNet
-    XTinyUNet     # its own model, so `nnU-Net` above does not select it
+    nnUNetResEncM
+    XTinyUNet     # its own model, so no `nnUNet` entry above selects it
     MonoUNet
     sam3
     dinov3
@@ -23,15 +26,15 @@ train_datasets=(
     Dataset072_GE_LQP9
     Dataset073_GE_LE
     Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
-    Dataset080_BUSBRA_GE_Logiq_5
-    Dataset082_BUSBRA_Toshiba_Aplio_300
-    # Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
-    Dataset089_Echo_CardiacUDA
-    Dataset090_Echo_EchoCP
-    Dataset093_Echo_CardiacNet
+    # Dataset071_Sonix-Touch
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    # Dataset089_Echo_CardiacUDA
+    # Dataset090_Echo_EchoCP
+    # Dataset093_Echo_CardiacNet
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -91,6 +94,7 @@ folds=(
 nnunet_dirs=(
     ../xtinyunet/data/nnUNet_results
     ~/GAA/spinal_cord_injury/data/nnUNet_results
+    ../knee_us_segmentation/data/nnUNet_results
 )
 nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 # MonoUNet keeps one architecture per directory and no configuration level, so each directory named
