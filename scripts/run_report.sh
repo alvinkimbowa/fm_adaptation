@@ -13,22 +13,22 @@ models=(
     dinov3
     sam3
     nnU-Net       # case, hyphens and underscores are ignored, so `nnunet` works too
-    XTinyUNet     # its own model, so `nnU-Net` above does not select it
+    # XTinyUNet     # its own model, so `nnU-Net` above does not select it
     # MonoUNet-t
     # MonoUNet-B
     # MonoUNet-L
-    monounet*     # all three MonoUNets
+    # monounet*     # all three MonoUNets
 )
 
 datasets=(
-    # Dataset080_BUSBRA_GE_Logiq_5
-    # Dataset082_BUSBRA_Toshiba_Aplio_300
-    # Dataset083_BUSBRA_U_Systems
-    # Dataset084_KidneyUS_Philips
-    # Dataset086_MMOTU_2D
-    # Dataset090_Echo_EchoCP
-    Dataset204_lesion_czi_B
-    Dataset206_lesion_120_czi_B
+    Dataset080_BUSBRA_GE_Logiq_5
+    Dataset082_BUSBRA_Toshiba_Aplio_300
+    Dataset083_BUSBRA_U_Systems
+    Dataset084_KidneyUS_Philips
+    Dataset086_MMOTU_2D
+    Dataset090_Echo_EchoCP
+    # Dataset204_lesion_czi_B
+    # Dataset206_lesion_120_czi_B
     # Dataset203_neurite_2px_scaleaug
     # Dataset205_neurite_2px_scaleaug_red
 )
@@ -41,7 +41,7 @@ experiments=(
     # nonlinear_finetune
     # upernet
     # upernet_inj
-    upernet_ours
+    # upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
     # upernet_inj_ft_poly_ours
