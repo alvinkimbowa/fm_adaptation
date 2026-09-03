@@ -168,7 +168,11 @@ def _label_index(dataset_dir: Path):
     """
     index = {}
     for label_dir in sorted(dataset_dir.glob("labels*")):
-        if label_dir.is_dir():
+        # Only index actual nnU-Net splits. Raw-data trees can also contain rendered masks such as
+        # `labelsVal_fold0_alvin_visualized`; without a matching images directory those are derived
+        # artifacts, not ground truth, and may be RGBA rather than 2D label images.
+        split = label_dir.name[len("labels"):]
+        if label_dir.is_dir() and (dataset_dir / f"images{split}").is_dir():
             index.update(index_by_stem(label_dir))
     return index
 

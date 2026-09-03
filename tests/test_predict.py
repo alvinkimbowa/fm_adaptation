@@ -38,6 +38,22 @@ class JobTests(unittest.TestCase):
                 f"{data.name}_interrater",
             ])
 
+        def test_derived_held_out_images_without_labels_are_not_evaluation_splits(self):
+            data = DatasetFixture(self.root, "Dataset072_jobs", {"0": "US"})
+            data.add("Train__one", planes={0: 1})
+            data.split(["Train__one"])
+            (data.path / "imagesTs_nnunet_pred").mkdir()
+            cfg = SimpleNamespace(
+                raw_data_dir=self.root,
+                train_dataset=data.name,
+                test_split="Tr",
+                test_splits={},
+                fold="0",
+            )
+            self.assertEqual(_jobs(cfg, [data.name]), [
+                (data.name, "Tr", "val", "validation", data.name)
+            ])
+
         def test_all_splits_of_an_evaluation_set_share_one_column(self):
             """`test_split: all` scores every case of a set the model never trained on."""
             train = DatasetFixture(self.root, "Dataset213_trained", {"0": "SMI", "1": "GFAP"})

@@ -124,8 +124,10 @@ def _jobs(cfg, datasets, seen=frozenset()):
         for held_out in sorted(dataset_dir.glob("imagesTs*")):
             split = held_out.name[len("images"):]
             labels = dataset_dir / f"labels{split}"
+            # Derived image directories (for example `imagesTs_nnunet_pred`) can live beside the
+            # nnU-Net splits. They are not evaluation splits unless matching labels exist.
             if not labels.is_dir():
-                raise FileNotFoundError(f"held-out images have no matching labels: {held_out}")
+                continue
             if not any(held_out.glob(f"*_0000{ending}")):
                 continue
             column = dataset_name if split == "Ts" else f"{dataset_name}{split[2:]}"

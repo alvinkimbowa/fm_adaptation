@@ -55,8 +55,16 @@ def resolve(raw_data_dir, value):
     Falls back to whatever was asked for when the id is not there to look up, which is what lets a
     run whose data has moved on still be read, listed and tabulated from what it stored beside it.
     """
+    if raw_data_dir is None:
+        return str(value)
+    # An exact directory name is already unambiguous. Accept it without indexing every sibling:
+    # some raw-data roots legitimately carry two revisions under another dataset number, and that
+    # must not prevent a fully named, unrelated dataset from being used.
+    exact = Path(raw_data_dir) / str(value)
+    if exact.is_dir():
+        return exact.name
     identifier = dataset_id(value)
-    if identifier is None or raw_data_dir is None:
+    if identifier is None:
         return str(value)
     return _by_id(Path(raw_data_dir)).get(identifier, str(value))
 

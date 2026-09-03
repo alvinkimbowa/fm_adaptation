@@ -53,6 +53,14 @@ class ResolveTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             resolve(self.root, "217")
 
+    def test_exact_name_is_usable_when_an_unrelated_number_is_ambiguous(self):
+        (self.root / "Dataset075_first").mkdir()
+        (self.root / "Dataset075_second").mkdir()
+        self.assertEqual(
+            resolve(self.root, "Dataset217_lesion_MY_smi_gfap"),
+            "Dataset217_lesion_MY_smi_gfap",
+        )
+
 
 class SelectionTests(unittest.TestCase):
     """Datasets select by number; everything else selects as it did."""

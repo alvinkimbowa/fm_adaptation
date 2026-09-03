@@ -220,8 +220,16 @@ def _render_interrater(rows, unpaired, statistic):
 def _shorten_name(name, limit=46):
     return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
-# Datasets sometimes name the same task two ways; an alias keeps them in one table.
-FAMILY_ALIASES = {"neurite": "neurites"}
+# The family is both the key that groups runs into a table and that table's heading, so an alias
+# does two jobs: it pulls sets that name the same task differently into one table, and it writes the
+# heading in words the name on disk does not carry. The knee sets are named after the scanner that
+# recorded them, which is the distinction their columns already draw.
+FAMILY_ALIASES = {
+    "neurite": "neurites",
+    "Clarius": "Knee Cartilage",
+    "Sonix-Touch": "Knee Cartilage",
+    "GE": "Knee Cartilage",
+}
 
 
 def _dataset_family(dataset):

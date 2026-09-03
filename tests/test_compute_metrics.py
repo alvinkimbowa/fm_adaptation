@@ -101,6 +101,17 @@ class LabelResolutionTests(unittest.TestCase):
             (data.path / "labelsTs" / "Case__one.png").unlink()
             self.assertEqual(_label_index(data.path), {})
 
+        def test_derived_label_renderings_are_not_ground_truth(self):
+            from fm_adaptation.compute_metrics import _label_index
+
+            data = DatasetFixture(self.root, "Dataset070_renderings", {"0": "US"})
+            data.add("Case__one", split="Tr", planes={0: 1})
+            rendered = data.path / "labelsVal_fold0_alvin_visualized"
+            rendered.mkdir()
+            (rendered / "Case__one.png").write_bytes(b"rendered")
+            index = _label_index(data.path)
+            self.assertEqual(index["Case__one"].parent.name, "labelsTr")
+
 
 @needs_scoring
 class NnunetColumnTests(unittest.TestCase):
