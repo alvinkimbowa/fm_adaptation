@@ -18,16 +18,23 @@ def _read_run(run_dir: Path):
     return (
         cfg["model"]["name"],
         cfg["model"].get("run_name", cfg["model"]["probe"]),
-        cfg["data"]["train_dataset"],
+        str(cfg["data"]["train_dataset"]),
     )
 
 
 def _read_metrics(path: Path):
     with open(path, newline="") as f:
         rows = list(csv.DictReader(f))
+
+    # Some evaluators serialize undefined metrics as empty CSV cells, while others use nan/inf.
+    # Keep all of those cases as non-finite observations so the report can count and annotate them.
+    def value(row, name):
+        raw = row[name].strip()
+        return float(raw) if raw else float("nan")
+
     return {
-        "dice": np.array([float(row["dice"]) for row in rows]),
-        "masd": np.array([float(row["masd"]) for row in rows]),
+        "dice": np.array([value(row, "dice") for row in rows]),
+        "masd": np.array([value(row, "masd") for row in rows]),
     }
 
 
