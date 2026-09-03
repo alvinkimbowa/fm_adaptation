@@ -12,7 +12,6 @@ are independent. Nothing here is specific to a dataset or a modality.
 """
 
 import argparse
-import csv
 from pathlib import Path
 
 import cv2
@@ -23,6 +22,8 @@ matplotlib.use("Agg")
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation
+
+from .metrics import read_case_metrics
 from skimage.morphology import skeletonize
 
 STYLES = ("contour", "overlay", "centerline")
@@ -56,38 +57,75 @@ CLASS_PALETTE = (
     (245, 245, 245),   # white
 )
 IMAGE_SUFFIXES = (".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp")
+# Panels that exist only to show the ground truth, dropped from a layout when there is none.
+GT_ONLY_SLOTS = ("gt", "gt_mask")
+
+
+def _slots(layout, has_labels=True):
+    """The panels one sample occupies. Without labels the ground-truth-only panels fall away."""
+    slots = LAYOUTS[layout]
+    return slots if has_labels else tuple(s for s in slots if s not in GT_ONLY_SLOTS)
 
 
 # --------------------------------------------------------------------------------------- drawing
 
-def draw(canvas, mask, style, color, width=2, alpha=0.4):
-    """Paint a binary mask onto an RGB float canvas in place."""
+def coverage(mask, style, width=2.0, alpha=0.4, size=None):
+    """How much of each pixel a mask covers under one style, in [0, 1].
+
+    The style is applied at the mask's own resolution and only then resampled to `size`. That order
+    is the point: a skeleton of a shrunk mask is the medial axis of the wrong shape, and a contour of
+    it is the wrong contour -- both have to be found on the pixels the annotator drew. `width` is in
+    panel pixels, so it is scaled up to match while drawing and comes back out at the size asked for.
+
+    Resampling the coverage rather than the mask is what keeps a one-pixel line visible: averaging
+    turns it into a fainter line instead of dropping it the way nearest neighbour would.
+    """
     if not mask.any():
-        return
-    color = np.array(color, dtype=np.float32)
+        return None
+    height, wide = mask.shape[:2]
+    ratio = 1.0 if size is None else max(1.0, wide / max(size[0], 1))
     if style == "overlay":
-        canvas[mask] = (1.0 - alpha) * canvas[mask] + alpha * color
+        painted = np.where(mask, np.float32(alpha), np.float32(0.0))
     elif style == "contour":
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        if width == int(width):
-            cv2.drawContours(canvas, contours, -1, color.tolist(), max(1, int(width)))
-        else:
-            # OpenCV strokes in whole pixels, so a half step is drawn at double scale and averaged
-            # back down; the coverage that falls out is the line's antialiasing.
-            scale = 2
-            height, wide = mask.shape[:2]
-            large = np.zeros((height * scale, wide * scale), dtype=np.float32)
-            cv2.drawContours(large, [c * scale for c in contours], -1, 1.0,
-                             max(1, round(width * scale)), lineType=cv2.LINE_AA)
-            coverage = cv2.resize(large, (wide, height), interpolation=cv2.INTER_AREA)[..., None]
-            canvas[:] = (1.0 - coverage) * canvas + coverage * color
+        painted = _contour_coverage(mask, width * ratio)
     elif style == "centerline":
         line = skeletonize(mask)
-        if width > 1:
-            line = binary_dilation(line, iterations=int(width) // 2)
-        canvas[line] = color
+        iterations = int(round(width * ratio)) // 2
+        if iterations:
+            line = binary_dilation(line, iterations=iterations)
+        painted = line.astype(np.float32)
     else:
         raise ValueError(f"Unknown style: {style} (expected one of {STYLES})")
+    if size is not None and (wide, height) != tuple(size):
+        painted = cv2.resize(painted, tuple(size), interpolation=cv2.INTER_AREA)
+    return painted[..., None]
+
+
+def _contour_coverage(mask, width):
+    """The mask's outline as coverage. OpenCV strokes in whole pixels, so a fractional width is drawn
+    at double scale and averaged back down; the coverage that falls out is the line's antialiasing."""
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    height, wide = mask.shape[:2]
+    scale = 1 if width == int(width) else 2
+    canvas = np.zeros((height * scale, wide * scale), dtype=np.float32)
+    cv2.drawContours(canvas, [c * scale for c in contours] if scale > 1 else contours, -1, 1.0,
+                     max(1, round(width * scale)), lineType=cv2.LINE_AA if scale > 1 else cv2.LINE_8)
+    if scale == 1:
+        return canvas
+    return cv2.resize(canvas, (wide, height), interpolation=cv2.INTER_AREA)
+
+
+def draw(canvas, mask, style, color, width=2, alpha=0.4, size=None):
+    """Paint a binary mask onto an RGB float canvas in place.
+
+    `canvas` is already at panel size; `mask` may be larger, and `size` says what to reduce it to
+    once the style has been applied to the pixels it was drawn on.
+    """
+    painted = coverage(mask, style, width, alpha, size)
+    if painted is None:
+        return
+    color = np.array(color, dtype=np.float32)
+    canvas[:] = (1.0 - painted) * canvas + painted * color
 
 
 def mask_colors(classes, style):
@@ -109,22 +147,27 @@ def mask_colors(classes, style):
     return {value: style["gt_color"] for value in classes}, palette
 
 
-def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
+def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors, size=None):
     """The panels for one sample, as (title suffix, RGB uint8 array) pairs.
 
     `gt` and `prediction` are integer label maps; 0 is background and every other value is painted in
-    its own colour from the maps.
+    its own colour from the maps. `gt` may be None -- a dataset can ship images to predict without
+    annotations to compare against -- and then the ground-truth panels simply do not appear.
     """
     plain = _to_rgb(image)
     out = []
-    for slot in LAYOUTS[layout]:
+    for slot in _slots(layout, gt is not None):
         if slot == "image":
             panel = plain.copy()
         elif slot in ("gt_mask", "prediction_mask"):
+            # A mask slot differs from its overlay only in what sits underneath: black rather than
+            # the image. How a mask is painted is `gt_style`/`pred_style`, the same as everywhere.
             source, colors = (gt, gt_colors) if slot == "gt_mask" else (prediction, pred_colors)
+            painted = style["gt_style"] if slot == "gt_mask" else style["pred_style"]
+            width = style["gt_width"] if slot == "gt_mask" else style["pred_width"]
             panel = np.zeros_like(plain)
             for value, color in colors.items():
-                panel[source == value] = color
+                draw(panel, source == value, painted, color, width, style["alpha"], size)
         else:
             # `both_mask` is the same drawing without the image under it, so the masks are read on
             # their own. Alpha applies here too, against the black rather than against the image.
@@ -133,11 +176,11 @@ def _panels(image, gt, prediction, layout, style, gt_colors, pred_colors):
             if slot in ("both", "both_mask", "prediction"):
                 for value, color in pred_colors.items():
                     draw(panel, prediction == value, style["pred_style"], color,
-                         style["pred_width"], style["alpha"])
-            if slot in ("both", "both_mask", "gt"):
+                         style["pred_width"], style["alpha"], size)
+            if gt is not None and slot in ("both", "both_mask", "gt"):
                 for value, color in gt_colors.items():
                     draw(panel, gt == value, style["gt_style"], color,
-                         style["gt_width"], style["alpha"])
+                         style["gt_width"], style["alpha"], size)
         out.append((slot, panel.clip(0, 255).astype(np.uint8)))
     return out
 
@@ -172,28 +215,46 @@ def read_image(path):
 
 
 def _find(directory, stem, channel=0):
-    for suffix in IMAGE_SUFFIXES:
-        for candidate in (f"{stem}{suffix}", f"{stem}_{channel:04d}{suffix}"):
-            path = Path(directory) / candidate
-            if path.exists():
-                return path
+    """The file for one case, searching the sibling splits when it is not in `directory`.
+
+    A results column can span both `imagesTr` and `imagesTs` -- an evaluation set is scored whole,
+    since its own split boundary means nothing to a model that never trained on it -- while the
+    recorded source names a single split. Rather than fail on the half that lives elsewhere, fall
+    back to the dataset's other splits of the same kind.
+    """
+    directory = Path(directory)
+    prefix = "labels" if directory.name.startswith("labels") else "images"
+    candidates = [directory] + sorted(
+        d for d in directory.parent.glob(f"{prefix}*") if d.is_dir() and d != directory
+    )
+    for candidate_dir in candidates:
+        for suffix in IMAGE_SUFFIXES:
+            for candidate in (f"{stem}{suffix}", f"{stem}_{channel:04d}{suffix}"):
+                path = candidate_dir / candidate
+                if path.exists():
+                    return path
     raise FileNotFoundError(f"No file for {stem} in {directory}")
 
 
-def as_color_plane(image, color):
-    """A single-plane image put into one colour of an otherwise empty picture.
+def read_channel_planes(images, case_id, channel_planes):
+    """Compose separate greyscale files into the RGB planes used by the model.
 
-    A dataset that ships its stains as separate greyscale files would otherwise be drawn grey, while a
-    dataset storing the same signal as one channel of an RGB file is drawn in its colour -- the two look
-    like different modalities in the figures although the model was handed the same thing. Built in BGR
-    order, which is what `_to_rgb` expects of anything with three channels.
+    The returned array is BGR because the drawing path calls ``_to_rgb`` exactly once for every
+    source image, including ordinary OpenCV images.
     """
-    image = np.asarray(image)
-    if image.ndim != 2:
-        return image
-    planes = np.zeros((*image.shape, 3), dtype=image.dtype)
-    planes[..., {"blue": 0, "green": 1, "red": 2}[color]] = image
-    return planes
+    composed = None
+    for stored, rgb_plane in sorted(channel_planes.items()):
+        plane = np.asarray(read_image(_find(images, case_id, stored)))
+        if plane.ndim == 3:
+            plane = cv2.cvtColor(plane, cv2.COLOR_BGR2GRAY)
+        if composed is None:
+            composed = np.zeros((*plane.shape, 3), dtype=plane.dtype)
+        elif plane.shape != composed.shape[:2]:
+            raise ValueError(f"stain planes have different shapes for {case_id}")
+        composed[..., 2 - int(rgb_plane)] = plane
+    if composed is None:
+        raise ValueError("channel_planes cannot be empty")
+    return composed
 
 
 def select_cases(prediction_dir, count, metrics=None, rng=None):
@@ -205,11 +266,11 @@ def select_cases(prediction_dir, count, metrics=None, rng=None):
     and a flat sample over all cases would over-represent whatever the bulk of the distribution is.
     """
     if metrics and Path(metrics).exists():
-        with open(metrics, newline="") as f:
-            # A case whose Dice is nan -- no foreground in either the truth or the prediction -- has no
-            # place on the ranking; nan compares false against everything and would sort arbitrarily.
-            rows = [row for row in csv.DictReader(f)
-                    if row.get("dice") and not np.isnan(float(row["dice"]))]
+        # A case whose Dice is nan -- no foreground in either the truth or the prediction -- has no
+        # place on the ranking; nan compares false against everything and would sort arbitrarily. A
+        # Dice of 0.0 is a real score and stays.
+        rows = [row for row in read_case_metrics(Path(metrics))
+                if row.get("dice") is not None and not np.isnan(row["dice"])]
         rows.sort(key=lambda row: float(row["dice"]), reverse=True)
         if rows:
             edges = np.linspace(0, len(rows), min(count, len(rows)) + 1).round().astype(int)
@@ -222,17 +283,38 @@ def select_cases(prediction_dir, count, metrics=None, rng=None):
     return [(stem, None) for stem in stems[:count]]
 
 
-def crop_window(label, shape, size, rng):
-    """A `size` window centred on a random labelled pixel, or on the image centre when there is none."""
+def _window_overlap(a, b, size):
+    """Fraction of a `size` window at `a` that a window at `b` covers."""
+    down = size - abs(a[0] - b[0])
+    across = size - abs(a[1] - b[1])
+    return max(down, 0) * max(across, 0) / float(size * size)
+
+
+def crop_window(label, shape, size, rng, avoid=(), tolerance=0.25, attempts=32):
+    """A `size` window centred on a random labelled pixel, or on the image centre when there is none.
+
+    `avoid` names windows already taken from this image, as (top, left). A candidate is accepted once
+    it covers less than `tolerance` of every one of them; failing that the least overlapping of
+    `attempts` tries is returned, so an image whose annotation occupies one small region still yields
+    a window rather than raising.
+    """
     height, width = shape
     rows, cols = np.nonzero(label)
-    if len(rows):
-        index = rng.integers(len(rows))
-        center_y, center_x = int(rows[index]), int(cols[index])
-    else:
-        center_y, center_x = height // 2, width // 2
-    top = int(np.clip(center_y - size // 2, 0, max(0, height - size)))
-    left = int(np.clip(center_x - size // 2, 0, max(0, width - size)))
+    best = best_overlap = None
+    for _ in range(attempts if avoid else 1):
+        if len(rows):
+            index = rng.integers(len(rows))
+            center_y, center_x = int(rows[index]), int(cols[index])
+        else:
+            center_y, center_x = height // 2, width // 2
+        top = int(np.clip(center_y - size // 2, 0, max(0, height - size)))
+        left = int(np.clip(center_x - size // 2, 0, max(0, width - size)))
+        overlap = max((_window_overlap((top, left), taken, size) for taken in avoid), default=0.0)
+        if best is None or overlap < best_overlap:
+            best, best_overlap = (top, left), overlap
+        if overlap < tolerance:
+            break
+    top, left = best
     return slice(top, top + size), slice(left, left + size)
 
 
@@ -256,6 +338,8 @@ def _classes_in(labels, predictions, case_id):
     """The foreground values one case uses, for figures whose class set was not declared up front."""
     found = set()
     for directory in (labels, predictions):
+        if directory is None:
+            continue
         found |= set(np.unique(np.asarray(read_image(_find(directory, case_id)))).tolist())
     return sorted(value for value in found if value != 0)
 
@@ -268,11 +352,12 @@ MAX_FIGURE_INCHES = 24.0
 MAX_FIGURE_PIXELS = 2600
 
 
-def panel_aspect(images, case_id, crop, channel=0):
+def panel_aspect(images, case_id, crop, channel_planes=None):
     """Height / width of what one panel will show, read cheaply from the source image."""
     if crop:
         # `crop_window` cuts a square, so the panels are square whatever the slide looks like.
         return 1.0
+    channel = min(channel_planes) if channel_planes else 0
     path = _find(images, case_id, channel)
     if path is None:
         return 1.0
@@ -284,9 +369,25 @@ def panel_aspect(images, case_id, crop, channel=0):
     return float(np.clip(probe.shape[0] / probe.shape[1], 0.35, 3.0))
 
 
+def _to_panel(image, size):
+    """The image reduced to the pixels the panel actually has, and the size the masks reduce to.
+
+    Only the image is resampled here. The masks stay at the resolution they were drawn at until their
+    style has been applied to them -- see `coverage` -- because a skeleton or a contour found on a
+    shrunk mask describes a different shape. Their coverage is what gets resized, so a line survives
+    the reduction as a fainter line rather than being dropped.
+    """
+    height, width = np.asarray(image).shape[:2]
+    scale = min(size[0] / width, size[1] / height)
+    if scale >= 1.0:
+        return image, None
+    target = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+    return cv2.resize(np.asarray(image), target, interpolation=cv2.INTER_AREA), target
+
+
 def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, metrics=None,
            crop=None, seed=0, style=None, title=None, classes=None, class_names=None,
-           channel=0, channel_color=None):
+           channel_planes=None):
     """Write one figure of `rows` x `cols` samples, each drawn as `layout` prescribes."""
     if layout not in LAYOUTS:
         raise ValueError(f"Unknown layout: {layout} (expected one of {sorted(LAYOUTS)})")
@@ -303,10 +404,10 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
         classes = _classes_in(labels, predictions, cases[0][0])
     gt_colors, pred_colors = mask_colors(classes, style)
 
-    per_sample = len(LAYOUTS[layout])
+    per_sample = len(_slots(layout, labels is not None))
     grid_rows = -(-len(cases) // cols)
     cell_width = 3.2
-    cell_height = cell_width * panel_aspect(images, cases[0][0], crop, channel)
+    cell_height = cell_width * panel_aspect(images, cases[0][0], crop, channel_planes)
     width = cell_width * per_sample * cols
     height = cell_height * grid_rows
     scale = min(1.0, MAX_FIGURE_INCHES / max(width, height))
@@ -314,6 +415,9 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
     # Trade resolution for extent once a figure is large, so a tall grid stays a readable file rather
     # than a 30-megapixel one.
     dpi = min(140, MAX_FIGURE_PIXELS / max(width, height))
+    # What one panel is worth in pixels once the figure is sized and rasterised. Everything is
+    # reduced to this before it is drawn on.
+    panel_size = (max(1, int(cell_width * scale * dpi)), max(1, int(cell_height * scale * dpi)))
     figure, axes = plt.subplots(
         grid_rows, per_sample * cols, figsize=(width, height), squeeze=False
     )
@@ -321,17 +425,24 @@ def render(images, labels, predictions, output, layout="pair", rows=3, cols=2, m
         ax.axis("off")
 
     for index, (case_id, dice) in enumerate(cases):
-        image = read_image(_find(images, case_id, channel))
-        if channel_color:
-            image = as_color_plane(image, channel_color)
-        label = read_image(_find(labels, case_id))
+        image = (
+            read_channel_planes(images, case_id, channel_planes)
+            if channel_planes
+            else read_image(_find(images, case_id))
+        )
+        label = None if labels is None else read_image(_find(labels, case_id))
         prediction = read_image(_find(predictions, case_id))
         if crop:
-            window = crop_window(np.asarray(label), image.shape[:2], crop, rng)
-            image, label, prediction = image[window], label[window], prediction[window]
+            # Without a ground truth the prediction is what the crop is centred on; it is the only
+            # mask there is, and a window drawn blind would usually miss the lesion entirely.
+            window = crop_window(np.asarray(label if label is not None else prediction),
+                                 image.shape[:2], crop, rng)
+            image, prediction = image[window], prediction[window]
+            label = None if label is None else label[window]
+        image, target = _to_panel(image, panel_size)
         panels = _panels(
-            np.asarray(image), np.asarray(label), np.asarray(prediction),
-            layout, style, gt_colors, pred_colors,
+            np.asarray(image), None if label is None else np.asarray(label),
+            np.asarray(prediction), layout, style, gt_colors, pred_colors, target,
         )
         row, column = divmod(index, cols)
         base = per_sample * column

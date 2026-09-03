@@ -3,23 +3,83 @@ import csv
 import random
 import shutil
 from contextlib import nullcontext
+from dataclasses import replace
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
 from .config import ExperimentConfig
-from .data import CachedFeatureDataset, NnUNet2DDataset, collate_cases, num_classes
-from .losses import DiceCrossEntropyLoss, mean_foreground_dice
+from .data import (
+    CachedFeatureDataset,
+    NnUNet2DDataset,
+    collate_cases,
+    load_dataset_json,
+    num_classes,
+    stain_planes,
+    trained_planes,
+)
+from .losses import build_loss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader as _patch_loader
 
 
 def _raw_dataset(cfg, preprocess, subset):
     return NnUNet2DDataset(
-        cfg.raw_data_dir, cfg.train_dataset, "Tr", cfg.fold, subset, preprocess
+        cfg.raw_data_dir,
+        cfg.train_dataset,
+        "Tr",
+        cfg.fold,
+        subset,
+        preprocess,
+        channel_dropout=cfg.channel_dropout,
+        channel_dropout_p=cfg.channel_dropout_p,
+        # The stains the config narrows this run to, when it names any. `predict.py` already keeps
+        # evaluation to those planes; without the same restriction here a run declared GFAP-only
+        # would train on SMI as well and then be scored without it.
+        keep_planes=(
+            trained_planes(
+                load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"], cfg.stains
+            )
+            if cfg.stains
+            else None
+        ),
+        # Augment what the model learns from and nothing else: validation has to stay comparable
+        # across runs, and prediction never builds its datasets through here at all.
+        augment=cfg.augment if subset == "train" else None,
     )
+
+
+def _balanced_sampler(case_ids):
+    sources = []
+    for case_id in case_ids:
+        if "__" not in case_id:
+            raise ValueError(f"cannot balance source for case without '__': {case_id}")
+        sources.append(case_id.split("__", 1)[0])
+    counts = {source: sources.count(source) for source in set(sources)}
+    weights = torch.tensor([1.0 / counts[source] for source in sources], dtype=torch.double)
+    return WeightedRandomSampler(weights, num_samples=len(case_ids), replacement=True)
+
+
+def _validate_data_mode(cfg, encoder_trains=None):
+    declared_stains = stain_planes(
+        load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"]
+    )
+    if (cfg.patching is not None and not cfg.patching.respect_channels
+            and declared_stains is not None and len(declared_stains) > 1):
+        raise ValueError("patchwise loading is not supported for multi-stain datasets")
+    if cfg.patching is not None and cfg.channel_dropout:
+        raise ValueError("channel_dropout is not supported with patchwise loading")
+    # What rules perturbation out is caching, not a frozen trunk: features cached once, from the
+    # unaugmented image, would make any perturbation silently do nothing, since the cached loader
+    # never opens an image again. Patching is cut fresh every epoch and so never caches, and neither
+    # does a trainable encoder -- either one leaves the image there to perturb.
+    cached = encoder_trains is False and cfg.patching is None
+    if cached and cfg.channel_dropout:
+        raise ValueError("channel_dropout requires an uncached encoder")
+    if cached and cfg.augment is not None:
+        raise ValueError("augment requires an uncached encoder")
 
 
 def _cache_features(cfg, encoder, dataset, device):
@@ -54,10 +114,12 @@ def _cache_features(cfg, encoder, dataset, device):
 def _image_loader(cfg, preprocess, subset, shuffle=False):
     """Whole images straight to the model, for runs whose encoder trains and so cannot be cached."""
     dataset = _raw_dataset(cfg, preprocess, subset)
+    sampler = _balanced_sampler(dataset.ids) if shuffle and cfg.balance_sources else None
     return DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=shuffle,
+        shuffle=shuffle and sampler is None,
+        sampler=sampler,
         num_workers=cfg.num_workers,
         collate_fn=collate_cases,
         pin_memory=True,
@@ -68,10 +130,12 @@ def _image_loader(cfg, preprocess, subset, shuffle=False):
 
 def _loader(cfg, raw_dataset, shuffle):
     dataset = CachedFeatureDataset(cfg.feature_cache_dir, raw_dataset.ids)
+    sampler = _balanced_sampler(raw_dataset.ids) if shuffle and cfg.balance_sources else None
     return DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=shuffle,
+        shuffle=shuffle and sampler is None,
+        sampler=sampler,
         num_workers=cfg.num_workers,
         collate_fn=collate_cases,
         pin_memory=True,
@@ -151,10 +215,15 @@ def _layer_id(name: str, blocks: int) -> int:
     """Which layer a trunk parameter belongs to, for layer-wise learning-rate decay.
 
     0 is the embedding, 1..blocks are the transformer blocks and blocks+1 is everything after them --
-    the same partition ViT-Adapter's `LayerDecayOptimizerConstructor` uses.
+    the same partition ViT-Adapter's `LayerDecayOptimizerConstructor` uses. A ConvNeXt trunk is
+    partitioned the same way over its four stages: the stem is the embedding, and the downsampler in
+    front of a stage belongs with it.
     """
     if name.startswith("blocks."):
         return int(name.split(".")[1]) + 1
+    if name.startswith(("stages.", "downsample_layers.")):
+        stage = int(name.split(".")[1])
+        return stage if name.startswith("downsample_layers.") and stage == 0 else stage + 1
     embedding = ("patch_embed", "pos_embed", "cls_token", "storage_tokens", "mask_token", "rope_embed")
     return 0 if name.startswith(embedding) else blocks + 1
 
@@ -168,7 +237,7 @@ def _param_groups(model, cfg):
         return [p for p in model.parameters() if p.requires_grad]
     trunk = model.encoder.trunk
     trunk_params = {id(p) for p in trunk.parameters()}
-    blocks = len(trunk.blocks)
+    blocks = len(getattr(trunk, "blocks", None) or trunk.stages)
     groups = {}
     for name, param in trunk.named_parameters():
         if not param.requires_grad:
@@ -259,8 +328,13 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--resume", action="store_true",
                         help="continue this run from its own last.pt instead of training from scratch")
+    parser.add_argument("--fold", help="cross-validation fold to train, overriding the config's")
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
+    if args.fold is not None:
+        cfg = replace(cfg, fold=str(args.fold))
+
+    _validate_data_mode(cfg)
 
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -282,6 +356,7 @@ def main():
     # An encoder with parameters of its own -- the adapter -- produces different features every epoch, so
     # like the patchwise case there is nothing stable to cache.
     encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
+    _validate_data_mode(cfg, encoder_trains)
     if cfg.patching is not None or encoder_trains:
         # Nothing stable to cache -- patches are cut fresh every epoch, and a training adapter changes
         # the features it produces -- so the whole model is what gets stepped through.
@@ -318,7 +393,7 @@ def main():
     # Optimiser steps, not batches: accumulation folds several batches into one step.
     steps_per_epoch = -(-len(train_loader) // cfg.accumulation_steps)
     scheduler = _lr_scheduler(optimizer, cfg, steps_per_epoch)
-    loss_fn = DiceCrossEntropyLoss()
+    loss_fn = build_loss(cfg)
 
     cfg.run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.config, cfg.run_dir / "config.yaml")
@@ -389,12 +464,13 @@ def main():
                 # A trunk that trains is no longer recoverable from its pretrained checkpoint, so it is
                 # stored whole under the key the finetuning runs already use.
                 weights["encoder"] = model.encoder.trunk.state_dict()
-            if encoder_trains:
+            adapter = getattr(model.encoder, "adapter", None)
+            if adapter is not None:
                 # Only what trains: the frozen trunk is 300M parameters and is rebuilt from its own
                 # checkpoint. `encoder` is reserved for the finetuning runs, which store the whole trunk.
                 weights["adapter"] = {
                     key: value
-                    for key, value in model.encoder.adapter.state_dict().items()
+                    for key, value in adapter.state_dict().items()
                     if not key.startswith("backbone.")
                 }
             # `last.pt` carries the training state as well, so an interrupted run can be picked up; the

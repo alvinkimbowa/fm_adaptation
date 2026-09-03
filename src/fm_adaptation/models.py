@@ -142,6 +142,32 @@ DINOV3_VARIANTS = {
         "interaction_indexes": (2, 5, 8, 11),
         "deform_num_heads": 6,
     },
+    # ConvNeXt emits a stride-4/8/16/32 pyramid of its own, so the four widths take the place of the
+    # single token width a ViT reports. Sizes are DINOv3's own, from `dinov3.models.convnext`.
+    "convnextl": {
+        "kind": "convnext",
+        "checkpoint": "dinov3_convnextl_pretrain_lvd1689m.pth",
+        "feature_channels": (192, 384, 768, 1536),
+        "depths": (3, 3, 27, 3),
+    },
+    "convnextb": {
+        "kind": "convnext",
+        "checkpoint": "dinov3_convnextb_pretrain_lvd1689m.pth",
+        "feature_channels": (128, 256, 512, 1024),
+        "depths": (3, 3, 27, 3),
+    },
+    "convnexts": {
+        "kind": "convnext",
+        "checkpoint": "dinov3_convnexts_pretrain_lvd1689m.pth",
+        "feature_channels": (96, 192, 384, 768),
+        "depths": (3, 3, 27, 3),
+    },
+    "convnextt": {
+        "kind": "convnext",
+        "checkpoint": "dinov3_convnextt_pretrain_lvd1689m.pth",
+        "feature_channels": (96, 192, 384, 768),
+        "depths": (3, 3, 9, 3),
+    },
 }
 DEFAULT_DINOV3_VARIANT = "vitl16"
 
@@ -153,16 +179,21 @@ def _dinov3_variant(variant: str) -> dict:
 
 
 def _load_dinov3_backbone(checkpoint: str | None, variant: str = DEFAULT_DINOV3_VARIANT):
-    """A DINOv3 ViT with the local weights loaded; the size comes from `variant`."""
+    """A DINOv3 trunk with the local weights loaded; the architecture comes from `variant`."""
     root = _dinov3_root()
     import dinov3.hub.backbones as backbones
 
     spec = _dinov3_variant(variant)
     if checkpoint is None:
         checkpoint = root / "ckpts" / spec["checkpoint"]
-    # The hub loader derives a config flag from an 8-char hash in the filename, which local
-    # checkpoints do not carry; the LVD-1689M defaults are what `pretrained=False` already builds.
-    trunk = getattr(backbones, spec["hub"])(pretrained=False)
+    if spec.get("kind") == "convnext":
+        from dinov3.models.convnext import ConvNeXt
+
+        trunk = ConvNeXt(depths=list(spec["depths"]), dims=list(spec["feature_channels"]))
+    else:
+        # The hub loader derives a config flag from an 8-char hash in the filename, which local
+        # checkpoints do not carry; the LVD-1689M defaults are what `pretrained=False` already builds.
+        trunk = getattr(backbones, spec["hub"])(pretrained=False)
     state = torch.load(Path(checkpoint).resolve(), map_location="cpu", weights_only=True)
     missing, unexpected = trunk.load_state_dict(state, strict=False)
     if missing or unexpected:
@@ -268,6 +299,40 @@ class DINOv3AdapterEncoder(DINOv3Encoder):
         return tuple(features[key] for key in ("1", "2", "3", "4"))
 
 
+class DINOv3ConvNeXtEncoder(nn.Module):
+    """DINOv3's ConvNeXt trunk, emitting the strides 4/8/16/32 its four stages already produce.
+
+    Where a ViT needs the adapter to synthesise a feature pyramid out of one token grid, a ConvNeXt is
+    a pyramid, so every stage feeds the decoder directly and there is no adapter and no injector.
+    Runs at 512, the resolution ConvNeXt segments at.
+    """
+
+    name = "dinov3"
+    input_size = 512
+    mean = DINOv3Encoder.mean
+    std = DINOv3Encoder.std
+
+    def __init__(
+        self,
+        checkpoint: str | None,
+        trainable: bool = False,
+        variant: str = "convnextl",
+    ):
+        super().__init__()
+        _dinov3_root()
+        self.variant = variant
+        self.feature_channels = list(_dinov3_variant(variant)["feature_channels"])
+        self.trunk = _load_dinov3_backbone(checkpoint, variant)
+        self.trainable = trainable
+        self.trunk.requires_grad_(trainable)
+
+    preprocess = DINOv3Encoder.preprocess
+
+    def forward(self, images):
+        with torch.no_grad() if not self.trainable else nullcontext():
+            return self.trunk.get_intermediate_layers(images, n=[0, 1, 2, 3], reshape=True)
+
+
 class SAM3AdapterEncoder(PEEncoder):
     """Frozen SAM3 PE trunk behind the same ViT-Adapter, emitting strides 4/8/16/32.
 
@@ -320,12 +385,15 @@ class UperNetDecoder(nn.Module):
     run is identical to a probe run apart from the decoder itself.
     """
 
-    def __init__(self, in_channels: int, num_classes: int):
+    def __init__(self, in_channels, num_classes: int):
         super().__init__()
         from mmseg.models.decode_heads import UPerHead
 
+        # One width per scale. The adapter emits the trunk's token width four times over; a ConvNeXt
+        # widens as it goes, so it declares the four its stages actually have.
+        widths = list(in_channels) if isinstance(in_channels, (list, tuple)) else [in_channels] * 4
         self.head = UPerHead(
-            in_channels=[in_channels] * 4,
+            in_channels=widths,
             in_index=[0, 1, 2, 3],
             pool_scales=(1, 2, 3, 6),
             channels=512,
@@ -382,13 +450,43 @@ def build_model(
         raise ValueError(f"model.variant is only meaningful for dinov3, not {model_name}")
     extra = {"variant": variant} if model_name == "dinov3" else {}
     if probe_name == "upernet":
-        # UperNet consumes a feature pyramid, which only the adapter produces.
-        adapters = {"dinov3": DINOv3AdapterEncoder, "sam3": SAM3AdapterEncoder}
-        encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
+        # UperNet consumes a feature pyramid. A ConvNeXt trunk is one already; a ViT needs the adapter
+        # to build one.
+        if model_name == "dinov3" and _dinov3_variant(variant).get("kind") == "convnext":
+            if injector:
+                raise ValueError("model.injector belongs to the ViT-Adapter, which convnext does not use")
+            encoder = DINOv3ConvNeXtEncoder(checkpoint, trainable=train_encoder, variant=variant)
+        else:
+            adapters = {"dinov3": DINOv3AdapterEncoder, "sam3": SAM3AdapterEncoder}
+            encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
     probe = probes[probe_name](encoder.feature_channels, classes)
     return SegmentationModel(encoder, probe)
+
+
+def load_trained_model(cfg, checkpoint: str, device, classes: int):
+    """The model a finished run left behind, built from its config and loaded from its checkpoint."""
+    model = build_model(
+        cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
+        train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
+    )
+    name = "final" if cfg.fold == "all" else checkpoint
+    path = cfg.run_dir / f"{name}.pt"
+    # `last.pt` also carries optimiser and RNG state, which the safe loader cannot unpickle.
+    state = torch.load(path, map_location="cpu", weights_only=name != "last")
+    model.probe.load_state_dict(state["probe"])
+    if "encoder" in state:
+        model.encoder.trunk.load_state_dict(state["encoder"])
+    if "adapter" in state:
+        # Trained adapter weights only; the frozen trunk came from the DINOv3 checkpoint at build time.
+        missing, unexpected = model.encoder.adapter.load_state_dict(state["adapter"], strict=False)
+        missing = [key for key in missing if not key.startswith("backbone.")]
+        if missing or unexpected:
+            raise RuntimeError(
+                f"adapter checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}"
+            )
+    return model.to(device).eval()
 
 
 def restore_prediction(prediction: torch.Tensor, geometry: dict) -> np.ndarray:

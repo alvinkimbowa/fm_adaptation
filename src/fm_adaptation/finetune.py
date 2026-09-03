@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from .config import ExperimentConfig
 from .data import NnUNet2DDataset, collate_cases, num_classes
-from .losses import DiceCrossEntropyLoss, mean_foreground_dice
+from .losses import build_loss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader
 
@@ -108,7 +108,7 @@ def main():
         foreach=False,
     )
     accumulation_steps = int(finetuning.get("accumulation_steps", 1))
-    loss_fn = DiceCrossEntropyLoss()
+    loss_fn = build_loss(cfg)
 
     cfg.run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.config, cfg.run_dir / "config.yaml")

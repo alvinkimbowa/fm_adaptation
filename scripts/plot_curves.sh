@@ -11,28 +11,28 @@ datasets=(
     # Dataset084_KidneyUS_Philips
     # Dataset086_MMOTU_2D
     # Dataset090_Echo_EchoCP
-    Dataset204_lesion_czi_B
-    Dataset206_lesion_120_czi_B
-    # Dataset203_neurite_2px_scaleaug
-    # Dataset205_neurite_2px_scaleaug_red
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset209_lesion_MYE_smi_gfap
+    # Dataset213_lesion_KE_smi_gfap
+    # Dataset217_lesion_MY_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
 )
 experiments=(
-    linear
-    linear_finetune
-    # linear_finetune_wd*    # every weight-decay sweep of the linear finetune
+    # linear
+    # linear_finetune
     # nonlinear
-    # nonlinear_finetune
-    upernet
-    upernet_inj
-    upernet_ours
-    upernet_inj_ours
+    # upernet
+    # upernet_inj
+    # upernet_inj_ft_balanced_ours
+    # upernet_inj_ft_vitb_ours
     upernet_inj_ft_ours
-    upernet_inj_ft_poly_ours
-    upernet_inj_ft_init_ours
-    upernet_inj_ft_vitb_ours
-    upernet_inj_ft_vitb_poly_ours
-    upernet_inj_ft_vits_ours
-    upernet_inj_ft_vits_poly_ours
+    upernet_inj_ft_p512_ours
+    convnext_upernet_p512_ours
+    convnext_upernet_ft_p512_ours
     # m2f   # Mask2Former
 )
 

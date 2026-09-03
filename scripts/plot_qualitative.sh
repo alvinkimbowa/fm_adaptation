@@ -1,44 +1,94 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Each run's own qualitative figure, written beside its predictions as
+# models/<model>/<trained on>/<run>/fold_<n>/<split>/<evaluation set>/qualitative.png.
+# Comparing runs against each other is scripts/plot_comparison_qualitative.sh, which writes to
+# results/qualitative/ -- one script per question, rather than one script with a mode switch.
+
 export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 export PYTHONPATH="${PYTHONPATH:-}:src"
 
-comparison_models=(
+# Which runs to draw. The four lists below name the parts a run directory is built from --
+# <model>/<train dataset>/<configuration>/fold_<n> -- so comment a line out to stop redrawing the
+# figures that carry it. An empty list keeps every value that part can take. Entries match exactly,
+# as a glob or as a `_suffix` tag, and a dataset by its number alone.
+models=(
     dinov3
-    sam3
+    # sam3
+    nnunet
 )
 
-datasets=(
-    # Dataset080_BUSBRA_GE_Logiq_5
-    # Dataset082_BUSBRA_Toshiba_Aplio_300
-    # Dataset083_BUSBRA_U_Systems
-    # Dataset084_KidneyUS_Philips
-    # Dataset086_MMOTU_2D
-    # Dataset090_Echo_EchoCP
-    Dataset204_lesion_czi_B
-    Dataset206_lesion_120_czi_B
-    # Dataset203_neurite_2px_scaleaug
-    # Dataset205_neurite_2px_scaleaug_red
+# Result trees to draw from. An external trainer lays its runs out the same way -- <model>/<train
+# dataset>/<configuration>/fold_<n> -- so naming its tree here is enough; `models` then picks it up
+# like any other. Runs with no config.yaml of their own read their datasets from raw_data_dir.
+results_dirs=(
+    models
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
-experiments=(
+raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
+
+train_datasets=(
+    # Dataset105_lesion_eric_gfap_resized
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset209_lesion_MYE_smi_gfap
+    # Dataset213_lesion_KE_smi_gfap
+    # Dataset217_lesion_MY_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
+)
+
+# Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
+# never saw costs nothing.
+test_datasets=(
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset210_lesion_interrater_MY_smi_gfap
+    # Dataset211_lesion_paul_widefield_smi_gfap
+    # Dataset212_lesion_katie_dorsal_column_smi_gfap
+    # Dataset214_lesion_mohammad_smi_gfap
+    # Dataset215_lesion_yvonne_smi_gfap
+    # Dataset218_lesion_eric_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
+    # Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset303_neurite_yvonne_in_vitro_smi
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
+)
+
+configs=(
     # linear
+    # nonlinear
     # upernet
     # upernet_inj
-    # upernet_ours
-    # upernet_inj_ours
-    upernet_inj_ft_ours
-    # upernet_inj_ft_poly_ours
-    upernet_inj_ft_init_ours
-    # upernet_inj_ft_vitb_ours
-    # upernet_inj_ft_vits_ours
-    # upernet_inj_ft_vitb_poly_ours
-    # upernet_inj_ft_vits_poly_ours
+    # upernet_inj_ft_ours
+    # upernet_inj_ft_p512_ours
+    # upernet_inj_ft_balanced_aug_gfap_ours
     # m2f
-    # nonlinear
-    # linear_finetune
-    # nonlinear_finetune
+    upernet_inj_ft_p512_ours
+    convnext_upernet_p512_ours
+    convnext_upernet_ft_p512_ours
+    # convnext_upernet_ft_init_p512_ours
+    convnext_upernet_ft_aug_p512_ours
+    convnextb_upernet_ft_aug_p512_ours
+    convnexts_upernet_ft_aug_p512_ours
+    convnextt_upernet_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_red_ours
 )
+
+folds=(
+    0
+)
+
+
 splits=(
     validation
     test
@@ -54,12 +104,14 @@ cols=4          # samples per row
 # masks    : image, gt mask, pred mask                (3 panels)
 layout=masks
 
+# How a mask is painted, in every layout -- a layout only arranges the panels and decides
+# whether a mask sits on black or over the image.
 # contour | overlay | centerline
-gt_style=contour
-pred_style=overlay
+gt_style=${gt_style:-contour}
+pred_style=${pred_style:-contour}
 # red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
-gt_color=white
-pred_color=red
+gt_color=${gt_color:-white}
+pred_color=${pred_color:-yellow}
 gt_width=1
 pred_width=2
 alpha=0.5
@@ -67,31 +119,20 @@ alpha=0.5
 crop=auto       # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 seed=0
 
-# The comparison figure: the same cases drawn across every selected run, one column per report row,
-# written to results/qualitative/<trained-on>/. It reuses everything above -- the datasets, the runs,
-# the styles, the layout -- so there is one place to change what gets drawn. `comparison_rows` is the
-# number of cases, since a comparison row is a case rather than a grid cell.
-comparison_rows=8
-# Cases side by side on one row, each with its own image / gt / model columns. `comparison_rows` is
-# still the number of cases, so 5 cases at 2 per row is 3 rows, the last one half empty.
-comparison_per_row=2
-comparison_dir=results/qualitative
-# Set to 1 to skip the per-run figures and redraw only the comparisons -- the quick loop when tuning
-# how a comparison looks, since the per-run figures are the slow half.
-comparison_only=1
-# -1 draws a new sample of cases every run, overwriting the previous figure. Set a number to pin one.
-comparison_seed=-1
-
 # Running this script by hand always redraws, so edits to the options above take effect. The automatic
 # refresh in run_report.sh sets skip_unchanged=1 to leave figures whose results have not moved.
 args=()
 [[ "${skip_unchanged:-0}" -eq 1 ]] && args+=(--skip-unchanged)
 
-if [[ "$comparison_only" -ne 1 ]]; then
 python -m fm_adaptation.plot_qualitative \
     "${args[@]}" \
-    --datasets "${datasets[@]}" \
-    --experiments "${experiments[@]}" \
+    --results-dir "${results_dirs[@]/#\~/$HOME}" \
+    --raw-data-dir "${raw_data_dir/#\~/$HOME}" \
+    ${models[@]+--models "${models[@]}"} \
+    ${train_datasets[@]+--train-datasets "${train_datasets[@]}"} \
+    ${configs[@]+--configs "${configs[@]}"} \
+    ${folds[@]+--folds "${folds[@]}"} \
+    ${test_datasets[@]+--test-datasets "${test_datasets[@]}"} \
     --splits "${splits[@]}" \
     --rows "$rows" \
     --cols "$cols" \
@@ -105,29 +146,3 @@ python -m fm_adaptation.plot_qualitative \
     --alpha "$alpha" \
     --crop "$crop" \
     --seed "$seed"
-fi
-
-# The same runs again on shared cases: one figure per (trained-on, split, tested-on), a row per case
-# and a column per report row. Selected exactly as the per-run figures are -- every evaluation set the
-# chosen runs have predictions for.
-compare_args=()
-[[ ${#comparison_models[@]} -gt 0 ]] && compare_args+=(--models "${comparison_models[@]}")
-python -m fm_adaptation.compare_qualitative \
-    "${args[@]}" \
-    ${compare_args[@]+"${compare_args[@]}"} \
-    --datasets "${datasets[@]}" \
-    --experiments "${experiments[@]}" \
-    --splits "${splits[@]}" \
-    --rows "$comparison_rows" \
-    --per-row "$comparison_per_row" \
-    --output-dir "$comparison_dir" \
-    --layout "$layout" \
-    --gt-style "$gt_style" \
-    --pred-style "$pred_style" \
-    --gt-color "$gt_color" \
-    --pred-color "$pred_color" \
-    --gt-width "$gt_width" \
-    --pred-width "$pred_width" \
-    --alpha "$alpha" \
-    --crop "$crop" \
-    --seed "$comparison_seed"

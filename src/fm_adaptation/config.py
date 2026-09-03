@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from types import SimpleNamespace
+
+from .datasets import resolve
 
 
 @dataclass(frozen=True)
@@ -14,10 +17,27 @@ class PatchConfig:
     roi_threshold: int = 0
     overlap: float = 0.5
     ignore_masked_out: bool = False
+    # Compose known stain files into their declared RGB planes instead of replicating _0000.
+    respect_channels: bool = False
 
     @property
     def stride(self) -> int:
         return max(1, round(self.patch_size * (1.0 - self.overlap)))
+
+
+@dataclass(frozen=True)
+class AugmentConfig:
+    """Geometric augmentation of the training images: flips and a small rotation."""
+
+    hflip: bool = True
+    vflip: bool = True
+    # Degrees; each case is rotated by an angle drawn uniformly from [-rotation, +rotation].
+    rotation: float = 0.0
+    flip_p: float = 0.5
+    # Scale drawn uniformly from [zoom_min, zoom_max]; 1.0/1.0 is no zoom. A zoom that would carry
+    # part of the annotation off the canvas is reduced until it fits -- see `_augment`.
+    zoom_min: float = 1.0
+    zoom_max: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -27,6 +47,7 @@ class ExperimentConfig:
     train_dataset: str
     test_datasets: tuple[str, ...]
     test_split: str
+    test_splits: dict[str, str]
     fold: str
     model_name: str
     checkpoint: str | None
@@ -53,9 +74,18 @@ class ExperimentConfig:
     lr_power: float
     accumulation_steps: int
     weight_decay: float
+    skeleton_recall_weight: float
+    skeleton_tube: bool
+    distance_weight_tau: float
+    distance_weight_floor: float
     seed: int
     device: str
     patching: "PatchConfig | None"
+    augment: "AugmentConfig | None"
+    stains: tuple[str, ...]
+    channel_dropout: tuple[str, ...]
+    channel_dropout_p: float
+    balance_sources: bool
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -65,12 +95,24 @@ class ExperimentConfig:
         model = cfg["model"]
         training = cfg["training"]
         patching = cfg.get("patching") or {}
+        augment = data.get("augment") or {}
+        channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
+        if not 0.0 <= channel_dropout_p <= 1.0:
+            raise ValueError("data.channel_dropout_p must be between 0 and 1")
+        # Datasets may be given by number alone. Naming them the way the raw data directory does, once
+        # and here, is what lets every path built from a config -- the run directory, the caches, the
+        # prediction and metrics directories -- read the same as the data it was made from.
+        raw_data_dir = Path(data["raw_data_dir"])
         return cls(
-            raw_data_dir=Path(data["raw_data_dir"]),
+            raw_data_dir=raw_data_dir,
             results_dir=Path(data.get("results_dir", "models")),
-            train_dataset=str(data["train_dataset"]),
-            test_datasets=tuple(str(x) for x in data.get("test_datasets", [])),
+            train_dataset=resolve(raw_data_dir, data["train_dataset"]),
+            test_datasets=tuple(resolve(raw_data_dir, x) for x in data.get("test_datasets", [])),
             test_split=str(data.get("test_split", "Tr")),
+            # `test_split` is the default for every evaluation set; a set needing a different
+            # one names its own here.
+            test_splits={resolve(raw_data_dir, name): str(split)
+                         for name, split in (data.get("test_splits") or {}).items()},
             fold=str(data["fold"]),
             model_name=str(model["name"]),
             checkpoint=model.get("checkpoint"),
@@ -117,8 +159,34 @@ class ExperimentConfig:
             lr_power=float(training.get("lr_power", 1.0)),
             accumulation_steps=int(training.get("accumulation_steps", 1)),
             weight_decay=float(training.get("weight_decay", 0.0)),
+            skeleton_recall_weight=float(training.get("skeleton_recall_weight", 0.0)),
+            skeleton_tube=bool(training.get("skeleton_tube", True)),
+            # Weights the cross entropy by distance to the nearest annotated pixel, over a band
+            # `distance_weight_tau` pixels wide; 0 weights every pixel alike.
+            distance_weight_tau=float(training.get("distance_weight_tau", 0.0)),
+            distance_weight_floor=float(training.get("distance_weight_floor", 0.1)),
             seed=int(training.get("seed", 0)),
             device=str(training.get("device", "cuda")),
+            # The stains the training images actually carry, where that is narrower than what the
+            # dataset declares; empty means take the declaration at its word.
+            stains=tuple(str(x).upper() for x in data.get("stains", [])),
+            channel_dropout=tuple(str(x).upper() for x in data.get("channel_dropout", [])),
+            channel_dropout_p=channel_dropout_p,
+            balance_sources=bool(data.get("balance_sources", False)),
+            # Absent means no augmentation, so every config written before this existed trains
+            # exactly as it did.
+            augment=(
+                AugmentConfig(
+                    hflip=bool(augment.get("hflip", True)),
+                    vflip=bool(augment.get("vflip", True)),
+                    rotation=float(augment.get("rotation", 0.0)),
+                    flip_p=float(augment.get("flip_p", 0.5)),
+                    zoom_min=float(augment.get("zoom_min", 1.0)),
+                    zoom_max=float(augment.get("zoom_max", 1.0)),
+                )
+                if augment
+                else None
+            ),
             patching=(
                 PatchConfig(
                     patch_size=int(patching.get("patch_size", 1008)),
@@ -127,6 +195,7 @@ class ExperimentConfig:
                     roi_threshold=int(patching.get("roi_threshold", 0)),
                     overlap=float(patching.get("overlap", 0.5)),
                     ignore_masked_out=bool(patching.get("ignore_masked_out", False)),
+                    respect_channels=bool(patching.get("respect_channels", False)),
                 )
                 if patching.get("enabled")
                 else None
@@ -149,3 +218,33 @@ class ExperimentConfig:
 
     def patch_cache_dir(self, dataset_name: str) -> Path:
         return self.results_dir / ".patch_cache" / dataset_name
+
+
+# What a figure needs to know about a run, for runs that ship no config of their own. nnU-Net and the
+# other external trainers write `<model>/<train dataset>/<configuration>/fold_<n>` the same way this
+# project does, but keep their own plans files instead of a config.yaml, so everything here is read
+# off the directory and the raw data directory the caller names.
+PLAIN_RUN_FIELDS = ("raw_data_dir", "train_dataset", "test_split", "test_splits", "patching",
+                    "stains")
+
+
+def describe_run_dir(fold_dir, raw_data_dir=None):
+    """The run at `fold_dir`, from its `config.yaml` where it has one.
+
+    Without a config, the training set is the directory it sits under and `raw_data_dir` says where
+    the datasets live. `test_split` is left empty: the caller works the split out from the cases that
+    were predicted, which is the only thing that answers it when nothing was written down.
+    """
+    config_path = Path(fold_dir) / "config.yaml"
+    if config_path.is_file():
+        return ExperimentConfig.from_yaml(config_path)
+    if raw_data_dir is None:
+        return None
+    return SimpleNamespace(
+        raw_data_dir=Path(raw_data_dir),
+        train_dataset=Path(fold_dir).parents[1].name,
+        test_split="",
+        test_splits={},
+        patching=None,
+        stains=(),
+    )

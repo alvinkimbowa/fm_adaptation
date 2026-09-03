@@ -1,0 +1,16 @@
+# Runtime dependencies. The encoders (SAM3, DINOv3) and the mmsegmentation decode heads bring their
+# own pinned stacks and are not listed here -- see README.
+torch
+torchvision
+numpy
+opencv-python
+PyYAML
+scipy
+tqdm
+matplotlib
+pandas
+monai
+Pillow
+
+# Development only.
+pytest

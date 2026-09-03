@@ -40,3 +40,39 @@ def write_metrics(rows: list[CaseMetrics], path: Path):
         writer.writerow(["case_id", "dice", "masd"])
         for row in rows:
             writer.writerow([row.case_id, row.dice, row.masd])
+
+
+METRIC_FIELDS = ("dice", "cldice", "hd95", "masd")
+
+
+def read_case_metrics(path: Path) -> list[dict]:
+    """Per-case rows from a metrics CSV, whichever tool wrote it, with the numbers made comparable.
+
+    `fm_adaptation.compute_metrics` writes `image_id,dice,hd95,masd` with a trailing `MEAN` row; the
+    older files predate it and are `case_id,dice,masd` with no aggregate, as are the baseline CSVs
+    read from elsewhere. The aggregate has to go: every consumer here treats a row as one case, so
+    leaving it in counts the mean as an extra case and drags the spread of the distribution towards
+    it.
+
+    A case whose ground truth has no foreground -- two of the widefield slides -- has no dice to
+    report, and a surface distance to an empty set is not a large distance, it is no distance at all.
+    MONAI says that with a blank dice and an infinite distance; both become NaN here, so such a case
+    is counted as undefined rather than silently dragging a column's mean to infinity.
+    """
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    out = []
+    for row in rows:
+        case_id = row.get("image_id") or row.get("case_id")
+        if case_id == "MEAN":
+            continue
+        values = {}
+        for field in METRIC_FIELDS:
+            if field not in row:
+                continue
+            raw = (row[field] or "").strip()
+            values[field] = float(raw) if raw else float("nan")
+        if np.isnan(values.get("dice", 0.0)):
+            values = dict.fromkeys(values, float("nan"))
+        out.append({**row, **values, "case_id": case_id})
+    return out

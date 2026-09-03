@@ -10,7 +10,10 @@ checkpoint=final
 overwrite=false
 gpu_id=${gpu_id:-0}
 
-export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
+# The DINOv3 ViT-Adapter encoders build through mmsegmentation, so those configs run from the
+# mmseg venv: `venv=.venv-mm bash scripts/run_ft_exp.sh <config>`.
+venv=${venv:-~/UltrAi/projects/sam3/.venv}
+export PATH="$(eval echo "$venv")/bin:$PATH"
 export PYTHONPATH="${PYTHONPATH:-}:src"
 export CUDA_VISIBLE_DEVICES="$gpu_id"
 
