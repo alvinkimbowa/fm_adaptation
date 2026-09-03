@@ -9,11 +9,8 @@ results_dir=models
 # as a `_suffix` tag, and a dataset by its number alone.
 models=(
     nnUNet
-    # XTinyUNet     # its own model, so `nnU-Net` above does not select it
-    # MonoUNet-t
-    # MonoUNet-B
-    # MonoUNet-L
-    monounet*     # all three MonoUNets
+    XTinyUNet     # its own model, so `nnU-Net` above does not select it
+    MonoUNet
     sam3
     dinov3
 )
@@ -98,6 +95,11 @@ nnunet_dirs=(
     ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
 nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
+# MonoUNet keeps one architecture per directory and no configuration level, so each directory named
+# here is one model, taking its row label from the architecture the directory is called after.
+monounet_dirs=(
+    ../monounet/models/MonoUNetE123V2GatedDA
+)
 export PYTHONPATH="${PYTHONPATH:-}:src"
 
 # The params columns come from models/parameter_counts.json, which nothing else writes, so a new run
@@ -108,7 +110,8 @@ if [[ "${params:-1}" -eq 1 ]]; then
     CUDA_VISIBLE_DEVICES="${params_gpu:-0}" .venv-mm/bin/python -m fm_adaptation.count_params \
         --only-missing \
         --results-dir "$results_dir" \
-        --nnunet-results-dir "${nnunet_dirs[@]}"
+        --nnunet-results-dir "${nnunet_dirs[@]}" \
+        --monounet-results-dir "${monounet_dirs[@]}"
 fi
 
 export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
@@ -125,5 +128,6 @@ python -m fm_adaptation.report \
     --results-dir "$results_dir" \
     --group-by-train-dataset "$group_by_train_dataset" \
     --nnunet-results-dir "${nnunet_dirs[@]}" \
+    --monounet-results-dir "${monounet_dirs[@]}" \
     --nnunet-raw-data-dir "$nnunet_raw_data_dir" \
     ${report_args[@]+"${report_args[@]}"}

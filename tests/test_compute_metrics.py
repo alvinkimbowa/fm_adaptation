@@ -142,7 +142,7 @@ class NnunetColumnTests(unittest.TestCase):
             args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
             return [
                 (path.parents[4].name, path.parent.name)
-                for path, _ in _nnunet_columns(self.results, self.root, args)
+                for path, _, _ in _nnunet_columns(self.results, self.root, args)
             ]
 
         def test_every_column_is_found_without_a_selection(self):
@@ -176,6 +176,84 @@ class NnunetColumnTests(unittest.TestCase):
             metrics = self.root / "metrics.csv"
             metrics.write_text("image_id,dice,hd95,masd\n")
             self.assertTrue(_is_current(metrics, predictions))
+
+
+@needs_scoring
+class MonounetColumnTests(unittest.TestCase):
+        """A MonoUNet architecture directory, which carries no config and no configuration level."""
+
+        def setUp(self):
+            self.tmp = tempfile.TemporaryDirectory()
+            self.root = Path(self.tmp.name)
+            self.results = self.root / "MonoUNetE123V2GatedDA"
+            for trained_on, tested_on in (
+                ("Dataset070_Clarius_L15", "Dataset070_Clarius_L15"),
+                ("Dataset070_Clarius_L15", "Dataset072_GE_LQP9"),
+                ("Dataset073_GE_LE", "Dataset072_GE_LQP9"),
+            ):
+                (self.results / trained_on / "fold_0" / "test" / tested_on / "preds").mkdir(
+                    parents=True
+                )
+
+        def tearDown(self):
+            self.tmp.cleanup()
+
+        def _select(self, **kwargs):
+            from argparse import Namespace
+            from fm_adaptation.compute_metrics import _monounet_columns
+
+            args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
+            return [
+                (path.parents[3].name, path.parent.name)
+                for path, _, _ in _monounet_columns(self.results, self.root, args)
+            ]
+
+        def test_every_column_is_found_without_a_selection(self):
+            self.assertEqual(len(self._select()), 3)
+
+        def test_the_selection_narrows_by_training_and_evaluation_set(self):
+            self.assertEqual(
+                self._select(datasets=["070"], tested_on=["072"]),
+                [("Dataset070_Clarius_L15", "Dataset072_GE_LQP9")],
+            )
+
+        def test_a_column_is_read_into_the_label_space(self):
+            """Every MonoUNet column carries the reader; ours and nnU-Net's carry none."""
+            from fm_adaptation.compute_metrics import binary_mask_in_label_space
+
+            readers = {prepare for _, _, prepare in self._columns()}
+            self.assertEqual(readers, {binary_mask_in_label_space})
+
+        def _columns(self):
+            from argparse import Namespace
+            from fm_adaptation.compute_metrics import _monounet_columns
+
+            args = Namespace(datasets=[], folds=[], tested_on=[])
+            return _monounet_columns(self.results, self.root, args)
+
+
+@needs_scoring
+class MaskNormalisationTests(unittest.TestCase):
+        """A mask saved on the network's own canvas, as 0/255, measured against a native label."""
+
+        def test_a_canvas_sized_mask_is_thresholded_and_resampled(self):
+            from fm_adaptation.compute_metrics import binary_mask_in_label_space
+
+            prediction = np.zeros((4, 4), dtype=np.uint8)
+            prediction[1:3, 1:3] = 255
+            label = np.zeros((8, 8), dtype=np.uint8)
+            label[2:6, 2:6] = 1
+            mask = binary_mask_in_label_space(prediction, label)
+            self.assertEqual(mask.shape, label.shape)
+            self.assertEqual(sorted(np.unique(mask)), [0, 1])
+            np.testing.assert_array_equal(mask, label)
+
+        def test_a_mask_already_in_the_label_space_is_only_thresholded(self):
+            from fm_adaptation.compute_metrics import binary_mask_in_label_space
+
+            prediction = np.array([[0, 255], [255, 0]], dtype=np.uint8)
+            label = np.array([[0, 1], [1, 0]], dtype=np.uint8)
+            np.testing.assert_array_equal(binary_mask_in_label_space(prediction, label), label)
 
 
 if __name__ == "__main__":

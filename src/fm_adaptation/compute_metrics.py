@@ -74,6 +74,22 @@ def read_mask(path) -> np.ndarray:
     return array if np.issubdtype(array.dtype, np.integer) else array.astype(np.int64)
 
 
+def binary_mask_in_label_space(prediction, target):
+    """A two-class mask saved on the network's own canvas, put back where the label lives.
+
+    Some networks save their prediction at the size they ran at and as 0/255 rather than as class
+    indices, while metrics are measured against the label at the resolution it was drawn at. The mask
+    is thresholded back to indices and resampled with nearest -- a label map has no meaningful
+    interpolation -- so the comparison happens in the label's space. Foreground is every non-zero
+    value, so this belongs to two-class predictions only.
+    """
+    mask = (np.asarray(prediction) > 0).astype(np.uint8)
+    if mask.shape == target.shape:
+        return mask
+    height, width = target.shape
+    return np.array(Image.fromarray(mask).resize((width, height), Image.NEAREST))
+
+
 def index_by_stem(directory: Path):
     """Case id -> path for every mask in `directory`."""
     return {
@@ -215,7 +231,7 @@ def _columns(results_dir: Path, args):
             continue
         for prediction_dir in sorted(fold_dir.glob("*/*/predictions")):
             if matches(prediction_dir.parents[1].name, args.splits):
-                selected.append((prediction_dir, raw_data_dir))
+                selected.append((prediction_dir, raw_data_dir, None))
     return selected
 
 
@@ -235,7 +251,28 @@ def _nnunet_columns(results_dir: Path, raw_data_dir: Path, args):
             and matches(fold, args.folds)
             and matches(prediction_dir.parent.name, args.tested_on)
         ):
-            selected.append((prediction_dir, raw_data_dir))
+            selected.append((prediction_dir, raw_data_dir, None))
+    return selected
+
+
+def _monounet_columns(results_dir: Path, raw_data_dir: Path, args):
+    """Every (predictions dir, raw data dir, reader) a MonoUNet architecture directory holds.
+
+    Same arrangement as the nnU-Net trees -- trained elsewhere, no config of ours, selected from the
+    layout `<architecture>/<trained on>/fold_N/test/<tested on>/preds` -- except that the
+    architecture, not a trainer, is the directory above. The predictions are 0/255 masks on the
+    network's square input canvas, so they are read back into the label's space before measuring.
+    """
+    selected = []
+    for prediction_dir in sorted(results_dir.glob("Dataset*/fold_*/test/Dataset*/preds")):
+        trained_on = prediction_dir.parents[3].name
+        fold = prediction_dir.parents[2].name.removeprefix("fold_")
+        if (
+            matches(trained_on, args.datasets)
+            and matches(fold, args.folds)
+            and matches(prediction_dir.parent.name, args.tested_on)
+        ):
+            selected.append((prediction_dir, raw_data_dir, binary_mask_in_label_space))
     return selected
 
 
@@ -252,8 +289,12 @@ def _is_current(metrics_path: Path, prediction_dir: Path):
     )
 
 
-def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=False):
-    """Write `metrics.csv` beside `prediction_dir`; returns a one-line report of what happened."""
+def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=False, prepare=None):
+    """Write `metrics.csv` beside `prediction_dir`; returns a one-line report of what happened.
+
+    `prepare(prediction, label)` puts a prediction into the label's space for sources that do not
+    already write one there; without it a prediction is measured exactly as it was saved.
+    """
     output_dir = prediction_dir.parent
     dataset_dir = resolve_dataset_dir(raw_data_dir, output_dir.name)
     metrics_path = output_dir / "metrics.csv"
@@ -277,14 +318,15 @@ def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=F
 
     missing = len(predictions) - len(case_ids)
     classes = _num_classes(dataset_dir)
-    rows = [
-        CaseMetrics(case_id, *compute_case_metrics(
-            read_mask(predictions[case_id]), read_mask(ground_truth[case_id]), classes
-        ))
-        # Skeletonising a whole slide takes seconds, so a column of them is long enough that a
-        # silent run is indistinguishable from a stalled one.
-        for case_id in tqdm(case_ids, desc=label, unit="case", leave=False)
-    ]
+    rows = []
+    # Skeletonising a whole slide takes seconds, so a column of them is long enough that a silent run
+    # is indistinguishable from a stalled one.
+    for case_id in tqdm(case_ids, desc=label, unit="case", leave=False):
+        truth = read_mask(ground_truth[case_id])
+        prediction = read_mask(predictions[case_id])
+        if prepare is not None:
+            prediction = prepare(prediction, truth)
+        rows.append(CaseMetrics(case_id, *compute_case_metrics(prediction, truth, classes)))
     write_csv(rows, metrics_path)
     return f"{label}: measured {len(rows)}" + (f" ({missing} without a label)" if missing else "")
 
@@ -298,12 +340,19 @@ def main():
     parser.add_argument("--experiments", nargs="*", default=[], help="run names, globs or `_suffix`")
     parser.add_argument("--folds", nargs="*", default=[])
     parser.add_argument("--splits", nargs="*", default=[], help="validation, test; empty keeps both")
-    parser.add_argument("--tested-on", nargs="*", default=[], help="evaluation sets, nnU-Net only")
+    parser.add_argument(
+        "--tested-on", nargs="*", default=[],
+        help="evaluation sets; applies to the results trees of other projects, not to our own runs",
+    )
     parser.add_argument(
         "--nnunet-results-dir", nargs="*", default=[],
         help="nnU-Net results trees to measure as well, selected by --datasets/--folds/--tested-on",
     )
-    parser.add_argument("--raw-data-dir", help="where the nnU-Net trees' datasets live")
+    parser.add_argument(
+        "--monounet-results-dir", nargs="*", default=[],
+        help="MonoUNet architecture directories to measure as well, selected the same way",
+    )
+    parser.add_argument("--raw-data-dir", help="where the other projects' trees' datasets live")
     parser.add_argument("--overwrite", action="store_true", help="redo columns already current")
     parser.add_argument("--dry-run", action="store_true", help="list the columns, measure nothing")
     args = parser.parse_args()
@@ -315,23 +364,29 @@ def main():
         args.experiments = [cfg["model"].get("run_name", cfg["model"]["probe"])]
         args.folds = args.folds or [str(cfg["data"]["fold"])]
 
-    columns = _columns(Path(args.results_dir), args) if not args.nnunet_results_dir else []
-    for results_dir in args.nnunet_results_dir:
+    # A tree of another project's runs is asked for explicitly, and asking for one means measuring
+    # that instead of the runs under `--results-dir`.
+    foreign = [(_nnunet_columns, d) for d in args.nnunet_results_dir]
+    foreign += [(_monounet_columns, d) for d in args.monounet_results_dir]
+    columns = _columns(Path(args.results_dir), args) if not foreign else []
+    for find_columns, results_dir in foreign:
         if not args.raw_data_dir:
-            raise RuntimeError("--nnunet-results-dir needs --raw-data-dir")
-        found = _nnunet_columns(Path(results_dir), Path(args.raw_data_dir), args)
+            raise RuntimeError("a results tree of another project needs --raw-data-dir")
+        found = find_columns(Path(results_dir), Path(args.raw_data_dir), args)
         if not found:
-            raise RuntimeError(f"No nnU-Net predictions under {results_dir} for this selection")
+            raise RuntimeError(f"No predictions under {results_dir} for this selection")
         columns += found
     if not columns:
         raise RuntimeError(f"No predictions under {args.results_dir} for this selection")
-    for prediction_dir, raw_data_dir in columns:
-        print(measure(prediction_dir, raw_data_dir, args.overwrite, args.dry_run), flush=True)
+    for prediction_dir, raw_data_dir, prepare in columns:
+        print(
+            measure(prediction_dir, raw_data_dir, args.overwrite, args.dry_run, prepare), flush=True
+        )
 
     # Agreement between annotators is a property of a dataset rather than of any run, so it is
     # measured once for every evaluation set that ships the same image drawn twice.
     agreement_dir = Path(args.results_dir) / "agreement"
-    for dataset_dir in sorted({resolve_dataset_dir(raw, d.parent.name) for d, raw in columns}):
+    for dataset_dir in sorted({resolve_dataset_dir(raw, d.parent.name) for d, raw, _ in columns}):
         for split in agreement.splits(dataset_dir):
             path = agreement.path_for(agreement_dir, dataset_dir.name, split)
             if path.exists() and not args.overwrite:

@@ -37,6 +37,9 @@ datasets=(          # what a run was trained on
     Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
     Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
+    Dataset070_Clarius_L15
+    Dataset072_GE_LQP9
+    Dataset073_GE_LE
 )
 
 experiments=(       # the adaptation, i.e. the run name
@@ -75,7 +78,7 @@ folds=(0)
 # selected from their own directory layout instead: `datasets` above picks what a run was trained on,
 # `nnunet_tested_on` which of its evaluation sets to measure. Leave `nnunet_dirs` empty to skip them.
 nnunet_dirs=(
-    ~/GAA/spinal_cord_injury/data/nnUNet_results
+    # ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
 nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 nnunet_tested_on=(
@@ -91,6 +94,22 @@ nnunet_tested_on=(
     Dataset301_neurite_yvonne_b2_smi
     # The older lesion and traced sets these runs also predicted are left out: they belong to
     # families no table here shows.
+)
+
+# MonoUNet, trained in its own project and laid out `<architecture>/<trained on>/fold_N/test/
+# <tested on>/preds` -- the nnU-Net arrangement with the architecture on top. Its masks are saved on
+# the network's 256px canvas, so they are resampled into the label's space before being scored.
+# `datasets` above picks what a run was trained on, `monounet_tested_on` which of its evaluation sets
+# to measure. Leave `monounet_dirs` empty to skip it.
+monounet_dirs=(
+    ../monounet/models/MonoUNetE123V2GatedDA
+)
+monounet_raw_data_dir=../knee_us_segmentation/data/nnUNet_raw
+monounet_tested_on=(
+    Dataset070_Clarius_L15
+    Dataset072_GE_LQP9
+    Dataset073_GE_LE
+    # The knee sets these runs also predicted are left out: 078 and 079 are in no table here.
 )
 
 export PYTHONPATH="${PYTHONPATH:-}:src"
@@ -125,4 +144,18 @@ if [[ ${#nnunet_dirs[@]} -gt 0 ]]; then
         --nnunet-results-dir "${nnunet_dirs[@]}" \
         --raw-data-dir "$nnunet_raw_data_dir" \
         ${nnunet_args[@]+"${nnunet_args[@]}"}
+fi
+
+if [[ ${#monounet_dirs[@]} -gt 0 ]]; then
+    monounet_args=()
+    [[ ${#datasets[@]} -gt 0 ]] && monounet_args+=(--datasets "${datasets[@]}")
+    [[ ${#folds[@]} -gt 0 ]] && monounet_args+=(--folds "${folds[@]}")
+    [[ ${#monounet_tested_on[@]} -gt 0 ]] && monounet_args+=(--tested-on "${monounet_tested_on[@]}")
+    [[ "$overwrite" -eq 1 ]] && monounet_args+=(--overwrite)
+    [[ "$dry_run" -eq 1 ]] && monounet_args+=(--dry-run)
+
+    "$python" -m fm_adaptation.compute_metrics \
+        --monounet-results-dir "${monounet_dirs[@]}" \
+        --raw-data-dir "$monounet_raw_data_dir" \
+        ${monounet_args[@]+"${monounet_args[@]}"}
 fi

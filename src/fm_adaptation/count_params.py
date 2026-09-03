@@ -5,6 +5,7 @@ The counts come from wherever each family already records them, so nothing is es
 * foundation-model runs -- built from their own config and counted directly;
 * mmseg adapter runs -- built from `dinov3_mmseg.head_cfg`, which is what trained them;
 * nnU-Net -- its own `model_stats.json`, and nothing where a run has not written one;
+* MonoUNet -- its own `model_analysis.json`, written per training dataset;
 
 Written once to `models/parameter_counts.json`; `report.py` only reads that file, so generating the
 tables stays fast and needs no model building.
@@ -75,10 +76,33 @@ def _nnunet_counts(results_dirs):
     return found
 
 
+def _monounet_counts(results_dirs):
+    """Read from each training dataset's `model_analysis.json`, which MonoUNet writes itself.
+
+    The count sits one level below the architecture directory because the head is sized to the
+    dataset's classes, so two datasets of the same architecture differ by a few parameters. A dataset
+    without the file is left uncounted rather than built here, which would need the other project.
+    """
+    from .report import monounet_label
+
+    found = {}
+    for results_dir in results_dirs:
+        results_dir = Path(results_dir)
+        for path in sorted(results_dir.glob("Dataset*/model_analysis.json")):
+            parameters = json.loads(path.read_text())["parameters"]
+            key = f"{monounet_label(results_dir.name)}||{path.parent.name}"
+            found[key] = {
+                "total": parameters["total"],
+                "trainable": parameters["trainable"],
+            }
+    return found
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
     parser.add_argument("--nnunet-results-dir", nargs="*", default=[])
+    parser.add_argument("--monounet-results-dir", nargs="*", default=[])
     parser.add_argument("--output", default="models/parameter_counts.json")
     parser.add_argument(
         "--only-missing",
@@ -113,6 +137,7 @@ def main():
         print(f"  total {seen[key]['total']/1e6:.1f}M  trainable {seen[key]['trainable']/1e6:.2f}M")
 
     counts.update(_nnunet_counts(args.nnunet_results_dir))
+    counts.update(_monounet_counts(args.monounet_results_dir))
 
     output.write_text(json.dumps(counts, indent=2, sort_keys=True))
     print(f"wrote {output} ({len(counts)} entries)")

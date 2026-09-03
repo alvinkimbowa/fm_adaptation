@@ -75,6 +75,10 @@ NNUNET_VARIANT_NAMES = {"ResEncUNetM": "Res Enc M"}
 # prefix. The xtiny widths (`xtiny8`, `xtiny32`) share one name: no dataset was trained with more than
 # one of them, and the Params column already separates them.
 NNUNET_MODEL_NAMES = {r"xtiny\d*": "XTinyUNet"}
+# How a MonoUNet architecture directory reads. The directory spells out the variant it was built with
+# -- `MonoUNetE123V2GatedDA` -- which is more than a table wants to carry, so the family alone is the
+# label. A directory this does not match keeps its own name.
+MONOUNET_MODEL_NAMES = {r"MonoUNet\w*": "MonoUNet"}
 # How a trainer's tag is written, where the directory name reads badly.
 NNUNET_TRAINER_NAMES = {"100epochs": "100 epochs", "SkeletonRecall": "Skeleton Recall"}
 
@@ -107,6 +111,14 @@ def nnunet_label(trainer_dir_name):
     return f"{name} ({suffix})" if suffix else name
 
 
+def monounet_label(architecture_dir_name):
+    """`MonoUNetE123V2GatedDA` -> `MonoUNet`, by the vocabulary in `MONOUNET_MODEL_NAMES`."""
+    for pattern, model_name in MONOUNET_MODEL_NAMES.items():
+        if re.fullmatch(pattern, architecture_dir_name):
+            return model_name
+    return architecture_dir_name
+
+
 def _add_nnunet_records(records, results_dir):
     metrics_paths = sorted(
         Path(results_dir).glob("nnunet/Dataset*/*/fold_*/test/Dataset*/metrics.csv")
@@ -120,6 +132,30 @@ def _add_nnunet_records(records, results_dir):
         tested_on = metrics_path.parent.name
         model = nnunet_label(fold_dir.parent.name)
         records[(model, "", trained_on, fold)][tested_on] = _read_metrics(metrics_path)
+
+
+def _add_monounet_records(records, results_dir):
+    """Rows from a MonoUNet architecture directory, whose layout is the whole of what it says.
+
+    `<architecture>/<trained on>/fold_N/test/<tested on>/metrics.csv`: the architecture takes the
+    place the nnU-Net trees give a trainer, and, as for those, the configuration slot stays empty --
+    a baseline is selected by `--models` alone. Two directories that read as the same model would
+    otherwise silently overwrite each other, so the collision is raised instead.
+    """
+    results_dir = Path(results_dir)
+    metrics_paths = sorted(results_dir.glob("Dataset*/fold_*/test/Dataset*/metrics.csv"))
+    if not metrics_paths:
+        raise RuntimeError(f"No MonoUNet metrics found under {results_dir}")
+    model = monounet_label(results_dir.name)
+    for metrics_path in metrics_paths:
+        fold_dir = metrics_path.parents[2]
+        trained_on = fold_dir.parent.name
+        fold = fold_dir.name.removeprefix("fold_")
+        key = (model, "", trained_on, fold)
+        tested_on = metrics_path.parent.name
+        if tested_on in records[key]:
+            raise RuntimeError(f"{results_dir} repeats a row already read as {model}: {key}")
+        records[key][tested_on] = _read_metrics(metrics_path)
 
 
 def _pool_folds(records, folds):
@@ -620,6 +656,12 @@ def main():
     parser.add_argument("--results-dir", default="models")
     parser.add_argument("--nnunet-results-dir", nargs="*", default=[])
     parser.add_argument(
+        "--monounet-results-dir",
+        nargs="*",
+        default=[],
+        help="MonoUNet architecture directories, each read as one model",
+    )
+    parser.add_argument(
         "--nnunet-raw-data-dir",
         default=None,
         help="Where the nnU-Net baselines' training datasets live. They carry no config of their "
@@ -692,6 +734,8 @@ def main():
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
     for results_dir in args.nnunet_results_dir:
         _add_nnunet_records(records, results_dir)
+    for results_dir in args.monounet_results_dir:
+        _add_monounet_records(records, results_dir)
     if args.nnunet_raw_data_dir is not None:
         for _, _, trained_on, _ in records:
             raw_dirs.setdefault(trained_on, Path(args.nnunet_raw_data_dir).expanduser())
