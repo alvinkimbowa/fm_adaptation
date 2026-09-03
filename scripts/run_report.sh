@@ -9,14 +9,18 @@ results_dir=models
 # as a `_suffix` tag, and a dataset by its number alone.
 models=(
     nnUNet
-    sam3
-    nnU-Net       # case, hyphens and underscores are ignored, so `nnunet` works too
     # XTinyUNet     # its own model, so `nnU-Net` above does not select it
     # MonoUNet-t
     # MonoUNet-B
     # MonoUNet-L
     # monounet*     # all three MonoUNets
+    sam3
+    dinov3
 )
+
+# Group rows by their training dataset and rank best/second-best values within each group. Set to 0
+# to sort by model/configuration and rank across all selected training datasets instead.
+group_by_train_dataset="${group_by_train_dataset:-1}"
 
 train_datasets=(
     Dataset080_BUSBRA_GE_Logiq_5
@@ -105,6 +109,7 @@ report_args=()
 
 python -m fm_adaptation.report \
     --results-dir "$results_dir" \
+    --group-by-train-dataset "$group_by_train_dataset" \
     --nnunet-results-dir "${nnunet_dirs[@]}" \
     --nnunet-raw-data-dir "$nnunet_raw_data_dir" \
     ${report_args[@]+"${report_args[@]}"}

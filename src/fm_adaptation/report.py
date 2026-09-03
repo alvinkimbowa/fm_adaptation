@@ -296,12 +296,12 @@ def _model_matches(model, patterns):
 
 # Model families, in the order their rows read best: foundation models keyed by their config name,
 # baselines by the label their loader records. A model not named here sorts last.
-def _experiment_order(models, train_datasets, configs):
+def _experiment_order(models, train_datasets, configs, group_by_train_dataset=True):
     """Sort key putting rows where the selection lists put them.
 
-    The parts are weighed in the order a run directory writes them -- model, then training set, then
-    configuration -- so reading down the table follows the lists that chose it. A part whose list is
-    empty was not narrowed and has no order of its own; `list_order` falls back to the value itself.
+    Grouped reports put the training set first; ungrouped reports follow the run-directory order of
+    model, configuration, then training set. A part whose selection list is empty was not narrowed
+    and has no order of its own; `list_order` falls back to the value itself.
     """
     def model_order(model):
         # `--models` is matched leniently, so ordering has to be too: a row labelled
@@ -313,12 +313,13 @@ def _experiment_order(models, train_datasets, configs):
 
     def key(item):
         model, adaptation, trained_on, fold = item[0]
-        return (
+        run_order = (
             model_order(model),
-            list_order(trained_on, train_datasets),
             list_order(adaptation, configs),
             fold,
         )
+        dataset_order = list_order(trained_on, train_datasets)
+        return (dataset_order, *run_order) if group_by_train_dataset else (*run_order, dataset_order)
 
     return key
 
@@ -358,16 +359,26 @@ def _in_domain(records, datasets, raw_dirs):
     return pairs
 
 
-def _best_values(records, datasets, reducer, in_domain=(), averaged=(), metrics=DEFAULT_METRICS):
-    """Maps each column to its (best, second best) values over every row of the table.
+def _best_values(
+    records,
+    datasets,
+    reducer,
+    in_domain=(),
+    averaged=(),
+    metrics=DEFAULT_METRICS,
+    group_by_train_dataset=True,
+):
+    """Maps each column to its (best, second best) values within each comparison group.
 
     Blanked cells are skipped and the average is taken over the same columns the table averages, so
-    the highlighting cannot mark a value the table does not show.
+    the highlighting cannot mark a value the table does not show. A grouped report compares only
+    rows trained on the same dataset; an ungrouped report compares every row.
     """
     seen = defaultdict(list)
     if len(records) < 2:
         return {}
     for (_, _, trained_on, _), results in records.items():
+        group = trained_on if group_by_train_dataset else None
         cross = {name: [] for name in metrics}
         for dataset in datasets:
             values = _column_metrics(results, dataset, trained_on)
@@ -379,7 +390,7 @@ def _best_values(records, datasets, reducer, in_domain=(), averaged=(), metrics=
                 value = _reduce(values[metric], reducer)
                 if np.isnan(value):
                     continue
-                seen[(dataset, metric)].append(value)
+                seen[(group, dataset, metric)].append(value)
                 if dataset in averaged:
                     cross[metric].append(value)
         for metric, values in cross.items():
@@ -387,10 +398,10 @@ def _best_values(records, datasets, reducer, in_domain=(), averaged=(), metrics=
                 continue
             value = _reduce(values, reducer)
             if not np.isnan(value):
-                seen[("cross", metric)].append(value)
+                seen[(group, "cross", metric)].append(value)
     ranked = {}
     for key, values in seen.items():
-        ordered = sorted(set(values), reverse=METRICS[key[1]].higher_is_better)
+        ordered = sorted(set(values), reverse=METRICS[key[2]].higher_is_better)
         ranked[key] = (ordered[0], ordered[1] if len(ordered) > 1 else None)
     return ranked
 
@@ -438,7 +449,15 @@ def _column_metrics(results, dataset, trained_on):
     return results.get(trained_on if dataset == OWN_TEST else dataset)
 
 
-def _render_table(records, datasets, statistic, order, in_domain=(), metrics=DEFAULT_METRICS):
+def _render_table(
+    records,
+    datasets,
+    statistic,
+    order,
+    in_domain=(),
+    metrics=DEFAULT_METRICS,
+    group_by_train_dataset=True,
+):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
     # Every row reports its own held-out split under `Test`, whatever else it is shown against.
@@ -459,7 +478,15 @@ def _render_table(records, datasets, statistic, order, in_domain=(), metrics=DEF
         )
         > 1
     )
-    best = _best_values(records, datasets, reducer, in_domain, averaged, metrics)
+    best = _best_values(
+        records,
+        datasets,
+        reducer,
+        in_domain,
+        averaged,
+        metrics,
+        group_by_train_dataset,
+    )
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
         parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
@@ -477,16 +504,24 @@ def _render_table(records, datasets, statistic, order, in_domain=(), metrics=DEF
             separator = last and position == len(metrics) - 1
             parts.append(f"<th{_sep(separator)}>{METRICS[metric].label}</th>")
     parts.append("</tr></thead><tbody>")
+    previous_trained_on = None
     for key, results in sorted(records.items(), key=order):
         model, probe, trained_on, fold = key
         config = _config_label(model, probe)
         total, trainable = _parameter_counts(model, probe, trained_on)
+        row_class = (
+            " class='group-start'"
+            if group_by_train_dataset and previous_trained_on not in (None, trained_on)
+            else ""
+        )
         parts.append(
-            f"<tr><td>{html.escape(config)}</td>"
+            f"<tr{row_class}><td>{html.escape(config)}</td>"
             f"<td>{total}</td><td>{trainable}</td>"
             f"<td>{html.escape(_dataset_label(trained_on))}</td>"
             f"<td class='sep'>{html.escape(fold)}</td>"
         )
+        previous_trained_on = trained_on
+        ranking_group = trained_on if group_by_train_dataset else None
         cross = {metric: [] for metric in metrics}
         for index, dataset in enumerate(datasets):
             last = index == len(datasets) - 1 and show_average
@@ -502,7 +537,7 @@ def _render_table(records, datasets, statistic, order, in_domain=(), metrics=DEF
                     _metric_cell(
                         fmt(values[metric], METRICS[metric].scale),
                         value,
-                        best.get((dataset, metric)),
+                        best.get((ranking_group, dataset, metric)),
                         separator=separator,
                         reference=reference,
                     )
@@ -518,7 +553,7 @@ def _render_table(records, datasets, statistic, order, in_domain=(), metrics=DEF
                     _metric_cell(
                         fmt(np.asarray(cross[metric]), METRICS[metric].scale),
                         _reduce(cross[metric], reducer),
-                        best.get(("cross", metric)),
+                        best.get((ranking_group, "cross", metric)),
                     )
                 )
         parts.append("</tr>")
@@ -616,6 +651,13 @@ def main():
         help="Evaluation sets to show as columns, in the order given; empty keeps every one. The "
         "`Test` column is always present and is never averaged.",
     )
+    parser.add_argument(
+        "--group-by-train-dataset",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help="Whether to group rows and rank best values within each training dataset (default: 0)",
+    )
     args = parser.parse_args()
     _load_parameter_counts(args.parameter_counts)
     records = defaultdict(dict)
@@ -678,7 +720,9 @@ def main():
     thead tr:first-child th:first-child,thead tr:first-child th:nth-child(4){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
-    order = _experiment_order(args.models, args.train_datasets, args.configs)
+    order = _experiment_order(
+        args.models, args.train_datasets, args.configs, bool(args.group_by_train_dataset)
+    )
     # One page per statistic; `suffix` becomes part of the file name.
     statistics = {"mean_sd": "Mean ± SD", "median_iqr": "Median (Q1–Q3)"}
     bodies = {suffix: "" for suffix in statistics}
@@ -718,8 +762,15 @@ def main():
         for suffix, statistic in statistics.items():
             bodies[suffix] += (
                 f"<section><h1>{html.escape(family)}</h1>"
-                + _render_table(family_records, family_datasets, statistic, order, in_domain,
-                                _family_metrics(family))
+                + _render_table(
+                    family_records,
+                    family_datasets,
+                    statistic,
+                    order,
+                    in_domain,
+                    _family_metrics(family),
+                    bool(args.group_by_train_dataset),
+                )
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
                     f"{html.escape(_dataset_label(dataset))}</h1>"
