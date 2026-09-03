@@ -20,10 +20,10 @@ models=(
 group_by_train_dataset="${group_by_train_dataset:-1}"
 
 train_datasets=(
-    Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
     Dataset073_GE_LE
+    Dataset070_Clarius_L15
+    Dataset071_Sonix-Touch
     Dataset080_BUSBRA_GE_Logiq_5
     Dataset082_BUSBRA_Toshiba_Aplio_300
     # Dataset083_BUSBRA_U_Systems
@@ -39,10 +39,10 @@ train_datasets=(
 # selected. A cell whose set shares images with the row's training set is greyed and left out of both
 # the average and the best-value marking.
 test_datasets=(
-    Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
     Dataset073_GE_LE
+    Dataset070_Clarius_L15
+    # Dataset071_Sonix-Touch
     Dataset080_BUSBRA_GE_Logiq_5
     Dataset082_BUSBRA_Toshiba_Aplio_300
     Dataset083_BUSBRA_U_Systems
@@ -58,15 +58,13 @@ test_datasets=(
 configs=(
     # linear
     # linear_finetune
-    # nonlinear
-    # nonlinear_finetune
     # upernet
     # upernet_inj
     # upernet_ours
     # upernet_inj_ours
-    upernet_inj_ft_ours
-    convnexts_upernet_ft_ours
     convnextt_upernet_ft_ours
+    # convnexts_upernet_ft_ours
+    upernet_inj_ft_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # upernet_inj_ft_vitb_ours
