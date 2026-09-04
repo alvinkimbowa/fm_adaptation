@@ -23,8 +23,8 @@ models=(
 train_datasets=(
     Dataset070_Clarius_L15
     # Dataset071_Sonix-Touch
-    # Dataset072_GE_LQP9
-    # Dataset073_GE_LE
+    Dataset072_GE_LQP9
+    Dataset073_GE_LE
 )
 
 # Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.
@@ -74,6 +74,11 @@ configs=(
 folds=(
     0
 )
+
+# none          : one figure per evaluation set, every selected run that has it a column.
+# train_dataset : one figure per training set as well, so a figure compares the configurations
+#                 trained on one set instead of mixing training sets into the same columns.
+group_by=${group_by:-train_dataset}
 
 # Result trees to draw from. An external trainer lays its runs out the same way, so naming its tree
 # here is enough for its runs to be named in `experiments` like any other. Runs with no config.yaml
@@ -131,6 +136,7 @@ python -m fm_adaptation.compare_qualitative \
     ${folds[@]+--folds "${folds[@]}"} \
     ${test_datasets[@]+--test-datasets "${test_datasets[@]}"} \
     --splits "${splits[@]}" \
+    --group-by "${group_by//_/-}" \
     --rows "$rows" \
     --per-row "$per_row" \
     --output-dir "$output_dir" \

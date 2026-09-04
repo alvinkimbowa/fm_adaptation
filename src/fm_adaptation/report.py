@@ -12,7 +12,7 @@ import yaml
 
 
 from . import agreement
-from .datasets import dataset_dir as resolve_dataset_dir, resolve, split_cases
+from .datasets import dataset_dir as resolve_dataset_dir, family as _dataset_family, resolve, split_cases
 from .naming import MODEL_NAMES, describe_run
 from .metrics import read_case_metrics
 from .selection import list_order, matches
@@ -256,22 +256,6 @@ def _render_interrater(rows, unpaired, statistic):
 def _shorten_name(name, limit=46):
     return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
-# The family is both the key that groups runs into a table and that table's heading, so an alias
-# does two jobs: it pulls sets that name the same task differently into one table, and it writes the
-# heading in words the name on disk does not carry. The knee sets are named after the scanner that
-# recorded them, which is the distinction their columns already draw.
-FAMILY_ALIASES = {
-    "neurite": "neurites",
-    "Clarius": "Knee Cartilage",
-    "Sonix-Touch": "Knee Cartilage",
-    "GE": "Knee Cartilage",
-}
-
-
-def _dataset_family(dataset):
-    """The second token of the dataset name, which is what puts a run in one table or another."""
-    family = dataset.split("_", maxsplit=2)[1]
-    return FAMILY_ALIASES.get(family, family)
 
 
 PARAMETER_COUNTS = {}

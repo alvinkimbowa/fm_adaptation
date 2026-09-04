@@ -54,7 +54,7 @@ from .qualitative import (
     select_cases,
     style_from_arguments,
 )
-from .datasets import dataset_dir as resolve_dataset_dir, dataset_id, split_cases
+from .datasets import dataset_dir as resolve_dataset_dir, dataset_id, family, split_cases
 from .selection import matches as _matches, select_runs
 
 
@@ -89,23 +89,24 @@ def _columns(run_dirs, kind, tested_on):
 
 
 def _evaluation_sets(run_dirs, kind):
-    """Evaluation sets every selected run has predictions for, so a figure has every column.
+    """{evaluation set: the runs holding predictions for it}, in the order the runs were selected.
 
-    An empty intersection means the selection cannot be drawn at all, so what each run holds is
-    reported: the usual cause is a column trained on a different dataset, which was never evaluated
-    on anything the others were.
+    A run only predicts the sets its own config names, so no set is held by every run of a wide
+    selection -- a run is never evaluated on what it trained on, and a baseline from another project
+    carries whatever sets that project asked for. Each set therefore takes the runs that have it and
+    leaves out the ones that do not, rather than one missing column dropping the figure.
     """
-    shared = None
-    per_run = {}
+    per_set = {}
     for run_dir in run_dirs:
-        here = {p.parent.name for p in (run_dir / kind).glob("*/pred*") if p.is_dir()}
-        per_run[run_dir] = here
-        shared = here if shared is None else (shared & here)
-    if not shared:
-        print(f"no {kind} set is shared by every selected run:")
-        for run_dir, here in per_run.items():
-            print(f"  {run_dir}: {', '.join(sorted(here)) or 'nothing'}")
-    return sorted(shared or ())
+        for path in (run_dir / kind).glob("*/pred*"):
+            if path.is_dir():
+                per_set.setdefault(path.parent.name, []).append(run_dir)
+    return per_set
+
+
+def _group_key(run_dir, group_by):
+    """What run_dir is filed under, or None when every run belongs to one figure."""
+    return run_dir.parents[1].name if group_by == "train-dataset" else None
 
 
 def _repeat_cases(cases, count):
@@ -395,8 +396,13 @@ def main():
     parser.add_argument("--test-datasets", nargs="*", default=[],
                         help="evaluation sets to draw. Empty takes every set the chosen runs share.")
     parser.add_argument("--splits", nargs="*", default=["test"], choices=("validation", "test"))
+    parser.add_argument("--group-by", default="none", choices=("none", "train-dataset"),
+                        help="none draws one figure per evaluation set, columns from every selected "
+                             "run that has it. train-dataset draws one per training set as well, so "
+                             "a figure compares configurations rather than training sets.")
     parser.add_argument("--output-dir", default="results/qualitative",
-                        help="figures land in <output-dir>/<split>__<tested-on>.<format>")
+                        help="figures land in <output-dir>/<family>/<split>__<tested-on>.<format>, with a "
+                             "trained_on_<set>__ prefix when grouped by training set")
     parser.add_argument("--format", default="png",
                         help="figure file format, as matplotlib names it: png, svg, pdf")
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
@@ -415,104 +421,120 @@ def main():
     run_dirs = select_runs(
         args.results_dir, args.models, args.train_datasets, args.configs, args.folds
     )
-    for kind in args.splits:
-        # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
-        # `test_datasets` later shows up without editing this.
-        available = _evaluation_sets(run_dirs, kind)
-        targets = [d for d in available if _matches(d, args.test_datasets)]
-        for tested_on in targets:
-            runs, missing = _columns(run_dirs, kind, tested_on)
-            if runs is None:
-                print(f"skipped {kind}/{tested_on}: {missing} has no predictions for it")
-                continue
-            cfg = describe_run_dir(runs[0][1], args.raw_data_dir)
-            source_path = runs[0][2].parent / "source.json"
-            if source_path.exists():
-                source = json.loads(source_path.read_text())
-                source_dataset, split = source["dataset"], source["split"]
-            else:
-                source_dataset = tested_on
-                if not cfg.test_split:
-                    # Nothing recorded the split, so the predictions say which one it was.
-                    predicted = {path.stem for path in runs[0][2].glob("*.png")}
-                    directory = resolve_dataset_dir(cfg.raw_data_dir, tested_on)
-                    split = next(
-                        (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
-                    )
-                elif tested_on != cfg.train_dataset:
-                    split = cfg.test_split
+    groups = {}
+    for run_dir in run_dirs:
+        groups.setdefault(_group_key(run_dir, args.group_by), []).append(run_dir)
+    for group, group_runs in groups.items():
+        for kind in args.splits:
+            # Which evaluation sets exist is discovered rather than assumed, so a dataset added to
+            # `test_datasets` later shows up without editing this.
+            per_set = _evaluation_sets(group_runs, kind)
+            targets = [d for d in sorted(per_set) if _matches(d, args.test_datasets)]
+            if not targets:
+                available = ", ".join(sorted(per_set)) or "nothing"
+                print(f"no {kind} set to draw for {group or 'the selection'}: runs hold {available}")
+            for tested_on in targets:
+                # A single column is a figure with nothing to compare, which `plot_qualitative`
+                # already draws beside the run itself.
+                if len(per_set[tested_on]) < 2:
+                    continue
+                runs, missing = _columns(per_set[tested_on], kind, tested_on)
+                if runs is None:
+                    print(f"skipped {kind}/{tested_on}: {missing} has no predictions for it")
+                    continue
+                cfg = describe_run_dir(runs[0][1], args.raw_data_dir)
+                source_path = runs[0][2].parent / "source.json"
+                if source_path.exists():
+                    source = json.loads(source_path.read_text())
+                    source_dataset, split = source["dataset"], source["split"]
                 else:
-                    split = "Ts" if kind == "test" else "Tr"
-            dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
-            images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
-            # No annotations, no ground-truth column: the comparison is then between the models.
-            if not (labels.is_dir() and any(labels.iterdir())):
-                labels = None
-            channel_planes = rgb_planes(load_dataset_json(dataset_dir)["channel_names"])
-            # Restricted to the planes these runs were trained on, so the backdrop is their input.
-            # It is the union across columns: a plane one column never saw is still part of what
-            # another column was given.
-            trained_on = {describe_run_dir(run[1], args.raw_data_dir).train_dataset
-                          for run in runs}
-            keeps = [active_planes(load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, t))["channel_names"])
-                     for t in sorted(trained_on)]
-            keep = None if any(k is None for k in keeps) else frozenset().union(*keeps)
-            if channel_planes and keep is not None:
-                channel_planes = {stored: rgb for stored, rgb in channel_planes.items()
-                                  if rgb in keep}
-            # One window has to serve every column, so `auto` takes the smallest patch any column
-            # was trained on: it fits inside the field of view of the wider ones, while the widest
-            # would show the narrower columns more than they ever saw. A column with no patching --
-            # a baseline that carries no config of its own -- has no say either way rather than
-            # dropping the whole figure back to the slide.
-            patch_sizes = [
-                run_cfg.patching.patch_size
-                for run_cfg in (describe_run_dir(run[1], args.raw_data_dir) for run in runs)
-                if run_cfg is not None and run_cfg.patching is not None
-            ]
-            crop = None if args.crop == "full" else (
-                (min(patch_sizes) if patch_sizes else None) if args.crop == "auto"
-                else int(args.crop)
-            )
-            # A negative seed asks for a fresh sample of cases every run, overwriting the
-            # figure that was there. Pin a seed to keep drawing the same cases.
-            seed = args.seed if args.seed >= 0 else int(
-                np.random.default_rng().integers(args.seed_max)
-            )
-            rng = np.random.default_rng(seed)
-            cases = _common_cases(runs, args.rows, runs[0], rng)
-            if not cases:
-                print(f"skipped {kind}/{tested_on} (no cases shared by all runs)")
-                continue
-            if crop:
-                cases = _repeat_cases(cases, args.rows)
-            label_values = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
-            names = {int(v): k for k, v in label_values.items() if int(v) != 0}
-            # Flat: with a list of rows there is no one training set to file the figure under, so the
-            # split and the evaluation set name it outright.
-            output = Path(args.output_dir) / f"{kind}__{tested_on}.{args.format}"
-            # An unscored dataset has no metrics.csv anywhere, so freshness comes from the
-            # predictions themselves rather than from a file that will never exist.
-            stamps = [m.stat().st_mtime for *_, m in runs if m.exists()]
-            stamps += [p.stat().st_mtime for _, _, p, m in runs if not m.exists()]
-            newest = max(stamps)
-            if args.skip_unchanged and output.exists() and output.stat().st_mtime >= newest:
-                skipped += 1
-                continue
-            path = render_comparison(
-                images, labels, runs, cases, output, style,
-                crop=crop, seed=seed, classes=sorted(names), class_names=names,
-                channel_planes=channel_planes,
-                layout=args.layout, per_row=args.per_row,
-            )
-            drawn += 1
-            # How many cases each column holds, when they differ. A row that trained on part of this
-            # set has only its `imagesTs`, a row that never touched it has the whole thing, and the
-            # figure is drawn on the intersection -- 8 of 73 should not read the same as 8 of 8.
-            held = [len([q for q in p.iterdir() if q.suffix.lower() in IMAGE_SUFFIXES])
-                    for _, _, p, _ in runs]
-            note = "" if len(set(held)) == 1 else f", columns hold {'/'.join(map(str, held))}"
-            print(f"wrote {path}  ({len(runs)} models x {len(cases)} cases, seed {seed}{note})")
+                    source_dataset = tested_on
+                    if not cfg.test_split:
+                        # Nothing recorded the split, so the predictions say which one it was.
+                        predicted = {path.stem for path in runs[0][2].glob("*.png")}
+                        directory = resolve_dataset_dir(cfg.raw_data_dir, tested_on)
+                        split = next(
+                            (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
+                        )
+                    elif tested_on != cfg.train_dataset:
+                        split = cfg.test_split
+                    else:
+                        split = "Ts" if kind == "test" else "Tr"
+                dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
+                images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
+                # No annotations, no ground-truth column: the comparison is then between the models.
+                if not (labels.is_dir() and any(labels.iterdir())):
+                    labels = None
+                channel_planes = rgb_planes(load_dataset_json(dataset_dir)["channel_names"])
+                # Restricted to the planes these runs were trained on, so the backdrop is their input.
+                # It is the union across columns: a plane one column never saw is still part of what
+                # another column was given.
+                trained_on = {describe_run_dir(run[1], args.raw_data_dir).train_dataset
+                              for run in runs}
+                keeps = [active_planes(load_dataset_json(resolve_dataset_dir(cfg.raw_data_dir, t))["channel_names"])
+                         for t in sorted(trained_on)]
+                keep = None if any(k is None for k in keeps) else frozenset().union(*keeps)
+                if channel_planes and keep is not None:
+                    channel_planes = {stored: rgb for stored, rgb in channel_planes.items()
+                                      if rgb in keep}
+                # One window has to serve every column, so `auto` takes the smallest patch any column
+                # was trained on: it fits inside the field of view of the wider ones, while the widest
+                # would show the narrower columns more than they ever saw. A column with no patching --
+                # a baseline that carries no config of its own -- has no say either way rather than
+                # dropping the whole figure back to the slide.
+                patch_sizes = [
+                    run_cfg.patching.patch_size
+                    for run_cfg in (describe_run_dir(run[1], args.raw_data_dir) for run in runs)
+                    if run_cfg is not None and run_cfg.patching is not None
+                ]
+                crop = None if args.crop == "full" else (
+                    (min(patch_sizes) if patch_sizes else None) if args.crop == "auto"
+                    else int(args.crop)
+                )
+                # A negative seed asks for a fresh sample of cases every run, overwriting the
+                # figure that was there. Pin a seed to keep drawing the same cases.
+                seed = args.seed if args.seed >= 0 else int(
+                    np.random.default_rng().integers(args.seed_max)
+                )
+                rng = np.random.default_rng(seed)
+                cases = _common_cases(runs, args.rows, runs[0], rng)
+                if not cases:
+                    print(f"skipped {kind}/{tested_on} (no cases shared by all runs)")
+                    continue
+                if crop:
+                    cases = _repeat_cases(cases, args.rows)
+                label_values = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
+                names = {int(v): k for k, v in label_values.items() if int(v) != 0}
+                # Ungrouped, a figure can hold columns from several training sets, so only the
+                # split and the evaluation set name it. Grouped, the training set is what tells two
+                # otherwise identical figures apart and has to be part of the name. Either way the
+                # figure is filed under the task it is drawn on, so one directory holds one question.
+                prefix = f"trained_on_{group}__" if group else ""
+                folder = re.sub(r"[^a-z0-9]+", "_", family(tested_on).lower()).strip("_")
+                output = (Path(args.output_dir) / folder
+                          / f"{prefix}{kind}__{tested_on}.{args.format}")
+                # An unscored dataset has no metrics.csv anywhere, so freshness comes from the
+                # predictions themselves rather than from a file that will never exist.
+                stamps = [m.stat().st_mtime for *_, m in runs if m.exists()]
+                stamps += [p.stat().st_mtime for _, _, p, m in runs if not m.exists()]
+                newest = max(stamps)
+                if args.skip_unchanged and output.exists() and output.stat().st_mtime >= newest:
+                    skipped += 1
+                    continue
+                path = render_comparison(
+                    images, labels, runs, cases, output, style,
+                    crop=crop, seed=seed, classes=sorted(names), class_names=names,
+                    channel_planes=channel_planes,
+                    layout=args.layout, per_row=args.per_row,
+                )
+                drawn += 1
+                # How many cases each column holds, when they differ. A row that trained on part of this
+                # set has only its `imagesTs`, a row that never touched it has the whole thing, and the
+                # figure is drawn on the intersection -- 8 of 73 should not read the same as 8 of 8.
+                held = [len([q for q in p.iterdir() if q.suffix.lower() in IMAGE_SUFFIXES])
+                        for _, _, p, _ in runs]
+                note = "" if len(set(held)) == 1 else f", columns hold {'/'.join(map(str, held))}"
+                print(f"wrote {path}  ({len(runs)} models x {len(cases)} cases, seed {seed}{note})")
     print(f"{drawn} comparison figure(s) drawn, {skipped} up to date")
 
 

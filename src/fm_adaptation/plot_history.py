@@ -77,13 +77,27 @@ def _plot(curves, title, out_path):
     plt.close(fig)
 
 
+def render_run(run_dir: Path, history=None):
+    """Draw one run's own curves next to its history.csv, reading the file when no history is given.
+
+    Returns the path written, or None when the run has not finished an epoch yet."""
+    if history is None:
+        path = run_dir / "history.csv"
+        history = _read_history(path) if path.exists() else {}
+    if not history.get("epoch"):
+        return None
+    label = f"{run_dir.parent.name}/{run_dir.name}"
+    out_path = run_dir / "history.png"
+    _plot([(label, history)], f"{run_dir.parents[1].name} {label}", out_path)
+    return out_path
+
+
 def _render(results_dir: Path, datasets, experiments):
     written = []
     for dataset_dir, dataset_runs in sorted(_collect(results_dir, datasets, experiments).items()):
         curves = []
         for label, (history, fold_dir) in sorted(dataset_runs.items()):
-            out_path = fold_dir / "history.png"
-            _plot([(label, history)], f"{dataset_dir.name} {label}", out_path)
+            out_path = render_run(fold_dir, history)
             written.append((out_path, len(history["epoch"])))
             curves.append((label, history))
         out_path = dataset_dir / "history.png"

@@ -114,3 +114,19 @@ def split_cases(dataset_dir, split):
     if not image_dir.is_dir():
         return set()
     return {path.name.rsplit("_", 1)[0] for path in image_dir.glob("*_0000.*")}
+
+
+# The family is what a dataset name's second token says the task is. Sets that name the same task
+# differently are pulled together here, and a task the names do not spell out is written in words.
+FAMILY_ALIASES = {
+    "neurite": "neurites",
+    "Clarius": "Knee Cartilage",
+    "Sonix-Touch": "Knee Cartilage",
+    "GE": "Knee Cartilage",
+}
+
+
+def family(dataset):
+    """The task a dataset belongs to, which is what groups it with others in a table or a directory."""
+    name = dataset.split("_", maxsplit=2)[1]
+    return FAMILY_ALIASES.get(name, name)

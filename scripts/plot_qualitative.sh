@@ -116,7 +116,7 @@ cols=4          # samples per row
 # mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=masks
+layout=${layout:-masks}
 
 # How a mask is painted, in every layout -- a layout only arranges the panels and decides
 # whether a mask sits on black or over the image.
