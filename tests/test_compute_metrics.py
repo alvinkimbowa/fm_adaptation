@@ -113,6 +113,14 @@ class LabelResolutionTests(unittest.TestCase):
             self.assertEqual(index["Case__one"].parent.name, "labelsTr")
 
 
+def _trained_on(column):
+    """The training set a selected nnU-Net column belongs to, whichever split it came from."""
+    return (
+        column.predictions.parents[2].name if column.dataset
+        else column.predictions.parents[4].name
+    )
+
+
 @needs_scoring
 class NnunetColumnTests(unittest.TestCase):
         """Selecting the baseline columns out of an nnU-Net results tree, which carries no config."""
@@ -131,6 +139,11 @@ class NnunetColumnTests(unittest.TestCase):
                     / "nnUNetTrainer__nnUNetResEncUNetMPlans__2d" / "fold_0" / "test" / tested_on
                     / "preds"
                 ).mkdir(parents=True)
+            self.validation = (
+                self.results / "nnunet" / "Dataset116_neurites_mohammad_smi"
+                / "nnUNetTrainer__nnUNetResEncUNetMPlans__2d" / "fold_0" / "validation"
+            )
+            self.validation.mkdir(parents=True)
 
         def tearDown(self):
             self.tmp.cleanup()
@@ -139,14 +152,36 @@ class NnunetColumnTests(unittest.TestCase):
             from argparse import Namespace
             from fm_adaptation.compute_metrics import _nnunet_columns
 
-            args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
+            args = Namespace(
+                **{"datasets": [], "folds": [], "splits": [], "tested_on": [], **kwargs}
+            )
             return [
-                (path.parents[4].name, path.parent.name)
-                for path, _, _ in _nnunet_columns(self.results, [self.root], args)
+                (_trained_on(column), column.dataset or column.predictions.parent.name)
+                for column in _nnunet_columns(self.results, [self.root], args)
             ]
 
         def test_every_column_is_found_without_a_selection(self):
-            self.assertEqual(len(self._select()), 3)
+            self.assertEqual(len(self._select()), 4)
+
+        def test_a_held_out_fold_is_a_column_for_the_training_set(self):
+            """nnU-Net names no set on that path, so the column has to carry what it was measured on."""
+            self.assertIn(
+                ("Dataset116_neurites_mohammad_smi", "Dataset116_neurites_mohammad_smi"),
+                self._select(datasets=["116"]),
+            )
+
+        def test_a_split_selection_leaves_out_the_held_out_fold(self):
+            self.assertEqual(self._select(datasets=["116"], splits=["test"]),
+                             [("Dataset116_neurites_mohammad_smi", "Dataset121_neurites_yvonne_smi")])
+
+        def test_the_held_out_fold_is_measured_where_its_predictions_are(self):
+            """There is no directory above them belonging to that column alone."""
+            from fm_adaptation.compute_metrics import _nnunet_columns
+            from argparse import Namespace
+
+            args = Namespace(datasets=["116"], folds=[], splits=["validation"], tested_on=[])
+            [column] = _nnunet_columns(self.results, [self.root], args)
+            self.assertEqual(column.predictions, self.validation)
 
         def test_a_number_selects_a_column(self):
             self.assertEqual(
@@ -204,8 +239,8 @@ class MonounetColumnTests(unittest.TestCase):
 
             args = Namespace(**{"datasets": [], "folds": [], "tested_on": [], **kwargs})
             return [
-                (path.parents[3].name, path.parent.name)
-                for path, _, _ in _monounet_columns(self.results, [self.root], args)
+                (column.predictions.parents[3].name, column.predictions.parent.name)
+                for column in _monounet_columns(self.results, [self.root], args)
             ]
 
         def test_every_column_is_found_without_a_selection(self):
@@ -221,7 +256,7 @@ class MonounetColumnTests(unittest.TestCase):
             """Every MonoUNet column carries the reader; ours and nnU-Net's carry none."""
             from fm_adaptation.compute_metrics import binary_mask_in_label_space
 
-            readers = {prepare for _, _, prepare in self._columns()}
+            readers = {column.prepare for column in self._columns()}
             self.assertEqual(readers, {binary_mask_in_label_space})
 
         def _columns(self):

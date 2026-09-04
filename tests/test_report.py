@@ -221,3 +221,51 @@ class BestValueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NnunetRecordTests(unittest.TestCase):
+    """Which columns an nnU-Net results tree contributes, given how it lays its splits out."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.results = Path(self.tmp.name)
+        self.trainer = (
+            self.results / "nnunet" / "Dataset070_Clarius_L15"
+            / "nnUNetTrainer__nnUNetResEncUNetMPlans__2d" / "fold_0"
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, *parts):
+        path = self.trainer.joinpath(*parts, "metrics.csv")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("image_id,dice,cldice,hd95,masd\ncase,0.9,0.9,3,1\n")
+
+    def _records(self):
+        from collections import defaultdict
+        from fm_adaptation.report import _add_nnunet_records
+
+        records = defaultdict(dict)
+        _add_nnunet_records(records, self.results)
+        return {key: sorted(results) for key, results in records.items()}
+
+    def test_a_held_out_fold_is_the_training_set_s_own_column(self):
+        self._write("validation")
+        self._write("test", "Dataset072_GE_LQP9")
+        self.assertEqual(
+            self._records(),
+            {("nnU-Net Res Enc M", "", "Dataset070_Clarius_L15", "0"):
+             ["Dataset070_Clarius_L15", "Dataset072_GE_LQP9"]},
+        )
+
+    def test_an_own_test_set_is_preferred_over_the_held_out_fold(self):
+        """The training dataset is reported once, and imagesTs is the better of the two."""
+        self._write("validation")
+        self._write("test", "Dataset070_Clarius_L15")
+        key = ("nnU-Net Res Enc M", "", "Dataset070_Clarius_L15", "0")
+        self.assertEqual(self._records(), {key: ["Dataset070_Clarius_L15"]})
+
+    def test_a_tree_holding_neither_split_is_an_error(self):
+        with self.assertRaises(RuntimeError):
+            self._records()

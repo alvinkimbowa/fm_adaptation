@@ -126,10 +126,14 @@ class RunSelectionTests(unittest.TestCase):
         self.assertEqual(len(select_runs(self.root)), 2)
         self.assertEqual(select_runs(self.root, configs=["nothing_like_this"]), [])
 
-    def test_only_sets_every_run_evaluated_are_offered(self):
-        """A run's own training set is one the other rows never predicted, so it cannot be a figure."""
-        self.assertEqual(_evaluation_sets([self.myke, self.myk], "test"),
-                         ["Dataset211_paul", "Dataset218_eric"])
+    def test_each_set_is_offered_with_the_runs_that_hold_it(self):
+        """A run predicts only what its own config names, so no set is held by every run."""
+        self.assertEqual(
+            _evaluation_sets([self.myke, self.myk], "test"),
+            {"Dataset211_paul": [self.myke, self.myk],
+             "Dataset218_eric": [self.myke, self.myk],
+             "Dataset219_MYK": [self.myk]},
+        )
 
     def test_a_run_without_predictions_for_a_set_is_named_rather_than_dropped(self):
         columns, missing = _columns([self.myke, self.myk], "test", "Dataset219_MYK")

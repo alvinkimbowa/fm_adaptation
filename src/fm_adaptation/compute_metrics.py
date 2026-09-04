@@ -19,6 +19,7 @@ import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 import numpy as np
 import torch
@@ -43,6 +44,18 @@ Image.MAX_IMAGE_PIXELS = None
 
 # What a label or prediction map can be stored as.
 MASK_SUFFIXES = {".png", ".tif", ".tiff"}
+
+
+class Column(NamedTuple):
+    """A directory of predictions and what measuring it needs.
+
+    `dataset` names the evaluation set for sources that do not put it in the path; `predictions` is
+    then the directory the metrics are written into rather than the one below it.
+    """
+    predictions: Path
+    raw_data_dir: Path
+    prepare: Callable = None
+    dataset: str = None
 
 
 @dataclass(frozen=True)
@@ -231,12 +244,12 @@ def _columns(results_dir: Path, args):
             continue
         for prediction_dir in sorted(fold_dir.glob("*/*/predictions")):
             if matches(prediction_dir.parents[1].name, args.splits):
-                selected.append((prediction_dir, raw_data_dir, None))
+                selected.append(Column(prediction_dir, raw_data_dir))
     return selected
 
 
 def _nnunet_columns(results_dir: Path, raw_data_dirs, args):
-    """Every (predictions dir, raw data dir) an nnU-Net results tree holds for this selection.
+    """Every column an nnU-Net results tree holds for this selection.
 
     nnU-Net runs are trained elsewhere and carry no config of ours, so the selection comes from the
     layout: `nnunet/<trained on>/<trainer>/fold_N/test/<tested on>/preds`. The predictions are written
@@ -252,15 +265,33 @@ def _nnunet_columns(results_dir: Path, raw_data_dirs, args):
         if (
             matches(trained_on, args.datasets)
             and matches(fold, args.folds)
+            and matches("test", args.splits)
             and matches(prediction_dir.parent.name, args.tested_on)
         ):
             root = dataset_root(raw_data_dirs, prediction_dir.parent.name)
-            selected.append((prediction_dir, root, None))
+            selected.append(Column(prediction_dir, root))
+    # A dataset with no `imagesTs` is held out by fold instead, and nnU-Net writes that fold's
+    # predictions flat into `validation/` rather than under a directory named after the set. Those
+    # are the run's numbers on the set it was trained on, which is the column `test/` never holds.
+    # `fold_all` is trained on everything, so its `validation/` is the training set itself -- a
+    # selection that keeps that fold gets a number measured on seen data.
+    for prediction_dir in sorted(results_dir.glob("nnunet/Dataset*/*/fold_*/validation")):
+        trained_on = prediction_dir.parents[2].name
+        fold = prediction_dir.parent.name.removeprefix("fold_")
+        if (
+            prediction_dir.is_dir()
+            and matches(trained_on, args.datasets)
+            and matches(fold, args.folds)
+            and matches("validation", args.splits)
+            and matches(trained_on, args.tested_on)
+        ):
+            root = dataset_root(raw_data_dirs, trained_on)
+            selected.append(Column(prediction_dir, root, dataset=trained_on))
     return selected
 
 
 def _monounet_columns(results_dir: Path, raw_data_dirs, args):
-    """Every (predictions dir, raw data dir, reader) a MonoUNet architecture directory holds.
+    """Every column a MonoUNet architecture directory holds.
 
     Same arrangement as the nnU-Net trees -- trained elsewhere, no config of ours, selected from the
     layout `<architecture>/<trained on>/fold_N/test/<tested on>/preds` -- except that the
@@ -277,7 +308,7 @@ def _monounet_columns(results_dir: Path, raw_data_dirs, args):
             and matches(prediction_dir.parent.name, args.tested_on)
         ):
             root = dataset_root(raw_data_dirs, prediction_dir.parent.name)
-            selected.append((prediction_dir, root, binary_mask_in_label_space))
+            selected.append(Column(prediction_dir, root, binary_mask_in_label_space))
     return selected
 
 
@@ -294,16 +325,25 @@ def _is_current(metrics_path: Path, prediction_dir: Path):
     )
 
 
-def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=False, prepare=None):
+def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=False, prepare=None,
+            dataset=None):
     """Write `metrics.csv` beside `prediction_dir`; returns a one-line report of what happened.
 
     `prepare(prediction, label)` puts a prediction into the label's space for sources that do not
     already write one there; without it a prediction is measured exactly as it was saved.
+
+    `dataset` names the evaluation set for a source whose path does not, and the metrics then go
+    inside `prediction_dir` rather than beside it -- there is no directory above the predictions
+    belonging to this column alone.
     """
-    output_dir = prediction_dir.parent
-    dataset_dir = resolve_dataset_dir(raw_data_dir, output_dir.name)
+    output_dir = prediction_dir if dataset else prediction_dir.parent
+    # The trail is what sits above the evaluation set: a directory named after the set is not
+    # repeated, while a path that never names it is shown whole.
+    trail = [output_dir, *output_dir.parents[:3]] if dataset else list(output_dir.parents[:4])
+    dataset = dataset or output_dir.name
+    dataset_dir = resolve_dataset_dir(raw_data_dir, dataset)
     metrics_path = output_dir / "metrics.csv"
-    label = "/".join(p.name for p in reversed(output_dir.parents[:4])) + f" -> {output_dir.name}"
+    label = "/".join(p.name for p in reversed(trail)) + f" -> {dataset}"
 
     predictions = index_by_stem(prediction_dir)
     if not predictions:
@@ -390,15 +430,21 @@ def main():
     if not columns:
         searched = ", ".join(str(d) for _, d in foreign) or args.results_dir
         raise RuntimeError(f"No predictions under {searched} for this selection")
-    for prediction_dir, raw_data_dir, prepare in columns:
+    for column in columns:
         print(
-            measure(prediction_dir, raw_data_dir, args.overwrite, args.dry_run, prepare), flush=True
+            measure(column.predictions, column.raw_data_dir, args.overwrite, args.dry_run,
+                    column.prepare, column.dataset),
+            flush=True,
         )
 
     # Agreement between annotators is a property of a dataset rather than of any run, so it is
     # measured once for every evaluation set that ships the same image drawn twice.
     agreement_dir = Path(args.results_dir) / "agreement"
-    for dataset_dir in sorted({resolve_dataset_dir(raw, d.parent.name) for d, raw, _ in columns}):
+    evaluated = {
+        resolve_dataset_dir(c.raw_data_dir, c.dataset or c.predictions.parent.name)
+        for c in columns
+    }
+    for dataset_dir in sorted(evaluated):
         for split in agreement.splits(dataset_dir):
             path = agreement.path_for(agreement_dir, dataset_dir.name, split)
             if path.exists() and not args.overwrite:

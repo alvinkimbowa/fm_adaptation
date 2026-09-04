@@ -120,10 +120,12 @@ def monounet_label(architecture_dir_name):
 
 
 def _add_nnunet_records(records, results_dir):
-    metrics_paths = sorted(
-        Path(results_dir).glob("nnunet/Dataset*/*/fold_*/test/Dataset*/metrics.csv")
-    )
-    if not metrics_paths:
+    results_dir = Path(results_dir)
+    metrics_paths = sorted(results_dir.glob("nnunet/Dataset*/*/fold_*/test/Dataset*/metrics.csv"))
+    # A training dataset shipping no `imagesTs` is held out by fold instead, and nnU-Net writes that
+    # fold's predictions flat into `validation/` rather than under a directory named after the set.
+    own_paths = sorted(results_dir.glob("nnunet/Dataset*/*/fold_*/validation/metrics.csv"))
+    if not metrics_paths and not own_paths:
         raise RuntimeError(f"No nnU-Net metrics found under {results_dir}")
     for metrics_path in metrics_paths:
         fold_dir = metrics_path.parents[2]
@@ -132,6 +134,16 @@ def _add_nnunet_records(records, results_dir):
         tested_on = metrics_path.parent.name
         model = nnunet_label(fold_dir.parent.name)
         records[(model, "", trained_on, fold)][tested_on] = _read_metrics(metrics_path)
+    for metrics_path in own_paths:
+        fold_dir = metrics_path.parents[1]
+        trained_on = fold_dir.parents[1].name
+        # The training dataset is reported once, in a single column: on its own imagesTs when the run
+        # produced one, otherwise on the fold it held out.
+        if (fold_dir / "test" / trained_on / "metrics.csv").exists():
+            continue
+        fold = fold_dir.name.removeprefix("fold_")
+        model = nnunet_label(fold_dir.parent.name)
+        records[(model, "", trained_on, fold)][trained_on] = _read_metrics(metrics_path)
 
 
 def _add_monounet_records(records, results_dir):
