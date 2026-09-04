@@ -69,6 +69,7 @@ configs=(
     convnexts_upernet_ft_ours
     upernet_inj_ft_ours
     upernet_inj_ft_vits_ours
+    upernet_inj_ft_vits_aug_ours
 )
 
 folds=(

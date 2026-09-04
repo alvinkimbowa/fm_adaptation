@@ -70,6 +70,7 @@ configs=(
     convnextt_upernet_ft_ours
     convnexts_upernet_ft_ours
     upernet_inj_ft_vits_ours
+    upernet_inj_ft_vits_aug_ours
     # upernet_inj_ft_vitb_ours
     # upernet_ours
     # upernet_inj_ours
