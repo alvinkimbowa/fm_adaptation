@@ -292,11 +292,15 @@ def _format_count(count):
     return str(count)
 
 
-def _parameter_counts(model, adaptation, trained_on):
+def _parameter_entry(model, adaptation, trained_on):
     """Foundation-model counts depend only on the architecture; baselines vary per dataset."""
-    entry = PARAMETER_COUNTS.get(f"{model}|{adaptation}|{trained_on}") or PARAMETER_COUNTS.get(
+    return PARAMETER_COUNTS.get(f"{model}|{adaptation}|{trained_on}") or PARAMETER_COUNTS.get(
         f"{model}|{adaptation}|"
     )
+
+
+def _parameter_counts(model, adaptation, trained_on):
+    entry = _parameter_entry(model, adaptation, trained_on)
     if not entry:
         return "—", "—"
     return _format_count(entry["total"]), _format_count(entry["trainable"])
@@ -335,15 +339,24 @@ def _model_matches(model, patterns):
     return any(matches(name, patterns) for name in names)
 
 
+# Columns rows can be ordered by, mapped to the field each reads out of `parameter_counts.json`.
+# A name here is what `--sort-by` accepts.
+ROW_SORT_COLUMNS = {"params": "total", "trainable": "trainable"}
+
+
 # Model families, in the order their rows read best: foundation models keyed by their config name,
 # baselines by the label their loader records. A model not named here sorts last.
-def _experiment_order(models, train_datasets, configs, group_by_train_dataset=True):
-    """Sort key putting rows where the selection lists put them.
+def _experiment_order(models, train_datasets, configs, group_by_train_dataset=True, sort_by="",
+                      descending=False):
+    """Sort key putting rows where the selection lists put them, or where `sort_by` does.
 
     Grouped reports put the training set first; ungrouped reports follow the run-directory order of
     model, configuration, then training set. A part whose selection list is empty was not narrowed
-    and has no order of its own; `list_order` falls back to the value itself.
+    and has no order of its own; `list_order` falls back to the value itself. Naming a sort column
+    puts it ahead of all of that within a group, leaving the lists to break ties.
     """
+    field = ROW_SORT_COLUMNS.get(sort_by)
+
     def model_order(model):
         # `--models` is matched leniently, so ordering has to be too: a row labelled
         # `nnU-Net (Res Enc M)` is the one `nnUNet` named and belongs where that entry sits.
@@ -352,15 +365,31 @@ def _experiment_order(models, train_datasets, configs, group_by_train_dataset=Tr
                 return (index, "")
         return (len(models), model)
 
+    def size_order(model, adaptation, trained_on):
+        """Where the sort column puts a row; empty, and so no order at all, when none was named.
+
+        A run whose size was never counted has no place on the scale and sorts after every run that
+        does, whichever way round the sort runs.
+        """
+        if field is None:
+            return ()
+        entry = _parameter_entry(model, adaptation, trained_on)
+        if not entry:
+            return (1, 0)
+        return (0, -entry[field] if descending else entry[field])
+
     def key(item):
         model, adaptation, trained_on, fold = item[0]
+        size = size_order(model, adaptation, trained_on)
         run_order = (
             model_order(model),
             list_order(adaptation, configs),
             fold,
         )
         dataset_order = list_order(trained_on, train_datasets)
-        return (dataset_order, *run_order) if group_by_train_dataset else (*run_order, dataset_order)
+        if group_by_train_dataset:
+            return (dataset_order, size, *run_order)
+        return (size, *run_order, dataset_order)
 
     return key
 
@@ -705,6 +734,19 @@ def main():
         default=0,
         help="Whether to group rows and rank best values within each training dataset (default: 0)",
     )
+    parser.add_argument(
+        "--sort-by",
+        default="",
+        choices=("", *ROW_SORT_COLUMNS),
+        help="Order rows within each group by this column; empty follows the selection lists",
+    )
+    parser.add_argument(
+        "--sort-descending",
+        type=int,
+        choices=(0, 1),
+        default=0,
+        help="Largest first when --sort-by names a column (default: 0)",
+    )
     args = parser.parse_args()
     _load_parameter_counts(args.parameter_counts)
     records = defaultdict(dict)
@@ -770,7 +812,8 @@ def main():
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
     order = _experiment_order(
-        args.models, args.train_datasets, args.configs, bool(args.group_by_train_dataset)
+        args.models, args.train_datasets, args.configs, bool(args.group_by_train_dataset),
+        args.sort_by, bool(args.sort_descending),
     )
     # One page per statistic; `suffix` becomes part of the file name.
     statistics = {"mean_sd": "Mean ± SD", "median_iqr": "Median (Q1–Q3)"}

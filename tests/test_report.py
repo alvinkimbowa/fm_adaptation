@@ -4,8 +4,9 @@ from pathlib import Path
 
 import numpy as np
 
-from fm_adaptation.report import (_best_values, _dataset_family, _experiment_order, _in_domain,
-                                  _model_matches, _pool_folds, nnunet_label)
+from fm_adaptation.report import (PARAMETER_COUNTS, _best_values, _dataset_family,
+                                  _experiment_order, _in_domain, _model_matches, _pool_folds,
+                                  nnunet_label)
 from fixtures import DatasetFixture
 
 
@@ -82,14 +83,25 @@ class ModelMatchTests(unittest.TestCase):
 class RowOrderTests(unittest.TestCase):
     """Rows come out where the selection lists put them."""
 
-    def rows(self, models=(), train_datasets=(), configs=()):
+    def rows(self, models=(), train_datasets=(), configs=(), group=False, sort_by="",
+             descending=False):
         records = {
             ("dinov3", "balanced_aug", "Dataset208_MYKE", "0"): {},
             ("dinov3", "balanced", "Dataset219_MYK", "0"): {},
             ("nnunet", "", "Dataset105_eric", "0"): {},
         }
-        key = _experiment_order(list(models), list(train_datasets), list(configs))
+        key = _experiment_order(list(models), list(train_datasets), list(configs), group, sort_by,
+                                descending)
         return [(k[0], k[2], k[1]) for k, _ in sorted(records.items(), key=key)]
+
+    def sized(self):
+        """Counts for every row, so only the sort column decides the order."""
+        self.addCleanup(PARAMETER_COUNTS.clear)
+        PARAMETER_COUNTS.update({
+            "dinov3|balanced_aug|": {"total": 300, "trainable": 3},
+            "dinov3|balanced|": {"total": 100, "trainable": 1},
+            "nnunet||Dataset105_eric": {"total": 200, "trainable": 2},
+        })
 
     def test_model_is_weighed_first_then_training_set_then_configuration(self):
         self.assertEqual(
@@ -109,6 +121,37 @@ class RowOrderTests(unittest.TestCase):
     def test_a_value_no_list_names_sorts_after_the_ones_named(self):
         rows = self.rows(models=["nnunet"])
         self.assertEqual(rows[0][0], "nnunet")
+
+    def test_a_sort_column_outweighs_the_lists(self):
+        self.sized()
+        self.assertEqual(
+            [row[0:2] for row in self.rows(models=["nnunet", "dinov3"], sort_by="params")],
+            [("dinov3", "Dataset219_MYK"),
+             ("nnunet", "Dataset105_eric"),
+             ("dinov3", "Dataset208_MYKE")],
+        )
+
+    def test_naming_no_column_leaves_the_lists_in_charge(self):
+        self.sized()
+        self.assertEqual(self.rows(models=["nnunet", "dinov3"])[0][0], "nnunet")
+
+    def test_descending_puts_the_largest_first(self):
+        self.sized()
+        self.assertEqual(
+            [row[0:2] for row in self.rows(sort_by="trainable", descending=True)],
+            [("dinov3", "Dataset208_MYKE"),
+             ("nnunet", "Dataset105_eric"),
+             ("dinov3", "Dataset219_MYK")],
+        )
+
+    def test_a_run_of_unknown_size_sorts_last_whichever_way_round(self):
+        self.addCleanup(PARAMETER_COUNTS.clear)
+        PARAMETER_COUNTS.update({"dinov3|balanced_aug|": {"total": 300, "trainable": 3}})
+        for descending in (False, True):
+            with self.subTest(descending=descending):
+                rows = self.rows(models=["nnunet", "dinov3"], sort_by="params",
+                                 descending=descending)
+                self.assertEqual(rows[0], ("dinov3", "Dataset208_MYKE", "balanced_aug"))
 
 
 class PoolFoldTests(unittest.TestCase):

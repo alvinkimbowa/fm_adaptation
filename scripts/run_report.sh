@@ -22,6 +22,12 @@ models=(
 # to sort by model/configuration and rank across all selected training datasets instead.
 group_by_train_dataset="${group_by_train_dataset:-1}"
 
+# Row order within each group: empty follows the lists below -- `models` first, then `configs` and
+# `train_datasets`. `params` or `trainable` orders by network size instead, and `sort_descending=1`
+# puts the largest first. The columns are fixed by `test_datasets` either way.
+sort_by="${sort_by:-params}"
+sort_descending="${sort_descending:-0}"
+
 train_datasets=(
     Dataset072_GE_LQP9
     Dataset073_GE_LE
@@ -62,12 +68,12 @@ configs=(
     # linear
     # linear_finetune
     convnextt_upernet_ft_ours
-    # convnexts_upernet_ft_ours
+    convnexts_upernet_ft_ours
     upernet_inj_ft_vits_ours
     # upernet_inj_ft_vitb_ours
     # upernet_ours
     # upernet_inj_ours
-    # upernet_inj_ft_ours
+    upernet_inj_ft_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f
@@ -123,6 +129,7 @@ report_args=()
 [[ ${#configs[@]} -gt 0 ]] && report_args+=(--configs "${configs[@]}")
 [[ ${#test_datasets[@]} -gt 0 ]] && report_args+=(--test-datasets "${test_datasets[@]}")
 [[ ${#folds[@]} -gt 0 ]] && report_args+=(--folds "${folds[@]}")
+[[ -n "$sort_by" ]] && report_args+=(--sort-by "$sort_by" --sort-descending "$sort_descending")
 
 python -m fm_adaptation.report \
     --results-dir "$results_dir" \
