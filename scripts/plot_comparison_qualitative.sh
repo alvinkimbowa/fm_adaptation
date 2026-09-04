@@ -113,14 +113,14 @@ layout=masks
 # How a mask is painted, in every layout -- a layout only arranges the panels and decides
 # whether a mask sits on black or over the image.
 # contour | overlay | centerline
-gt_style=${gt_style:-contour}
-pred_style=${pred_style:-contour}
+gt_style=${gt_style:-overlay}
+pred_style=${pred_style:-overlay}
 # red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
-gt_color=${gt_color:-white}
-pred_color=${pred_color:-yellow}
+gt_color=${gt_color:-green}
+pred_color=${pred_color:-red}
 gt_width=1
-pred_width=2
-alpha=1
+pred_width=1
+alpha=0.8
 
 crop=auto         # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 
