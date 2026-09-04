@@ -30,18 +30,13 @@ PYTHONPATH=src python -m fm_adaptation.report \
     --nnunet-results-dir ../nnUNet_fork/data/nnUNet_results
 ```
 
-Full fine-tuning starts from the corresponding best linear probe and writes a
-`linear_finetune` run:
+Full fine-tuning is the same command against a config that sets `train_encoder` and
+names the probe run it starts from in `init_from`. These write `linear_finetune` and
+`nonlinear_finetune` runs beside the probes they continue:
 
 ```bash
-PYTHONPATH=src python -m fm_adaptation.finetune --config configs/sam3_finetune_busbra.yaml
-```
-
-Full fine-tuning from the best nonlinear probe uses the corresponding nonlinear model
-and writes a separate `nonlinear_finetune` run:
-
-```bash
-PYTHONPATH=src python -m fm_adaptation.finetune --config configs/sam3_nonlinear_finetune_busbra.yaml
+PYTHONPATH=src python -m fm_adaptation.training --config configs/sam3_linear_finetune_busbra.yaml
+PYTHONPATH=src python -m fm_adaptation.training --config configs/sam3_nonlinear_finetune_busbra.yaml
 ```
 
 Runs are stored under

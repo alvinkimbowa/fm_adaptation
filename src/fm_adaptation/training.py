@@ -358,7 +358,8 @@ def main():
     # like the patchwise case there is nothing stable to cache.
     encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
     _validate_data_mode(cfg, encoder_trains)
-    if cfg.patching is not None or encoder_trains:
+    caches_features = cfg.patching is None and not encoder_trains
+    if not caches_features:
         # Nothing stable to cache -- patches are cut fresh every epoch, and a training adapter changes
         # the features it produces -- so the whole model is what gets stepped through.
         module = model.to(device)
@@ -508,8 +509,9 @@ def main():
     torch.save(weights, cfg.run_dir / "final.pt")
     (cfg.run_dir / "last.pt").unlink(missing_ok=True)
 
-    # The cache only feeds probe training; finetuning and prediction recompute features from the images.
-    if cfg.patching is None and cfg.feature_cache_dir.exists():
+    # The cache is shared by every run on this dataset, so only the runs that fill it may clear it:
+    # finetuning and prediction recompute features from the images and never read it.
+    if caches_features and cfg.feature_cache_dir.exists():
         shutil.rmtree(cfg.feature_cache_dir)
         print(f"removed feature cache {cfg.feature_cache_dir}")
 
