@@ -23,6 +23,7 @@ from .data import (
 from .losses import build_loss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader as _patch_loader
+from .plot_history import render_run
 
 
 def _raw_dataset(cfg, preprocess, subset):
@@ -444,6 +445,10 @@ def main():
                     )
             writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice, learning_rate])
             history_file.flush()
+            try:
+                render_run(cfg.run_dir)
+            except Exception as error:  # a plot must never take a training run down with it
+                print(f"skipped history plot: {error}")
             print(
                 f"epoch={epoch} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
                 f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} lr={learning_rate:.3g}"
