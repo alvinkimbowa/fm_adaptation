@@ -33,10 +33,12 @@ from monai.networks.utils import one_hot
 from PIL import Image
 from tqdm import tqdm
 from skimage.morphology import skeletonize
+from scipy.ndimage import distance_transform_edt
 
 from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, dataset_root, resolve
 from .selection import matches
+from .metrics import CLDICE_TOLERANCES, METRIC_FIELDS
 
 # Paul's widefield strips are 29739x6240 -- 186 megapixels against PIL's 89 megapixel ceiling, which
 # exists to catch malicious files rather than legitimately enormous microscopy.
@@ -65,6 +67,10 @@ class CaseMetrics:
     cldice: float
     hd95: float
     masd: float
+    cldice_1px: float
+    cldice_2px: float
+    cldice_3px: float
+    cldice_4px: float
 
 
 def _nanmean(values) -> float:
@@ -113,32 +119,35 @@ def index_by_stem(directory: Path):
 
 
 def _cldice(prediction, target, num_classes):
-    """Centreline Dice, averaged over the foreground classes.
+    """clDice at Euclidean radii in native pixels, averaged over foreground classes.
 
-    Shit et al.'s clDice: the harmonic mean of how much of the prediction's skeleton lies inside the
-    truth and how much of the truth's skeleton lies inside the prediction. Overlap Dice on a structure
-    two pixels wide is dominated by whether a trace is placed exactly right; clDice asks instead
-    whether the same paths were followed, which is what tracing is judged on.
+    Skeletonize each mask once. Sample distance to the opposite full mask once per direction,
+    then reuse those distances for every radius. Release each full distance map before computing
+    the next: microscopy images can contain hundreds of millions of pixels.
     """
-    scores = []
+    scores = [[] for _ in CLDICE_TOLERANCES]
     for value in range(1, num_classes):
         pred, truth = prediction == value, target == value
         if not pred.any() or not truth.any():
-            # No foreground to trace on one side: undefined rather than zero, and `_nanmean` drops it.
-            scores.append(np.nan)
+            # Preserve the existing undefined-class policy at every tolerance.
+            for values in scores:
+                values.append(np.nan)
             continue
         pred_skeleton, truth_skeleton = skeletonize(pred), skeletonize(truth)
-        precision = (pred_skeleton & truth).sum() / pred_skeleton.sum()
-        sensitivity = (truth_skeleton & pred).sum() / truth_skeleton.sum()
-        scores.append(
-            0.0 if precision + sensitivity == 0
-            else 2 * precision * sensitivity / (precision + sensitivity)
-        )
-    return _nanmean(scores)
+        pred_distances = distance_transform_edt(~truth)[pred_skeleton]
+        truth_distances = distance_transform_edt(~pred)[truth_skeleton]
+        for radius, values in zip(CLDICE_TOLERANCES, scores):
+            precision = (pred_distances <= radius).sum() / pred_distances.size
+            sensitivity = (truth_distances <= radius).sum() / truth_distances.size
+            values.append(
+                0.0 if precision + sensitivity == 0
+                else 2 * precision * sensitivity / (precision + sensitivity)
+            )
+    return tuple(_nanmean(values) for values in scores)
 
 
 def compute_case_metrics(prediction, target, num_classes, ignore_empty=True):
-    """(dice, cldice, hd95, masd) averaged over the foreground classes, background excluded."""
+    """Foreground means: (dice, cldice, hd95, masd, cldice_1px, ..., cldice_4px)."""
     if prediction.shape != target.shape:
         raise ValueError(f"prediction/target shape mismatch: {prediction.shape} vs {target.shape}")
     if num_classes < 2:
@@ -156,7 +165,7 @@ def compute_case_metrics(prediction, target, num_classes, ignore_empty=True):
         prediction, target, include_background=False, symmetric=True
     )
     overlap = tuple(_nanmean(x.detach().cpu().numpy().reshape(-1)) for x in (dice, hd95, masd))
-    return (overlap[0], cldice) + overlap[1:]
+    return (overlap[0], cldice[0]) + overlap[1:] + cldice[1:]
 
 
 def write_csv(rows: list[CaseMetrics], path: Path, add_aggregate_row=True):
@@ -167,21 +176,18 @@ def write_csv(rows: list[CaseMetrics], path: Path, add_aggregate_row=True):
         return "" if value is None or np.isnan(value) else f"{value:.6f}"
 
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["image_id", "dice", "cldice", "hd95", "masd"])
+        writer = csv.DictWriter(f, fieldnames=["image_id", *METRIC_FIELDS])
         writer.writeheader()
         for row in rows:
             writer.writerow({
                 "image_id": row.image_id,
-                "dice": fmt(row.dice), "cldice": fmt(row.cldice),
-                "hd95": fmt(row.hd95), "masd": fmt(row.masd),
+                **{field: fmt(getattr(row, field)) for field in METRIC_FIELDS},
             })
         if add_aggregate_row and rows:
             writer.writerow({
                 "image_id": "MEAN",
-                "dice": fmt(_nanmean(r.dice for r in rows)),
-                "cldice": fmt(_nanmean(r.cldice for r in rows)),
-                "hd95": fmt(_nanmean(r.hd95 for r in rows)),
-                "masd": fmt(_nanmean(r.masd for r in rows)),
+                **{field: fmt(_nanmean(getattr(r, field) for r in rows))
+                   for field in METRIC_FIELDS},
             })
 
 
@@ -316,6 +322,9 @@ def _is_current(metrics_path: Path, prediction_dir: Path):
     """Whether a metrics file already reflects every prediction beside it."""
     if not metrics_path.exists():
         return False
+    with metrics_path.open(newline="") as stream:
+        if not set(METRIC_FIELDS).issubset(next(csv.reader(stream), [])):
+            return False
     predictions = [
         path for path in prediction_dir.iterdir()
         if path.is_file() and path.suffix.lower() in MASK_SUFFIXES

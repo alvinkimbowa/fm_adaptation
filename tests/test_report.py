@@ -312,3 +312,77 @@ class NnunetRecordTests(unittest.TestCase):
     def test_a_tree_holding_neither_split_is_an_error(self):
         with self.assertRaises(RuntimeError):
             self._records()
+
+
+class CldiceReportTests(unittest.TestCase):
+    def test_selection_headers_and_ranking(self):
+        from fm_adaptation.report import _family_metrics, METRICS, _render_table
+        records = {
+            ("A", "", "Dataset301_neurite", "0"): {
+                "Dataset300_neurite": {"cases": np.array(["one"]), "dice": np.array([0.5]),
+                                       "cldice": np.array([0.9]), "cldice_2px": np.array([0.95])}},
+            ("B", "", "Dataset301_neurite", "0"): {
+                "Dataset300_neurite": {"cases": np.array(["one"]), "dice": np.array([0.5]),
+                                       "cldice": np.array([0.8]), "cldice_2px": np.array([1.0])}},
+        }
+        self.assertEqual(_family_metrics("neurites"), ("dice", "cldice"))
+        selected = _family_metrics("neurites", 2)
+        self.assertEqual(selected, ("dice", "cldice_2px"))
+        self.assertEqual(_family_metrics("lesion", 2), ("dice", "masd"))
+        self.assertEqual(METRICS["cldice"].label, "clDice ↑")
+        page = _render_table(records, ["Dataset300_neurite"], "Mean ± SD", lambda k: k, metrics=selected)
+        self.assertIn("clDice@2px ↑", page)
+        self.assertIn("100.00", page)
+        self.assertNotIn("clDice ↑", page)
+        best = _best_values(records, ["Dataset300_neurite"], np.mean, metrics=selected)
+        self.assertEqual(best[("Dataset301_neurite", "Dataset300_neurite", "cldice_2px")],
+                         (1.0, 0.95))
+        self.assertNotIn(("Dataset301_neurite", "Dataset300_neurite", "cldice"), best)
+
+    def test_legacy_and_new_folds_pool_without_substitution(self):
+        from fm_adaptation.report import _read_metrics
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "metrics.csv"
+            path.write_text("image_id,dice,cldice\na,0.5,0.6\n")
+            old = _read_metrics(path)
+            self.assertNotIn("cldice_2px", old)
+            path.write_text("image_id,dice,cldice,cldice_2px\nb,0.5,0.6,0.9\n")
+            new = _read_metrics(path)
+        for first, second in ((old, new), (new, old)):
+            records = {("A", "", "Dataset301_neurite", str(i)): {"Dataset300_neurite": value}
+                       for i, value in enumerate((first, second))}
+            pooled = _pool_folds(records, ["0", "1"])
+            values = next(iter(pooled.values()))["Dataset300_neurite"]["cldice_2px"]
+            self.assertEqual(np.isnan(values).sum(), 1)
+            self.assertEqual(np.nanmean(values), 0.9)
+
+
+    def test_selected_cross_average_and_summary_export(self):
+        import csv
+        from fm_adaptation.report import _best_values, _family_metrics, _write_summary_csv
+        key = ("A", "", "Dataset301_neurite", "0")
+        values = lambda score: {"cases": np.array(["a", "b"]), "dice": np.array([0.5, 0.5]),
+                                "cldice": np.array([0.1, 0.1]),
+                                "cldice_2px": np.array([score, score])}
+        records = {key: {"first": values(0.8), "second": values(1.0)},
+                   ("B", "", "Dataset301_neurite", "0"): {"first": values(0.6), "second": values(0.6)}}
+        best = _best_values(records, ["first", "second"], np.mean,
+                            averaged=["first", "second"], metrics=_family_metrics("neurites", 2))
+        self.assertEqual(best[("Dataset301_neurite", "cross", "cldice_2px")], (0.9, 0.6))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "summary.csv"
+            _write_summary_csv(records, path, lambda k: k)
+            with path.open() as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(float(rows[0]["cldice_2px_mean"]), 0.8)
+            self.assertEqual(float(rows[0]["cldice_mean"]), 0.1)
+
+    def test_invalid_tolerance_rejected_before_loading_data(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from unittest.mock import patch
+        from fm_adaptation.report import main
+        with patch("sys.argv", ["report", "--cldice-tolerance", "5"]), redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as caught:
+                main()
+        self.assertEqual(caught.exception.code, 2)

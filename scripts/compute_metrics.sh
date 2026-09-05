@@ -4,6 +4,8 @@ set -euo pipefail
 # Scores saved predictions against the labels on disk. Prediction and scoring are separate stages:
 # a prediction is written back at the case's native resolution, so scoring needs only two directories
 # of label maps -- no model, no GPU. Run this after `predict`, or on its own to rescore anything.
+# clDice is saved at Euclidean tolerances 0–4 native pixels in one pass. Older CSV schemas
+# are automatically rescored; run_report.sh selects which tolerance to display.
 #
 results_dir=models
 metrics_venv=${metrics_venv:-.venv-mm}
@@ -82,7 +84,7 @@ folds=(0)
 # `tested_on` below which of its evaluation sets to measure. Leave a list empty to skip those trees.
 # A tree with nothing for the current selection says so and is passed over.
 nnunet_dirs=(
-    # ~/GAA/spinal_cord_injury/data/nnUNet_results
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
     ../knee_us_segmentation/data/nnUNet_results
 )
 monounet_dirs=(
@@ -105,13 +107,15 @@ tested_on=(
     # Dataset214_lesion_mohammad_smi_gfap
     # Dataset215_lesion_yvonne_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset300_neurite_yvonne_smi
-    # Dataset301_neurite_yvonne_b2_smi
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
     Dataset070_Clarius_L15
     Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
     Dataset073_GE_LE
+    # The older lesion and traced sets these runs also predicted are left out: they belong to
+    # families no table here shows.
 )
 
 export PYTHONPATH="${PYTHONPATH:-}:src"

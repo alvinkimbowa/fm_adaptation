@@ -14,7 +14,7 @@ import yaml
 from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, family as _dataset_family, resolve, split_cases
 from .naming import MODEL_NAMES, describe_run
-from .metrics import read_case_metrics
+from .metrics import CLDICE_FIELDS, CLDICE_TOLERANCES, read_case_metrics
 from .selection import list_order, matches
 
 
@@ -55,6 +55,8 @@ class Metric:
 METRICS = {
     "dice": Metric("Dice \u2191", 100, higher_is_better=True),
     "cldice": Metric("clDice \u2191", 100, higher_is_better=True),
+    **{field: Metric(f"clDice@{radius}px ↑", 100, higher_is_better=True)
+       for radius, field in zip(CLDICE_TOLERANCES[1:], CLDICE_FIELDS[1:])},
     "masd": Metric("MASD (px) \u2193"),
     "hd95": Metric("HD95 (px) \u2193"),
 }
@@ -65,8 +67,11 @@ FAMILY_METRICS = {"neurites": ("dice", "cldice")}
 DEFAULT_METRICS = ("dice", "masd")
 
 
-def _family_metrics(family):
-    return FAMILY_METRICS.get(family, DEFAULT_METRICS)
+def _family_metrics(family, cldice_tolerance=0):
+    return tuple(
+        CLDICE_FIELDS[cldice_tolerance] if metric == "cldice" else metric
+        for metric in FAMILY_METRICS.get(family, DEFAULT_METRICS)
+    )
 
 
 # How each plans variant is written in the tables, where the directory name reads badly.
@@ -190,9 +195,13 @@ def _pool_folds(records, folds):
             if tested_on not in target:
                 target[tested_on] = metrics
                 continue
+            previous = target[tested_on]
             target[tested_on] = {
-                name: np.concatenate([target[tested_on][name], values])
-                for name, values in metrics.items()
+                name: np.concatenate([
+                    previous.get(name, np.full(len(previous["cases"]), np.nan)),
+                    metrics.get(name, np.full(len(metrics["cases"]), np.nan)),
+                ])
+                for name in previous.keys() | metrics.keys()
             }
     return pooled
 
@@ -680,6 +689,8 @@ def _write_summary_csv(records, path, order):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="models")
+    parser.add_argument("--cldice-tolerance", type=int, choices=CLDICE_TOLERANCES, default=0,
+                        help="clDice tolerance in native pixels (default: 0)")
     parser.add_argument("--nnunet-results-dir", nargs="*", default=[])
     parser.add_argument(
         "--monounet-results-dir",
@@ -860,7 +871,7 @@ def main():
                     statistic,
                     order,
                     in_domain,
-                    _family_metrics(family),
+                    _family_metrics(family, args.cldice_tolerance),
                     bool(args.group_by_train_dataset),
                 )
                 + "".join(

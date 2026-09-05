@@ -209,7 +209,8 @@ class NnunetColumnTests(unittest.TestCase):
             predictions.mkdir()
             (predictions / "case.tif").write_bytes(b"")
             metrics = self.root / "metrics.csv"
-            metrics.write_text("image_id,dice,hd95,masd\n")
+            from fm_adaptation.metrics import METRIC_FIELDS
+            metrics.write_text(",".join(("image_id", *METRIC_FIELDS)) + "\n")
             self.assertTrue(_is_current(metrics, predictions))
 
 
@@ -293,3 +294,68 @@ class MaskNormalisationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@needs_scoring
+class CldiceToleranceTests(unittest.TestCase):
+    def test_offsets_and_euclidean_diagonal(self):
+        from fm_adaptation.compute_metrics import _cldice
+        truth = np.zeros((20, 20), dtype=np.uint8)
+        truth[5, 5] = 1
+        for offset in range(6):
+            pred = np.zeros_like(truth)
+            pred[5, 5 + offset] = 1
+            expected = tuple(float(r >= offset) for r in range(5))
+            self.assertEqual(_cldice(pred, truth, 2), expected)
+            self.assertEqual(_cldice(truth, pred, 2), expected)
+        pred = np.zeros_like(truth)
+        pred[6, 6] = 1
+        self.assertEqual(_cldice(pred, truth, 2), (0, 0, 1, 1, 1))
+
+    def test_zero_matches_original_and_work_is_reused(self):
+        from unittest.mock import patch
+        import fm_adaptation.compute_metrics as scoring
+        rng = np.random.default_rng(42)
+        pred, truth = rng.random((2, 30, 30)) > 0.7
+        ps, ts = scoring.skeletonize(pred), scoring.skeletonize(truth)
+        precision = (ps & truth).sum() / ps.sum()
+        sensitivity = (ts & pred).sum() / ts.sum()
+        expected = 2 * precision * sensitivity / (precision + sensitivity)
+        with patch.object(scoring, "skeletonize", wraps=scoring.skeletonize) as skeleton, \
+             patch.object(scoring, "distance_transform_edt", wraps=scoring.distance_transform_edt) as distance:
+            scores = scoring._cldice(pred, truth, 2)
+        self.assertEqual(scores[0], expected)
+        self.assertTrue(np.all(np.diff(scores) >= 0))
+        self.assertEqual(skeleton.call_count, 2)
+        self.assertEqual(distance.call_count, 2)
+
+    def test_multiclass_and_empty_policy(self):
+        from fm_adaptation.compute_metrics import _cldice
+        truth = np.zeros((20, 20), dtype=np.uint8)
+        truth[3, 3], truth[12, 12] = 1, 2
+        pred = np.zeros_like(truth)
+        pred[3, 3], pred[12, 14] = 1, 2
+        self.assertEqual(_cldice(pred, truth, 4), (0.5, 0.5, 1, 1, 1))
+        self.assertTrue(np.isnan(_cldice(np.zeros_like(truth), truth, 3)).all())
+
+    def test_csv_roundtrip_and_schema_upgrade(self):
+        import csv
+        from fm_adaptation.compute_metrics import CaseMetrics, compute_case_metrics, write_csv, _is_current
+        mask = np.zeros((10, 10), dtype=np.uint8)
+        mask[3:7, 5] = 1
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "case.png").touch()
+            path = root / "metrics.csv"
+            path.write_text("image_id,dice,cldice,hd95,masd\ncase,1,1,0,0\n")
+            self.assertFalse(_is_current(path, root))
+            row = CaseMetrics("case", *compute_case_metrics(mask, mask, 2))
+            write_csv([row], path)
+            self.assertTrue(_is_current(path, root))
+            values = read_case_metrics(path)[0]
+            for key in ("cldice", "cldice_1px", "cldice_2px", "cldice_3px", "cldice_4px"):
+                self.assertEqual(values[key], 1.0)
+            with path.open() as stream:
+                aggregate = list(csv.DictReader(stream))[-1]
+            self.assertEqual(aggregate["image_id"], "MEAN")
+            self.assertEqual(float(aggregate["cldice_4px"]), 1.0)

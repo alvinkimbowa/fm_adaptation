@@ -3,6 +3,9 @@ set -euo pipefail
 
 results_dir=models
 
+# clDice radius in native pixels (0–4). Zero keeps the plain clDice header.
+cldice_tolerance=${cldice_tolerance:-0}
+
 # Which rows to tabulate. The four lists below name the parts a run directory is built from --
 # <model>/<train dataset>/<configuration>/fold_<n> -- so comment a line out to drop the rows that
 # carry it. An empty list keeps every value that part can take. Entries match exactly, as a glob or
@@ -124,7 +127,7 @@ fi
 export PATH=~/UltrAi/projects/sam3/.venv/bin:$PATH
 
 # `set -u` makes an empty array expansion an error, so each selection is only passed when it has one.
-report_args=()
+report_args=(--cldice-tolerance "$cldice_tolerance")
 [[ ${#models[@]} -gt 0 ]] && report_args+=(--models "${models[@]}")
 [[ ${#train_datasets[@]} -gt 0 ]] && report_args+=(--train-datasets "${train_datasets[@]}")
 [[ ${#configs[@]} -gt 0 ]] && report_args+=(--configs "${configs[@]}")
