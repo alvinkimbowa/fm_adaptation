@@ -4,7 +4,7 @@ set -euo pipefail
 results_dir=models
 
 # clDice radius in native pixels (0–4). Zero keeps the plain clDice header.
-cldice_tolerance=${cldice_tolerance:-0}
+cldice_tolerance=${cldice_tolerance:-3}
 
 # Which rows to tabulate. The four lists below name the parts a run directory is built from --
 # <model>/<train dataset>/<configuration>/fold_<n> -- so comment a line out to drop the rows that
@@ -23,7 +23,7 @@ models=(
 
 # Group rows by their training dataset and rank best/second-best values within each group. Set to 0
 # to sort by model/configuration and rank across all selected training datasets instead.
-group_by_train_dataset="${group_by_train_dataset:-1}"
+group_by_train_dataset="${group_by_train_dataset:-0}"
 
 # Row order within each group: empty follows the lists below -- `models` first, then `configs` and
 # `train_datasets`. `params` or `trainable` orders by network size instead, and `sort_descending=1`
@@ -85,7 +85,6 @@ test_datasets=(
     Dataset301_neurite_yvonne_b2_smi
     Dataset300_neurite_yvonne_smi
     Dataset302_neurite_yvonne_b2_smi_1px
-    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 
