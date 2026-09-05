@@ -4,7 +4,7 @@ set -euo pipefail
 results_dir=models
 
 # clDice radius in native pixels (0–4). Zero keeps the plain clDice header.
-cldice_tolerance=${cldice_tolerance:-3}
+cldice_tolerance=${cldice_tolerance:-4}
 
 # Which rows to tabulate. The four lists below name the parts a run directory is built from --
 # <model>/<train dataset>/<configuration>/fold_<n> -- so comment a line out to drop the rows that
@@ -28,7 +28,7 @@ group_by_train_dataset="${group_by_train_dataset:-0}"
 # Row order within each group: empty follows the lists below -- `models` first, then `configs` and
 # `train_datasets`. `params` or `trainable` orders by network size instead, and `sort_descending=1`
 # puts the largest first. The columns are fixed by `test_datasets` either way.
-sort_by="${sort_by:-params}"
+sort_by="${sort_by:-}"
 sort_descending="${sort_descending:-0}"
 
 train_datasets=(
@@ -123,14 +123,14 @@ configs=(
     # upernet_inj_ft_balanced_ours
     # upernet_inj_ft_balanced_dropany_ours
     upernet_inj_ft_balanced_aug_ours
-    upernet_inj_ft_balanced_dropsmi_aug_ours
+    # upernet_inj_ft_balanced_dropsmi_aug_ours
     # upernet_inj_ft_balanced_aug_gfap_ours
-    convnextt_upernet_ft_aug_p512_skelrec_ours
-    convnextt_upernet_ft_aug_p512_red_skelrec_ours
-    convnextt_upernet_ft_aug_p512_red_distw_ours
-    convnextt_upernet_ft_aug_p512_red_skelrec_distw_ours
-    convnextt_upernet_ft_aug_p512_red_distw10_ours
-    convnextt_upernet_ft_aug_p512_red_skelrec_distw10_ours
+    # convnextt_upernet_ft_aug_p512_skelrec_ours
+    # convnextt_upernet_ft_aug_p512_red_skelrec_ours
+    # convnextt_upernet_ft_aug_p512_red_distw_ours
+    # convnextt_upernet_ft_aug_p512_red_skelrec_distw_ours
+    # convnextt_upernet_ft_aug_p512_red_distw10_ours
+    # convnextt_upernet_ft_aug_p512_red_skelrec_distw10_ours
     convnextt_upernet_ft_aug_p512_red_ours
 )
 
