@@ -14,7 +14,7 @@ cldice_tolerance=${cldice_tolerance:-0}
 # plans, `nnUNetResEncM` the residual-encoder preset, and `nnUNet*` every plans at once.
 models=(
     nnUNet
-    # nnUNetResEncM
+    nnUNetResEncM
     XTinyUNet     # its own model, so no `nnUNet` entry above selects it
     MonoUNet
     sam3
@@ -32,9 +32,9 @@ sort_by="${sort_by:-params}"
 sort_descending="${sort_descending:-0}"
 
 train_datasets=(
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
-    Dataset070_Clarius_L15
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    # Dataset070_Clarius_L15
     # Dataset071_Sonix-Touch
     # Dataset080_BUSBRA_GE_Logiq_5
     # Dataset082_BUSBRA_Toshiba_Aplio_300
@@ -44,6 +44,20 @@ train_datasets=(
     # Dataset089_Echo_CardiacUDA
     # Dataset090_Echo_EchoCP
     # Dataset093_Echo_CardiacNet
+    Dataset105_lesion_eric_gfap_resized
+    Dataset218_lesion_eric_smi_gfap
+    Dataset207_lesion_katie_contusion_smi_gfap
+    Dataset208_lesion_MYKE_smi_gfap
+    Dataset209_lesion_MYE_smi_gfap
+    Dataset213_lesion_KE_smi_gfap
+    Dataset217_lesion_MY_smi_gfap
+    Dataset219_lesion_MYK_smi_gfap
+    Dataset214_lesion_mohammad_smi_gfap
+    Dataset215_lesion_yvonne_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -51,18 +65,27 @@ train_datasets=(
 # selected. A cell whose set shares images with the row's training set is greyed and left out of both
 # the average and the best-value marking.
 test_datasets=(
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
-    Dataset070_Clarius_L15
-    # Dataset071_Sonix-Touch
-    Dataset080_BUSBRA_GE_Logiq_5
-    Dataset082_BUSBRA_Toshiba_Aplio_300
-    Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
-    Dataset089_Echo_CardiacUDA
-    Dataset090_Echo_EchoCP
-    Dataset093_Echo_CardiacNet
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    # Dataset070_Clarius_L15
+    # # Dataset071_Sonix-Touch
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    # Dataset089_Echo_CardiacUDA
+    # Dataset090_Echo_EchoCP
+    # Dataset093_Echo_CardiacNet
+    Dataset207_lesion_katie_contusion_smi_gfap
+    Dataset218_lesion_eric_smi_gfap
+    Dataset214_lesion_mohammad_smi_gfap
+    Dataset215_lesion_yvonne_smi_gfap
+    # Dataset211_lesion_paul_widefield_smi_gfap
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset300_neurite_yvonne_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 
@@ -77,7 +100,7 @@ configs=(
     # upernet_inj_ft_vitb_ours
     # upernet_ours
     # upernet_inj_ours
-    # upernet_inj_ft_ours
+    upernet_inj_ft_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f
@@ -91,6 +114,24 @@ configs=(
     # convnextb_upernet_aug_p512_ours
     # convnextt_upernet_aug_p512_ours
     # convnextt_upernet_ft_aug_p512_ours
+    # nonlinear
+    # nonlinear_finetune
+    # upernet
+    # upernet_inj
+    # upernet_inj_ft_dropsmi_ours
+    # upernet_inj_ft_dropany_ours
+    # upernet_inj_ft_balanced_ours
+    # upernet_inj_ft_balanced_dropany_ours
+    upernet_inj_ft_balanced_aug_ours
+    upernet_inj_ft_balanced_dropsmi_aug_ours
+    # upernet_inj_ft_balanced_aug_gfap_ours
+    convnextt_upernet_ft_aug_p512_skelrec_ours
+    convnextt_upernet_ft_aug_p512_red_skelrec_ours
+    convnextt_upernet_ft_aug_p512_red_distw_ours
+    convnextt_upernet_ft_aug_p512_red_skelrec_distw_ours
+    convnextt_upernet_ft_aug_p512_red_distw10_ours
+    convnextt_upernet_ft_aug_p512_red_skelrec_distw10_ours
+    convnextt_upernet_ft_aug_p512_red_ours
 )
 
 # One fold gives that fold's row; several are pooled into a single row, labelled with the folds each

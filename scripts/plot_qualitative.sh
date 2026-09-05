@@ -25,7 +25,7 @@ models=(
 results_dirs=(
     models
     ../knee_us_segmentation/data/nnUNet_results
-    # ~/GAA/spinal_cord_injury/data/nnUNet_results
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
 raw_data_dir=../knee_us_segmentation/data/nnUNet_raw
 
@@ -38,10 +38,10 @@ train_datasets=(
     # Dataset217_lesion_MY_smi_gfap
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset301_neurite_yvonne_b2_smi
-    # Dataset302_neurite_yvonne_b2_smi_1px
-    # Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
     Dataset070_Clarius_L15
     Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
@@ -51,6 +51,10 @@ train_datasets=(
 # Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
 # never saw costs nothing.
 test_datasets=(
+    Dataset070_Clarius_L15
+    Dataset071_Sonix-Touch
+    Dataset072_GE_LQP9
+    Dataset073_GE_LE
     # Dataset207_lesion_katie_contusion_smi_gfap
     # Dataset208_lesion_MYKE_smi_gfap
     # Dataset210_lesion_interrater_MY_smi_gfap
@@ -61,15 +65,11 @@ test_datasets=(
     # Dataset218_lesion_eric_smi_gfap
     # Dataset219_lesion_MYK_smi_gfap
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset300_neurite_yvonne_smi
-    # Dataset301_neurite_yvonne_b2_smi
-    # Dataset302_neurite_yvonne_b2_smi_1px
-    # Dataset303_neurite_yvonne_in_vitro_smi
-    # Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
-    Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
+    Dataset300_neurite_yvonne_smi
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset303_neurite_yvonne_in_vitro_smi
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 configs=(
@@ -78,19 +78,19 @@ configs=(
     # upernet
     # upernet_inj
     # upernet_inj_ft_ours
-    # upernet_inj_ft_p512_ours
+    upernet_inj_ft_p512_ours
     # upernet_inj_ft_balanced_aug_gfap_ours
     # m2f
-    # upernet_inj_ft_p512_ours
-    # convnext_upernet_p512_ours
-    # convnext_upernet_ft_p512_ours
+    upernet_inj_ft_p512_ours
+    convnext_upernet_p512_ours
+    convnext_upernet_ft_p512_ours
     # convnext_upernet_ft_init_p512_ours
-    # convnext_upernet_ft_aug_p512_ours
-    # convnextb_upernet_ft_aug_p512_ours
-    # convnexts_upernet_ft_aug_p512_ours
-    # convnextt_upernet_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_red_ours
+    convnext_upernet_ft_aug_p512_ours
+    convnextb_upernet_ft_aug_p512_ours
+    convnexts_upernet_ft_aug_p512_ours
+    convnextt_upernet_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_red_ours
     convnextt_upernet_ft_ours
     convnexts_upernet_ft_ours
     upernet_inj_ft_ours

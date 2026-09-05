@@ -21,10 +21,22 @@ models=(
 )
 
 train_datasets=(
-    Dataset070_Clarius_L15
+    # Dataset070_Clarius_L15
     # Dataset071_Sonix-Touch
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    Dataset105_lesion_eric_gfap_resized
+    Dataset207_lesion_katie_contusion_smi_gfap
+    Dataset208_lesion_MYKE_smi_gfap
+    Dataset209_lesion_MYE_smi_gfap
+    Dataset213_lesion_KE_smi_gfap
+    Dataset217_lesion_MY_smi_gfap
+    Dataset218_lesion_eric_smi_gfap
+    Dataset219_lesion_MYK_smi_gfap
+    Dataset203_neurites_yvonne_smi_2px_scaleaug
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 # Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.
@@ -35,15 +47,15 @@ test_datasets=(
     # Dataset211_lesion_paul_widefield_smi_gfap
     # Dataset214_lesion_mohammad_smi_gfap
     # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset301_neurite_yvonne_b2_smi
-    # Dataset300_neurite_yvonne_smi
-    # Dataset302_neurite_yvonne_b2_smi_1px
-    # Dataset303_neurite_yvonne_in_vitro_smi
-    # Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
-    Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
+    # Dataset070_Clarius_L15
+    # Dataset071_Sonix-Touch
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    Dataset301_neurite_yvonne_b2_smi
+    Dataset300_neurite_yvonne_smi
+    Dataset302_neurite_yvonne_b2_smi_1px
+    Dataset303_neurite_yvonne_in_vitro_smi
+    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
 )
 
 configs=(
@@ -62,8 +74,8 @@ configs=(
     # convnexts_upernet_ft_aug_p512_ours
     # convnextb_upernet_aug_p512_ours
     # convnextt_upernet_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_red_ours
+    convnextt_upernet_ft_aug_p512_ours
+    convnextt_upernet_ft_aug_p512_red_ours
     nnUNetTrainer__nnUNetResEncUNetMPlans__2d
     convnextt_upernet_ft_ours
     convnexts_upernet_ft_ours
@@ -87,7 +99,7 @@ group_by=${group_by:-train_dataset}
 results_dirs=(
     models
     ../knee_us_segmentation/data/nnUNet_results
-    # ~/GAA/spinal_cord_injury/data/nnUNet_results
+    ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
 raw_data_dir=../knee_us_segmentation/data/nnUNet_raw
 
