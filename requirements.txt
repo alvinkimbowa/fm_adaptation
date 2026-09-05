@@ -6,6 +6,7 @@ numpy
 opencv-python
 PyYAML
 scipy
+scikit-image
 tqdm
 matplotlib
 pandas

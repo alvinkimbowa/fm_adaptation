@@ -314,7 +314,7 @@ class CldiceToleranceTests(unittest.TestCase):
 
     def test_zero_matches_original_and_work_is_reused(self):
         from unittest.mock import patch
-        import fm_adaptation.compute_metrics as scoring
+        import fm_adaptation.metrics as scoring
         rng = np.random.default_rng(42)
         pred, truth = rng.random((2, 30, 30)) > 0.7
         ps, ts = scoring.skeletonize(pred), scoring.skeletonize(truth)
@@ -323,7 +323,7 @@ class CldiceToleranceTests(unittest.TestCase):
         expected = 2 * precision * sensitivity / (precision + sensitivity)
         with patch.object(scoring, "skeletonize", wraps=scoring.skeletonize) as skeleton, \
              patch.object(scoring, "distance_transform_edt", wraps=scoring.distance_transform_edt) as distance:
-            scores = scoring._cldice(pred, truth, 2)
+            scores = scoring.cldice(pred, truth, 2)
         self.assertEqual(scores[0], expected)
         self.assertTrue(np.all(np.diff(scores) >= 0))
         self.assertEqual(skeleton.call_count, 2)

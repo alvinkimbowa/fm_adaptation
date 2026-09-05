@@ -11,7 +11,8 @@ import numpy as np
 import yaml
 
 
-from . import agreement
+from . import agreement, neurite_agreement
+from .neurite_annotations import ANNOTATORS, identity as annotation_identity, is_target_dataset
 from .datasets import dataset_dir as resolve_dataset_dir, family as _dataset_family, resolve, split_cases
 from .naming import MODEL_NAMES, describe_run
 from .metrics import CLDICE_FIELDS, CLDICE_TOLERANCES, read_case_metrics
@@ -536,6 +537,7 @@ def _render_table(
     in_domain=(),
     metrics=DEFAULT_METRICS,
     group_by_train_dataset=True,
+    show_counts=False,
 ):
     fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
     reducer = np.mean if statistic == "Mean ± SD" else np.median
@@ -614,7 +616,8 @@ def _render_table(
                 value = _reduce(values[metric], reducer)
                 parts.append(
                     _metric_cell(
-                        fmt(values[metric], METRICS[metric].scale),
+                        fmt(values[metric], METRICS[metric].scale)
+                        + (f"<div class='annotation-count'>n={len(values['cases'])}</div>" if show_counts else ""),
                         value,
                         best.get((ranking_group, dataset, metric)),
                         separator=separator,
@@ -637,6 +640,91 @@ def _render_table(
                 )
         parts.append("</tr>")
     parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def _interactive_neurite_table(records, datasets, statistic, order, in_domain, metrics, grouped):
+    """Embed model measurements once per page; human agreement lives outside this wrapper."""
+    rows = []
+    for key, results in sorted(records.items(), key=order):
+        serialized = {}
+        for dataset in set(datasets) | {key[2]}:
+            if dataset not in results:
+                continue
+            values = results[dataset]
+            identities = [annotation_identity(case) if is_target_dataset(dataset) else None
+                          for case in values["cases"]]
+            serialized[dataset] = {
+                "identities": identities,
+                "metrics": {metric: [float(v) if np.isfinite(v) else None for v in values[metric]]
+                            for metric in metrics if metric in values},
+            }
+        rows.append({"trainedOn": key[2], "results": serialized})
+    sources = {who[0] for row in rows for values in row["results"].values()
+               for who in values["identities"] if who}
+    controls = "".join(
+        f"<fieldset><legend>{html.escape(source)}</legend>"
+        + "".join(f'<label><input type="checkbox" data-source="{source}" value="{person}" checked> '
+                  f'{person}</label>' for person in ANNOTATORS[source]) + "</fieldset>"
+        for source in ANNOTATORS if source in sources
+    )
+    payload = {"rows": rows, "datasets": [OWN_TEST, *datasets], "ownTest": OWN_TEST,
+               "inDomain": [list(pair) for pair in in_domain], "statistic": statistic,
+               "grouped": grouped,
+               "metrics": [{"name": name, "scale": METRICS[name].scale,
+                            "higher": METRICS[name].higher_is_better} for name in metrics]}
+    data = json.dumps(payload, allow_nan=False).replace("<", "\\u003c").replace("&", "\\u0026")
+    return (
+        '<div class="neurite-model-report"><div class="annotator-controls">' + controls + '</div>'
+        '<p class="selection-status" role="status" aria-live="polite">All annotators selected.</p>'
+        '<p class="undef">Selections affect model comparisons only. n counts annotations, including '
+        'pooled folds and scale variants. The generated CSV contains all annotators. '
+        'Selections reset on reload.</p><noscript>Enable JavaScript to filter annotators; '
+        'the table below includes all annotators.</noscript>'
+        + _render_table(records, datasets, statistic, order, in_domain, metrics, grouped, show_counts=True)
+        + f'<script type="application/json" class="neurite-data">{data}</script></div>'
+    )
+
+
+def _render_neurite_agreement(datasets, results_dir, statistic, tolerance):
+    metric = CLDICE_FIELDS[tolerance]
+    fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
+    parts = ["<div class='neurite-agreement'><h2>Neurite interrater agreement</h2>"
+             "<p class='undef'>All human pairs, independent of the annotator checkboxes. "
+             "Native images only; scale variants are excluded.</p>"]
+    instruction = ("Generate or update this cache with python -m fm_adaptation.neurite_agreement "
+                   "--raw-data-dir /path/to/nnUNet_raw --results-dir " + str(results_dir))
+    for dataset in datasets:
+        path = neurite_agreement.path_for(results_dir, dataset)
+        parts.append(f"<h3>{html.escape(_dataset_label(dataset))}</h3>")
+        if not path.exists():
+            parts.append(f"<p class='undef'>Agreement not cached. {html.escape(instruction)}</p>")
+            continue
+        rows = neurite_agreement.read(path)
+        if not rows:
+            parts.append("<p>No paired annotations available.</p>")
+            continue
+        parts.append("<table><thead><tr><th>Annotators</th><th>Image</th>"
+                     f"<th>Dice ↑</th><th>{METRICS[metric].label}</th></tr></thead><tbody>")
+        groups = defaultdict(list)
+        for row in rows:
+            groups[(row["annotator_a"], row["annotator_b"])].append(row)
+        for pair, entries in sorted(groups.items()):
+            for row in entries:
+                parts.append(f"<tr><td>{html.escape(' | '.join(pair))}</td>"
+                             f"<td>{html.escape(_shorten_name(row['image']))}</td>")
+                for field in ("dice", metric):
+                    value = row.get(field, float("nan"))
+                    parts.append(f"<td>{value * 100:.2f}</td>" if np.isfinite(value) else "<td>—</td>")
+                parts.append("</tr>")
+            parts.append(f"<tr><td></td><td><strong>{len(entries)} images</strong></td>")
+            for field in ("dice", metric):
+                parts.append(f"<td><strong>{fmt([r.get(field, float('nan')) for r in entries], 100)}</strong></td>")
+            parts.append("</tr>")
+        parts.append("</tbody></table>")
+        if any(metric not in row for row in rows):
+            parts.append(f"<p class='undef'>Selected clDice tolerance not cached. {html.escape(instruction)}</p>")
+    parts.append("</div>")
     return "".join(parts)
 
 
@@ -787,8 +875,10 @@ def main():
     for results_dir in args.monounet_results_dir:
         _add_monounet_records(records, results_dir)
     if args.nnunet_raw_data_dir is not None:
-        for _, _, trained_on, _ in records:
+        for (_, _, trained_on, _), results in records.items():
             raw_dirs.setdefault(trained_on, Path(args.nnunet_raw_data_dir).expanduser())
+            for dataset in results:
+                raw_dirs.setdefault(dataset, Path(args.nnunet_raw_data_dir).expanduser())
     records = {
         key: results
         for key, results in records.items()
@@ -821,6 +911,11 @@ def main():
     tbody td:first-child,tbody td:nth-child(4),
     thead tr:first-child th:first-child,thead tr:first-child th:nth-child(4){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
+    .annotator-controls{display:flex;gap:16px;flex-wrap:wrap}.annotator-controls fieldset{border:1px solid #555;border-radius:6px}
+    .annotator-controls label{display:inline-flex;align-items:center;gap:4px;margin:5px 14px 5px 0;cursor:pointer}
+    .annotator-controls input{accent-color:#80c9ef;width:16px;height:16px}.annotator-controls input:focus-visible{outline:2px solid #80c9ef;outline-offset:3px}
+    .selection-status{font-size:13px}.annotation-count{color:#888;font-size:11px;font-weight:400}.reference .annotation-count{color:inherit}
+    .neurite-model-report{overflow-x:auto}.neurite-agreement{margin-top:40px}
     """
     order = _experiment_order(
         args.models, args.train_datasets, args.configs, bool(args.group_by_train_dataset),
@@ -863,17 +958,27 @@ def main():
                     measured[dataset] = (rows, unpaired)
 
         for suffix, statistic in statistics.items():
-            bodies[suffix] += (
-                f"<section><h1>{html.escape(family)}</h1>"
-                + _render_table(
-                    family_records,
-                    family_datasets,
-                    statistic,
-                    order,
-                    in_domain,
-                    _family_metrics(family, args.cldice_tolerance),
+            metrics = _family_metrics(family, args.cldice_tolerance)
+            if family == "neurites":
+                model_table = _interactive_neurite_table(
+                    family_records, family_datasets, statistic, order, in_domain, metrics,
                     bool(args.group_by_train_dataset),
                 )
+                # Source identities decide which datasets have a workbook-backed human reference.
+                agreement_datasets = sorted({dataset for key, results in family_records.items()
+                    for dataset in set(family_datasets) | {key[2]} if dataset in results
+                    if is_target_dataset(dataset)})
+                model_table += _render_neurite_agreement(
+                    agreement_datasets, args.results_dir, statistic, args.cldice_tolerance,
+                )
+            else:
+                model_table = _render_table(
+                    family_records, family_datasets, statistic, order, in_domain, metrics,
+                    bool(args.group_by_train_dataset),
+                )
+            bodies[suffix] += (
+                f"<section><h1>{html.escape(family)}</h1>"
+                + model_table
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
                     f"{html.escape(_dataset_label(dataset))}</h1>"
@@ -893,7 +998,11 @@ def main():
         if not page_body:
             continue
         path = output.with_name(f"{output.stem}_{suffix}{output.suffix}")
-        path.write_text(f"<!doctype html><meta charset='utf-8'><style>{style}</style>{page_body}")
+        script = (Path(__file__).parent / "assets/neurite_report.js").read_text() if "neurites" in families else ""
+        path.write_text(f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+                       f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                       f"<title>Cross-dataset report — {statistics[suffix]}</title><style>{style}</style>"
+                       f"</head><body>{page_body}<script>{script}</script></body></html>")
         print(f"Wrote {path}")
 
 

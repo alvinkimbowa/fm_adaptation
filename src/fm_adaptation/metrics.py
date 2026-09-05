@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import binary_erosion, distance_transform_edt
+from skimage.morphology import skeletonize
 
 
 @dataclass(frozen=True)
@@ -78,3 +79,33 @@ def read_case_metrics(path: Path) -> list[dict]:
             values = dict.fromkeys(values, float("nan"))
         out.append({**row, **values, "case_id": case_id})
     return out
+
+
+def cldice(prediction, target, num_classes):
+    """clDice at Euclidean radii in native pixels, averaged over foreground classes.
+
+    Skeletonize each mask once. Sample distance to the opposite full mask once per direction,
+    then reuse those distances for every radius. Release each full distance map before computing
+    the next: microscopy images can contain hundreds of millions of pixels.
+    """
+    scores = [[] for _ in CLDICE_TOLERANCES]
+    for value in range(1, num_classes):
+        pred, truth = prediction == value, target == value
+        if not pred.any() or not truth.any():
+            # Preserve the existing undefined-class policy at every tolerance.
+            for values in scores:
+                values.append(np.nan)
+            continue
+        pred_skeleton, truth_skeleton = skeletonize(pred), skeletonize(truth)
+        pred_distances = distance_transform_edt(~truth)[pred_skeleton]
+        truth_distances = distance_transform_edt(~pred)[truth_skeleton]
+        for radius, values in zip(CLDICE_TOLERANCES, scores):
+            precision = (pred_distances <= radius).sum() / pred_distances.size
+            sensitivity = (truth_distances <= radius).sum() / truth_distances.size
+            values.append(
+                0.0 if precision + sensitivity == 0
+                else 2 * precision * sensitivity / (precision + sensitivity)
+            )
+    return tuple(float(np.mean(finite)) if len(finite) else float("nan")
+                 for values in scores
+                 for finite in [np.asarray(values)[np.isfinite(values)]])

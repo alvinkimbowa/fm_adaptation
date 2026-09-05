@@ -1,0 +1,40 @@
+{
+  "Yvonne": {
+    "workbook": "/home/ultrai/GAA/spinal_cord_injury/data/raw_data/Yvonne/Manual Tracing Image List.xlsx",
+    "sheet": "Sheet1",
+    "cases": {
+      "Cond-Lesion-GelMa-rods-IKVAV-rat-11-slide1-section-8": "Coco",
+      "GelMa-cervical-12-slide-1-section-8_rater1": "Coco",
+      "GelMa-cervical-12-slide-1-section-8_rater2": "Yvonne",
+      "Cond-Lesion-GelMa-rods-Rat-1-slide11-section-1": "Yvonne",
+      "Cond-Lesion-GelMa-rods-Rat-2-slide11-section-1": "Yvonne",
+      "Cond-Lesion-GelMa-rods-Rat-3-slide11-section-3": "Yvonne",
+      "Cond-Lesion-GelMa-rods-Rat-10-slide1-section-8": "Coco",
+      "Cond-Lesion-GelMa-rods-Rat-13-slide1-section-6_rater1": "Coco",
+      "Cond-Lesion-GelMa-rods-Rat-13-slide1-section-6_rater2": "Tanya",
+      "Cond-Lesion-GelMa-rods-Rat-16-slide1-section-7": "Coco",
+      "GelMa-cervical-12-slide-11-section-1": "Tanya",
+      "Gelma-Nov-24-animal2-slide11-sect2-ROD-aligned_rater1": "Yvonne",
+      "Gelma-Nov-24-animal2-slide11-sect2-ROD-aligned_rater2": "Tanya"
+    }
+  },
+  "Yvonne_b2": {
+    "workbook": "/home/ultrai/GAA/spinal_cord_injury/data/raw_data/Yvonne_2026-05-16/Manual Tracing Samples-2026.xlsx",
+    "sheet": "Sheet1",
+    "cases": {
+      "Cond-Lesion-GelMa-rods-Rat-1-slide11-section-2": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-10-slide1-section-10": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-10-slide1-section-4": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-10-slide1-section-9": "Sarah",
+      "Cond-Lesion-GelMa-rods-Rat-12-slide1-section-7": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-12-slide1-section-8": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-3-slide1-section-3": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-3-slide11-section-7": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-4-slide1-section-6": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-6-slide1-section-4": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-6-slide11-section-1": "Sarah",
+      "Cond-Lesion-GelMa-rods-Rat-9-slide1-section-6": "Queena",
+      "Cond-Lesion-GelMa-rods-Rat-9-slide11-section-2": "Queena"
+    }
+  }
+}
