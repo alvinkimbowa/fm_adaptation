@@ -46,19 +46,19 @@ train_datasets=(
     # Dataset093_Echo_CardiacNet
     Dataset105_lesion_eric_gfap_resized
     Dataset218_lesion_eric_smi_gfap
-    Dataset207_lesion_katie_contusion_smi_gfap
-    Dataset208_lesion_MYKE_smi_gfap
-    Dataset209_lesion_MYE_smi_gfap
+    # Dataset207_lesion_katie_contusion_smi_gfap
+    # Dataset208_lesion_MYKE_smi_gfap
+    # Dataset209_lesion_MYE_smi_gfap
     Dataset213_lesion_KE_smi_gfap
-    Dataset217_lesion_MY_smi_gfap
-    Dataset219_lesion_MYK_smi_gfap
-    Dataset214_lesion_mohammad_smi_gfap
-    Dataset215_lesion_yvonne_smi_gfap
+    # Dataset217_lesion_MY_smi_gfap
+    # Dataset219_lesion_MYK_smi_gfap
+    # Dataset214_lesion_mohammad_smi_gfap
+    # Dataset215_lesion_yvonne_smi_gfap
     Dataset203_neurites_yvonne_smi_2px_scaleaug
-    Dataset301_neurite_yvonne_b2_smi
+    # Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
-    Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
-    Dataset306_neurite_yvonne_b2_smi_topology_2px
+    # Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
+    # Dataset306_neurite_yvonne_b2_smi_topology_2px
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -85,7 +85,7 @@ test_datasets=(
     # Dataset211_lesion_paul_widefield_smi_gfap
     Dataset301_neurite_yvonne_b2_smi
     Dataset300_neurite_yvonne_smi
-    Dataset302_neurite_yvonne_b2_smi_1px
+    # Dataset302_neurite_yvonne_b2_smi_1px
 )
 
 
@@ -93,14 +93,16 @@ test_datasets=(
 configs=(
     # linear
     # linear_finetune
-    convnextt_upernet_ft_ours
+    # convnextt_upernet_ft_ours
     # convnexts_upernet_ft_ours
-    upernet_inj_ft_vits_ours
-    upernet_inj_ft_vits_aug_ours
+    # upernet_inj_ft_vits_ours
+    # upernet_inj_ft_vits_aug_ours
     # upernet_inj_ft_vitb_ours
     # upernet_ours
     # upernet_inj_ours
     upernet_inj_ft_ours
+    upernet_inj_ft_aug_ours
+    upernet_inj_ft_dropsmi_aug_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f
@@ -120,9 +122,9 @@ configs=(
     # upernet_inj
     # upernet_inj_ft_dropsmi_ours
     # upernet_inj_ft_dropany_ours
-    # upernet_inj_ft_balanced_ours
+    upernet_inj_ft_balanced_ours
     # upernet_inj_ft_balanced_dropany_ours
-    upernet_inj_ft_balanced_aug_ours
+    # upernet_inj_ft_balanced_aug_ours
     # upernet_inj_ft_balanced_dropsmi_aug_ours
     # upernet_inj_ft_balanced_aug_gfap_ours
     # convnextt_upernet_ft_aug_p512_skelrec_ours
