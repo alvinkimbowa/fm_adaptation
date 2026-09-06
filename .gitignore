@@ -1,11 +1,16 @@
-results/
 logs/
 *.jsonl
 .local/
 .pooria/
-data/
-!src/data/
-!src/data/**
+
+/data/
+
+/results/*
+!/results/cihr_proposal_2026_09_05/
+/results/cihr_proposal_2026_09_05/*
+!/results/cihr_proposal_2026_09_05/*.py
+!/results/cihr_proposal_2026_09_05/*.sh
+!/results/cihr_proposal_2026_09_05/*.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
