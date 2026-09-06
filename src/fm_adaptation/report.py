@@ -68,6 +68,18 @@ FAMILY_METRICS = {"neurites": ("dice", "cldice")}
 DEFAULT_METRICS = ("dice", "masd")
 
 
+POSTPROCESSING_STAGES = {
+    "tta": "TTA",
+    "tta_joined": "TTA + skeletonization/joining",
+    "tta_joined_extended": "TTA + skeletonization/joining + extension",
+    "tta_joined_extended_min12": "TTA + skeletonization/joining + extension + min12",
+}
+
+
+def _base_adaptation(adaptation):
+    return adaptation.split("::", 1)[0]
+
+
 def _family_metrics(family, cldice_tolerance=0):
     return tuple(
         CLDICE_FIELDS[cldice_tolerance] if metric == "cldice" else metric
@@ -304,6 +316,7 @@ def _format_count(count):
 
 def _parameter_entry(model, adaptation, trained_on):
     """Foundation-model counts depend only on the architecture; baselines vary per dataset."""
+    adaptation = _base_adaptation(adaptation)
     return PARAMETER_COUNTS.get(f"{model}|{adaptation}|{trained_on}") or PARAMETER_COUNTS.get(
         f"{model}|{adaptation}|"
     )
@@ -325,9 +338,11 @@ def _dataset_label(dataset):
 
 def _config_label(model, adaptation):
     """A row heading, read off the run's own name -- see `naming.describe_run`."""
-    return " + ".join(
-        value for value in (MODEL_NAMES.get(model, model), describe_run(adaptation)) if value
+    base, _, stage = adaptation.partition("::")
+    label = " + ".join(
+        value for value in (MODEL_NAMES.get(model, model), describe_run(base)) if value
     )
+    return label + (" + " + POSTPROCESSING_STAGES[stage] if stage else "")
 
 
 def _model_matches(model, patterns):
@@ -393,13 +408,15 @@ def _experiment_order(models, train_datasets, configs, group_by_train_dataset=Tr
         size = size_order(model, adaptation, trained_on)
         run_order = (
             model_order(model),
-            list_order(adaptation, configs),
+            list_order(_base_adaptation(adaptation), configs),
             fold,
         )
         dataset_order = list_order(trained_on, train_datasets)
+        stage = adaptation.partition("::")[2]
+        stage_order = list(POSTPROCESSING_STAGES).index(stage) + 1 if stage else 0
         if group_by_train_dataset:
-            return (dataset_order, size, *run_order)
-        return (size, *run_order, dataset_order)
+            return (dataset_order, size, *run_order, stage_order)
+        return (size, *run_order, dataset_order, stage_order)
 
     return key
 
@@ -746,7 +763,10 @@ def _write_summary_csv(records, path, order):
         for key, results in sorted(records.items(), key=order):
             model, adaptation, trained_on, fold = key
             report_model = MODEL_NAMES.get(model, model)
-            report_adaptation = describe_run(adaptation)
+            base, _, stage = adaptation.partition("::")
+            report_adaptation = describe_run(base)
+            if stage:
+                report_adaptation += " + " + POSTPROCESSING_STAGES[stage]
             for tested_on, values in sorted(results.items()):
                 summary = []
                 for metric in METRICS:
@@ -870,6 +890,17 @@ def main():
             if (run_dir / "test" / tested_on / "metrics.csv").exists():
                 continue
         records[(model, probe, trained_on, fold)][tested_on] = _read_metrics(metrics_path)
+    # Derived predictions belong to the original checkpoint, with an explicit stage suffix.
+    for path in sorted(Path(args.results_dir).glob("*/*/*/fold_*/postprocessing/*/test/*/metrics.csv")):
+        run_dir = path.parents[4]
+        stage = path.parents[2].name
+        if stage not in POSTPROCESSING_STAGES:
+            continue
+        model, probe, trained_on, raw_data_dir = _read_run(run_dir)
+        fold = run_dir.name.removeprefix("fold_")
+        tested_on = path.parent.name
+        raw_dirs.setdefault(tested_on, raw_data_dir)
+        records[(model, probe + "::" + stage, trained_on, fold)][tested_on] = _read_metrics(path)
     for results_dir in args.nnunet_results_dir:
         _add_nnunet_records(records, results_dir)
     for results_dir in args.monounet_results_dir:
@@ -885,7 +916,7 @@ def main():
         if _model_matches(key[0], args.models)
         and matches(key[2], args.train_datasets)
         # A baseline carries no configuration, so --configs cannot name it and --models decides.
-        and (not key[1] or matches(key[1], args.configs))
+        and (not key[1] or matches(_base_adaptation(key[1]), args.configs))
     }
     if args.folds:
         records = _pool_folds(records, [fold.strip() for fold in args.folds])

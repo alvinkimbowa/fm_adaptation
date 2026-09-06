@@ -5,16 +5,15 @@ which images, labels and predictions belong to each run and where the figure sho
 """
 
 import argparse
-import json
 from pathlib import Path
 
 from tqdm import tqdm
 
 from .config import describe_run_dir
 from .data import load_dataset_json, rgb_planes, trained_planes
+from .datasets import dataset_dir as resolve_dataset_dir
 from .qualitative import add_style_arguments, render, style_from_arguments
-from .datasets import dataset_dir as resolve_dataset_dir, split_cases
-from .selection import matches as _matches, select_runs
+from .selection import matches as _matches, select_runs, source_dirs
 
 
 def _classes(cfg, dataset_name):
@@ -26,31 +25,6 @@ def _classes(cfg, dataset_name):
     labels = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
     names = {int(value): name for name, value in labels.items() if int(value) != 0}
     return sorted(names), names
-
-
-def _source_dirs(cfg, dataset_name, kind, output_dir, prediction_dir):
-    """The training dataset's `test/` results come from its held-out imagesTs, everything else from Tr."""
-    source_path = output_dir / "source.json"
-    if source_path.exists():
-        source = json.loads(source_path.read_text())
-        dataset_name, split = source["dataset"], source["split"]
-    elif not cfg.test_split:
-        # Nothing recorded the split, so the predictions say which one it was: the images that were
-        # predicted are the images of exactly one of them.
-        predicted = {path.stem for path in prediction_dir.glob("*.png")}
-        directory = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
-        split = next(
-            (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
-        )
-    elif dataset_name != cfg.train_dataset:
-        split = cfg.test_split
-    else:
-        split = "Ts" if kind == "test" else "Tr"
-    dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
-    labels = dataset_dir / f"labels{split}"
-    # A dataset can ship images with no annotations -- then the figure is image and prediction only.
-    return (dataset_name, dataset_dir / f"images{split}",
-            labels if labels.is_dir() and any(labels.iterdir()) else None)
 
 
 def _crop_size(cfg, crop):
@@ -140,7 +114,7 @@ def main():
         # Each figure reads and crops rows x cols source images, so on the whole-slide datasets a single
         # one takes a while; name the run being drawn rather than leaving a bare counter.
         progress.set_postfix_str(f"{fold_dir.parents[1].name}/{fold_dir.parent.name} {kind}")
-        source_dataset, images, labels = _source_dirs(cfg, dataset_name, kind, output_dir, prediction_dir)
+        source_dataset, images, labels = source_dirs(cfg, dataset_name, kind, output_dir, prediction_dir)
         classes, class_names = _classes(cfg, dataset_name)
         # Draw the stains into the same planes the model was given them in, so a dataset shipping
         # its stains as separate greyscale files does not come out grey beside one storing the same

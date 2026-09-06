@@ -1,7 +1,8 @@
+import json
 from fnmatch import fnmatch
 from pathlib import Path
 
-from .datasets import dataset_id
+from .datasets import dataset_dir as resolve_dataset_dir, dataset_id, split_cases
 
 
 def matches(name, patterns):
@@ -60,3 +61,32 @@ def select_runs(results_dirs, models=(), train_datasets=(), configs=(), folds=()
                 run_dir.name,
             )
     return sorted(found, key=found.get)
+
+
+def source_dirs(cfg, dataset_name, kind, output_dir, prediction_dir):
+    """Where the images and labels a run was evaluated on live, as (dataset, images, labels).
+
+    The training dataset's `test/` results come from its held-out imagesTs, everything else from Tr.
+    `output_dir` is the directory the predictions sit in, `<run>/<split>/<evaluation set>/`.
+    """
+    source_path = output_dir / "source.json"
+    if source_path.exists():
+        source = json.loads(source_path.read_text())
+        dataset_name, split = source["dataset"], source["split"]
+    elif not cfg.test_split:
+        # Nothing recorded the split, so the predictions say which one it was: the images that were
+        # predicted are the images of exactly one of them.
+        predicted = {path.stem for path in prediction_dir.glob("*.png")}
+        directory = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
+        split = next(
+            (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
+        )
+    elif dataset_name != cfg.train_dataset:
+        split = cfg.test_split
+    else:
+        split = "Ts" if kind == "test" else "Tr"
+    dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
+    labels = dataset_dir / f"labels{split}"
+    # A dataset can ship images with no annotations -- then the figure is image and prediction only.
+    return (dataset_name, dataset_dir / f"images{split}",
+            labels if labels.is_dir() and any(labels.iterdir()) else None)

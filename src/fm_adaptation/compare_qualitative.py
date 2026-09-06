@@ -18,7 +18,6 @@ arrangement is new.
 """
 
 import argparse
-import json
 import re
 from pathlib import Path
 
@@ -54,8 +53,8 @@ from .qualitative import (
     select_cases,
     style_from_arguments,
 )
-from .datasets import dataset_dir as resolve_dataset_dir, dataset_id, family, split_cases
-from .selection import matches as _matches, select_runs
+from .datasets import dataset_dir as resolve_dataset_dir, dataset_id, family
+from .selection import matches as _matches, select_runs, source_dirs
 
 
 def _columns(run_dirs, kind, tested_on):
@@ -443,28 +442,11 @@ def main():
                     print(f"skipped {kind}/{tested_on}: {missing} has no predictions for it")
                     continue
                 cfg = describe_run_dir(runs[0][1], args.raw_data_dir)
-                source_path = runs[0][2].parent / "source.json"
-                if source_path.exists():
-                    source = json.loads(source_path.read_text())
-                    source_dataset, split = source["dataset"], source["split"]
-                else:
-                    source_dataset = tested_on
-                    if not cfg.test_split:
-                        # Nothing recorded the split, so the predictions say which one it was.
-                        predicted = {path.stem for path in runs[0][2].glob("*.png")}
-                        directory = resolve_dataset_dir(cfg.raw_data_dir, tested_on)
-                        split = next(
-                            (s for s in ("Ts", "Tr") if predicted & split_cases(directory, s)), "Ts"
-                        )
-                    elif tested_on != cfg.train_dataset:
-                        split = cfg.test_split
-                    else:
-                        split = "Ts" if kind == "test" else "Tr"
-                dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
-                images, labels = dataset_dir / f"images{split}", dataset_dir / f"labels{split}"
                 # No annotations, no ground-truth column: the comparison is then between the models.
-                if not (labels.is_dir() and any(labels.iterdir())):
-                    labels = None
+                source_dataset, images, labels = source_dirs(
+                    cfg, tested_on, kind, runs[0][2].parent, runs[0][2]
+                )
+                dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, source_dataset)
                 channel_planes = rgb_planes(load_dataset_json(dataset_dir)["channel_names"])
                 # Restricted to the planes these runs were trained on, so the backdrop is their input.
                 # It is the union across columns: a plane one column never saw is still part of what
