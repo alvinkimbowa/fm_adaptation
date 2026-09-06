@@ -163,6 +163,9 @@ def main():
     cfg = ExperimentConfig.from_yaml(args.config)
     if args.fold is not None:
         cfg = replace(cfg, fold=str(args.fold))
+    if cfg.task == "instance":
+        from .instance_predict import predict
+        return predict(cfg, args.checkpoint)
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
     model = load_trained_model(cfg, args.checkpoint, device, classes)

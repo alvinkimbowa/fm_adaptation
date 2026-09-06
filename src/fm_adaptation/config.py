@@ -87,6 +87,12 @@ class ExperimentConfig:
     channel_dropout_p: float
     balance_sources: bool
 
+    task: str = "semantic"
+    input_size: int = 256
+    num_queries: int = 128
+    instance_data_dir: Path = Path("data/instances_yvonne_b2")
+    gradient_clip: float = 1.0
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
         with open(path) as f:
@@ -104,6 +110,11 @@ class ExperimentConfig:
         # prediction and metrics directories -- read the same as the data it was made from.
         raw_data_dir = Path(data["raw_data_dir"])
         return cls(
+            task=str(model.get("task", "semantic")),
+            input_size=int(model.get("input_size", 256)),
+            num_queries=int(model.get("num_queries", 128)),
+            instance_data_dir=Path(data.get("instance_data_dir", "data/instances_yvonne_b2")),
+            gradient_clip=float(training.get("gradient_clip", 1.0)),
             raw_data_dir=raw_data_dir,
             results_dir=Path(data.get("results_dir", "models")),
             train_dataset=resolve(raw_data_dir, data["train_dataset"]),

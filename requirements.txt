@@ -15,3 +15,7 @@ Pillow
 
 # Development only.
 pytest
+
+# Instance ROI preparation and COCO evaluation.
+roifile==2026.2.10
+pycocotools

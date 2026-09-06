@@ -334,6 +334,9 @@ def main():
     cfg = ExperimentConfig.from_yaml(args.config)
     if args.fold is not None:
         cfg = replace(cfg, fold=str(args.fold))
+    if cfg.task == "instance":
+        from .instance_training import train
+        return train(cfg, args.config, args.resume)
 
     _validate_data_mode(cfg)
 
