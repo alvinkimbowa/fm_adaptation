@@ -4,7 +4,7 @@ set -euo pipefail
 # Scores saved predictions against the labels on disk. Prediction and scoring are separate stages:
 # a prediction is written back at the case's native resolution, so scoring needs only two directories
 # of label maps -- no model, no GPU. Run this after `predict`, or on its own to rescore anything.
-# clDice is saved at Euclidean tolerances 0–4 native pixels in one pass. Older CSV schemas
+# clDice is saved at Euclidean tolerances 0–6 native pixels in one pass. Older CSV schemas
 # are automatically rescored; run_report.sh selects which tolerance to display.
 #
 results_dir=models

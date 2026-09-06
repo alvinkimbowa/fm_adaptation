@@ -382,7 +382,7 @@ class CldiceReportTests(unittest.TestCase):
         from io import StringIO
         from unittest.mock import patch
         from fm_adaptation.report import main
-        with patch("sys.argv", ["report", "--cldice-tolerance", "5"]), redirect_stderr(StringIO()):
+        with patch("sys.argv", ["report", "--cldice-tolerance", "7"]), redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit) as caught:
                 main()
         self.assertEqual(caught.exception.code, 2)

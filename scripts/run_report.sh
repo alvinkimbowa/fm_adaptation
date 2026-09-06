@@ -3,7 +3,7 @@ set -euo pipefail
 
 results_dir=models
 
-# clDice radius in native pixels (0–4). Zero keeps the plain clDice header.
+# clDice radius in native pixels (0–6). Zero keeps the plain clDice header.
 cldice_tolerance=${cldice_tolerance:-4}
 
 # Which rows to tabulate. The four lists below name the parts a run directory is built from --

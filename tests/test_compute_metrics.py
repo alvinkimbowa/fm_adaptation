@@ -300,17 +300,19 @@ if __name__ == "__main__":
 class CldiceToleranceTests(unittest.TestCase):
     def test_offsets_and_euclidean_diagonal(self):
         from fm_adaptation.compute_metrics import _cldice
+        from fm_adaptation.metrics import CLDICE_TOLERANCES
         truth = np.zeros((20, 20), dtype=np.uint8)
         truth[5, 5] = 1
-        for offset in range(6):
+        for offset in range(CLDICE_TOLERANCES[-1] + 2):
             pred = np.zeros_like(truth)
             pred[5, 5 + offset] = 1
-            expected = tuple(float(r >= offset) for r in range(5))
+            expected = tuple(float(r >= offset) for r in CLDICE_TOLERANCES)
             self.assertEqual(_cldice(pred, truth, 2), expected)
             self.assertEqual(_cldice(truth, pred, 2), expected)
         pred = np.zeros_like(truth)
         pred[6, 6] = 1
-        self.assertEqual(_cldice(pred, truth, 2), (0, 0, 1, 1, 1))
+        # The single pixels sit a diagonal apart, so they meet at the first radius past sqrt(2).
+        self.assertEqual(_cldice(pred, truth, 2), tuple(float(r >= 2) for r in CLDICE_TOLERANCES))
 
     def test_zero_matches_original_and_work_is_reused(self):
         from unittest.mock import patch
@@ -331,16 +333,21 @@ class CldiceToleranceTests(unittest.TestCase):
 
     def test_multiclass_and_empty_policy(self):
         from fm_adaptation.compute_metrics import _cldice
+        from fm_adaptation.metrics import CLDICE_TOLERANCES
         truth = np.zeros((20, 20), dtype=np.uint8)
         truth[3, 3], truth[12, 12] = 1, 2
         pred = np.zeros_like(truth)
         pred[3, 3], pred[12, 14] = 1, 2
-        self.assertEqual(_cldice(pred, truth, 4), (0.5, 0.5, 1, 1, 1))
+        # One class matches exactly and the other is two pixels off, so the mean is half
+        # until the radius covers the offset.
+        self.assertEqual(_cldice(pred, truth, 4),
+                         tuple((1 + float(r >= 2)) / 2 for r in CLDICE_TOLERANCES))
         self.assertTrue(np.isnan(_cldice(np.zeros_like(truth), truth, 3)).all())
 
     def test_csv_roundtrip_and_schema_upgrade(self):
         import csv
         from fm_adaptation.compute_metrics import CaseMetrics, compute_case_metrics, write_csv, _is_current
+        from fm_adaptation.metrics import CLDICE_FIELDS
         mask = np.zeros((10, 10), dtype=np.uint8)
         mask[3:7, 5] = 1
         with tempfile.TemporaryDirectory() as tmp:
@@ -353,9 +360,9 @@ class CldiceToleranceTests(unittest.TestCase):
             write_csv([row], path)
             self.assertTrue(_is_current(path, root))
             values = read_case_metrics(path)[0]
-            for key in ("cldice", "cldice_1px", "cldice_2px", "cldice_3px", "cldice_4px"):
+            for key in CLDICE_FIELDS:
                 self.assertEqual(values[key], 1.0)
             with path.open() as stream:
                 aggregate = list(csv.DictReader(stream))[-1]
             self.assertEqual(aggregate["image_id"], "MEAN")
-            self.assertEqual(float(aggregate["cldice_4px"]), 1.0)
+            self.assertEqual(float(aggregate[CLDICE_FIELDS[-1]]), 1.0)

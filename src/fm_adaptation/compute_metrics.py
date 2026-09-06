@@ -69,6 +69,8 @@ class CaseMetrics:
     cldice_2px: float
     cldice_3px: float
     cldice_4px: float
+    cldice_5px: float
+    cldice_6px: float
 
 
 def _nanmean(values) -> float:
@@ -118,7 +120,7 @@ def index_by_stem(directory: Path):
 
 
 def compute_case_metrics(prediction, target, num_classes, ignore_empty=True):
-    """Foreground means: (dice, cldice, hd95, masd, cldice_1px, ..., cldice_4px)."""
+    """Foreground means: (dice, cldice, hd95, masd, cldice_1px, ..., cldice_6px)."""
     if prediction.shape != target.shape:
         raise ValueError(f"prediction/target shape mismatch: {prediction.shape} vs {target.shape}")
     if num_classes < 2:
