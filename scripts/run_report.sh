@@ -33,14 +33,14 @@ train_datasets=(
     Dataset073_GE_LE
     Dataset070_Clarius_L15
     # Dataset071_Sonix-Touch
-    # Dataset080_BUSBRA_GE_Logiq_5
+    Dataset080_BUSBRA_GE_Logiq_5
     # Dataset082_BUSBRA_Toshiba_Aplio_300
     # # Dataset083_BUSBRA_U_Systems
-    # Dataset084_KidneyUS_Philips
-    # Dataset086_MMOTU_2D
-    # Dataset089_Echo_CardiacUDA
-    # Dataset090_Echo_EchoCP
-    # Dataset093_Echo_CardiacNet
+    Dataset084_KidneyUS_Philips
+    Dataset086_MMOTU_2D
+    Dataset089_Echo_CardiacUDA
+    Dataset090_Echo_EchoCP
+    Dataset093_Echo_CardiacNet
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -68,13 +68,13 @@ configs=(
     # linear
     # linear_finetune
     convnextt_upernet_ft_ours
-    # convnexts_upernet_ft_ours
+    convnexts_upernet_ft_ours
+    upernet_ours
+    upernet_inj_ours
+    upernet_inj_ft_ours
+    upernet_inj_ft_vitb_ours
     upernet_inj_ft_vits_ours
     upernet_inj_ft_vits_aug_ours
-    # upernet_inj_ft_vitb_ours
-    # upernet_ours
-    # upernet_inj_ours
-    # upernet_inj_ft_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f
