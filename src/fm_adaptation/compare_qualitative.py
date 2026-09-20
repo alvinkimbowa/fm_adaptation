@@ -154,6 +154,28 @@ def _common_cases(runs, count, reference, rng):
     return ordered[:count]
 
 
+def _named_cases(runs, wanted):
+    """The named cases, in the order given, rather than a sample across the Dice range.
+
+    A value matching the end of a case id is enough, so a figure can be asked for by the part of the
+    name that identifies it rather than the whole of it.
+    """
+    shared = None
+    for _, _, prediction_dir, _ in runs:
+        stems = {p.stem for p in prediction_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES}
+        shared = stems if shared is None else (shared & stems)
+    shared = sorted(shared or set())
+    cases = []
+    for name in wanted:
+        matches = [stem for stem in shared if stem == name or stem.endswith(name)]
+        if len(matches) != 1:
+            raise SystemExit(
+                f"--cases {name!r} matched {len(matches)} of the cases every run predicted"
+            )
+        cases.append((matches[0], None))
+    return cases
+
+
 def _case_dice(metrics_path, case_id):
     if not Path(metrics_path).exists():
         return None
@@ -406,6 +428,8 @@ def main():
     parser.add_argument("--format", default="png",
                         help="figure file format, as matplotlib names it: png, svg, pdf")
     parser.add_argument("--crop", default="auto", help="auto | full | pixels")
+    parser.add_argument("--cases", nargs="*", default=[],
+                        help="case ids to draw, in this order, instead of sampling the Dice range")
     parser.add_argument("--per-row", type=int, default=1,
                         help="cases side by side on one row, each with its own set of columns")
     parser.add_argument("--seed-max", type=int, default=1000,
@@ -497,7 +521,10 @@ def main():
                     np.random.default_rng().integers(args.seed_max)
                 )
                 rng = np.random.default_rng(seed)
-                cases = _common_cases(runs, args.rows, runs[0], rng)
+                cases = (
+                    _named_cases(runs, args.cases) if args.cases
+                    else _common_cases(runs, args.rows, runs[0], rng)
+                )
                 if not cases:
                     print(f"skipped {kind}/{tested_on} (no cases shared by all runs)")
                     continue

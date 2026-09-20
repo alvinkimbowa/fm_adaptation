@@ -15,61 +15,41 @@ export PYTHONPATH="${PYTHONPATH:-}:src"
 # a `_suffix` tag, and a dataset by its number alone. Columns are ordered as the lists order them:
 # model first, then training set, then configuration.
 models=(
-    nnunet
+    # nnunet
     # sam3
     dinov3
 )
 
 train_datasets=(
-    Dataset070_Clarius_L15
-    # Dataset071_Sonix-Touch
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
+    # Dataset070_Clarius_L15
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    Dataset701_nmus_median_rgb
 )
 
 # Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.
 # A set that one column trained on is still comparable: that column holds its imagesTs while the
 # others hold the whole dataset, and the figure is drawn on the cases they share.
 test_datasets=(
-    # Dataset207_lesion_katie_contusion_smi_gfap
-    # Dataset211_lesion_paul_widefield_smi_gfap
-    # Dataset214_lesion_mohammad_smi_gfap
-    # Dataset203_neurites_yvonne_smi_2px_scaleaug
-    # Dataset301_neurite_yvonne_b2_smi
-    # Dataset300_neurite_yvonne_smi
-    # Dataset302_neurite_yvonne_b2_smi_1px
-    # Dataset303_neurite_yvonne_in_vitro_smi
-    # Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
-    Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
+    # Dataset070_Clarius_L15
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    Dataset701_nmus_median_rgb
 )
 
 configs=(
-    # linear
-    # upernet
-    # upernet_inj
-    # upernet_inj_ft_balanced_dropsmi_aug_ours
-    # upernet_inj_ft_balanced_aug_gfap_ours
-    # m2f
-    # upernet_inj_ft_p512_ours
-    # convnext_upernet_p512_ours
-    # convnext_upernet_ft_p512_ours
-    # convnext_upernet_ft_init_p512_ours
-    # convnext_upernet_ft_aug_p512_ours
-    # convnextb_upernet_ft_aug_p512_ours
-    # convnexts_upernet_ft_aug_p512_ours
-    # convnextb_upernet_aug_p512_ours
-    # convnextt_upernet_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_ours
-    # convnextt_upernet_ft_aug_p512_red_ours
-    nnUNetTrainer__nnUNetResEncUNetMPlans__2d
-    convnextt_upernet_ft_ours
-    convnexts_upernet_ft_ours
-    upernet_inj_ft_ours
-    upernet_inj_ft_vits_ours
-    upernet_inj_ft_vits_aug_ours
+    convnexts_upernet_ft_aug_ours
+    convnexts_upernet_ft_aug_gateonly_ours
+    convnexts_upernet_ft_aug_promptenc_ours
+    convnextb_upernet_ft_aug_ours
+    convnextb_upernet_ft_aug_promptenc_ours
+    convnext_upernet_ft_aug_ours
+)
+
+# Cases to draw, in this order; empty samples across the reference run's Dice range instead.
+cases=(
+    11.9_033
+    11.9_048
 )
 
 folds=(
@@ -86,20 +66,20 @@ group_by=${group_by:-train_dataset}
 # of their own read their datasets from raw_data_dir.
 results_dirs=(
     models
-    ../knee_us_segmentation/data/nnUNet_results
+    # ../knee_us_segmentation/data/nnUNet_results
     # ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
-raw_data_dir=../knee_us_segmentation/data/nnUNet_raw
+raw_data_dir=../nmus_segmentation/data/nnUNet_raw
 
 
 splits=(
     test
 )
 
-rows=10            # cases down the figure
-per_row=2         # cases side by side, each with its own image / gt / model columns
+rows=2            # cases down the figure
+per_row=1         # cases side by side, each with its own image / gt / model columns
 output_dir=results/qualitative
-format=${format:-svg}      # png | svg | pdf
+format=${format:-png}      # png | svg | pdf
 # -1 draws a new sample of cases every run, overwriting the previous figure. Set a number to pin one.
 seed=-1
 
@@ -108,7 +88,7 @@ seed=-1
 # mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=masks
+layout=split
 
 # How a mask is painted, in every layout -- a layout only arranges the panels and decides
 # whether a mask sits on black or over the image.
@@ -116,13 +96,13 @@ layout=masks
 gt_style=${gt_style:-overlay}
 pred_style=${pred_style:-overlay}
 # red | green | blue | yellow | magenta | cyan | white, or `auto` to follow each class's own colour
-gt_color=${gt_color:-green}
+gt_color=${gt_color:-cyan}
 pred_color=${pred_color:-red}
 gt_width=1
 pred_width=1
 alpha=0.8
 
-crop=auto         # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
+crop=420          # auto (patch size for patchwise runs, whole image otherwise) | full | pixels
 
 args=()
 [[ "${skip_unchanged:-0}" -eq 1 ]] && args+=(--skip-unchanged)
@@ -151,4 +131,5 @@ python -m fm_adaptation.compare_qualitative \
     --pred-width "$pred_width" \
     --alpha "$alpha" \
     --crop "$crop" \
+    ${cases[@]+--cases "${cases[@]}"} \
     --seed "$seed"
