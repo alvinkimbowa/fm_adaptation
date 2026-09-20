@@ -74,6 +74,9 @@ configs=(
     convnextt_upernet_ft_ours
     convnexts_upernet_ft_ours
     convnexts_upernet_ft_aug_ours
+    convnexts_upernet_ft_aug_promptdec_ours
+    convnexts_upernet_ft_aug_promptenc_ours
+    convnexts_upernet_ft_aug_promptboth_ours
     upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
