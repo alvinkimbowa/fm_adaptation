@@ -3,7 +3,8 @@ import unittest
 import torch
 
 from fm_adaptation.losses import (DiceCrossEntropyLoss, DiceCrossEntropySkeletonRecallLoss,
-                                  SkeletonRecallLoss, distance_weights, tubed_skeleton)
+                                  SkeletonRecallLoss, distance_weights, mean_foreground_dice,
+                                  tubed_skeleton)
 
 
 def _disc(size=32, radius=9):
@@ -123,6 +124,38 @@ class DistanceWeightTests(unittest.TestCase):
             weighted = DiceCrossEntropySkeletonRecallLoss(1.0, distance_tau=5.0)(logits, self.target)
             plain = DiceCrossEntropySkeletonRecallLoss(1.0)(logits, self.target)
             self.assertGreater(weighted.item(), plain.item())
+
+
+class ScoredClassesTests(unittest.TestCase):
+    """Restricting the per-class terms to the classes a prompt asked for."""
+
+    def setUp(self):
+        # One disc labelled class 1, in a head that can also emit classes 2 and 3.
+        self.target = _disc()
+        self.logits = _logits_for(self.target, classes=4)
+
+    def test_naming_no_classes_is_the_loss_every_run_before_this_had(self):
+        for loss in (DiceCrossEntropyLoss(), SkeletonRecallLoss(),
+                     DiceCrossEntropySkeletonRecallLoss(1.0)):
+            with self.subTest(loss=type(loss).__name__):
+                self.assertEqual(loss(self.logits, self.target).item(),
+                                 loss(self.logits, self.target, None).item())
+        self.assertEqual(mean_foreground_dice(self.logits, self.target),
+                         mean_foreground_dice(self.logits, self.target, None))
+
+    def test_the_classes_nobody_asked_for_do_not_dilute_the_term(self):
+        # Classes 2 and 3 are absent from both target and prediction, so they score a perfect
+        # overlap of nothing and drag the unrestricted mean towards it.
+        asked = DiceCrossEntropyLoss()(self.logits, self.target, [1])
+        everything = DiceCrossEntropyLoss()(self.logits, self.target)
+        self.assertLess(asked.item(), everything.item())
+        self.assertAlmostEqual(mean_foreground_dice(self.logits, self.target, [1]), 1.0, places=5)
+
+    def test_a_class_the_prompt_asked_for_and_the_model_invented_still_costs(self):
+        logits = self.logits.clone()
+        logits[0, :, 2, 2] = torch.tensor([-10.0, -10.0, 10.0, -10.0])
+        self.assertLess(mean_foreground_dice(logits, self.target, [1, 2]),
+                        mean_foreground_dice(logits, self.target, [1]))
 
 
 if __name__ == "__main__":

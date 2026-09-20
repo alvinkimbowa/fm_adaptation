@@ -18,6 +18,7 @@ from .data import (
     load_dataset_json,
     num_classes,
     prompt_batch,
+    prompt_classes,
     stain_planes,
     trained_planes,
 )
@@ -318,9 +319,11 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
     for step, (images, masks, metadata) in enumerate(progress, start=1):
         images, masks = images.to(device), masks.to(device)
         prompt = prompt_batch(metadata, device)
+        # A prompted run is scored on what it was asked for, not on every class the head can emit.
+        classes = prompt_classes(metadata)
         with amp:
             logits = forward(module, images, masks, prompt)
-            loss = loss_fn(logits, masks)
+            loss = loss_fn(logits, masks, classes)
         if training:
             # Accumulation keeps the effective batch where the memory does not allow the real one.
             (loss / accumulation_steps).backward()
@@ -330,7 +333,7 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
                 if scheduler is not None:
                     scheduler.step()
         losses.append(loss.item())
-        dices.append(mean_foreground_dice(logits.detach(), masks))
+        dices.append(mean_foreground_dice(logits.detach(), masks, classes))
         progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
     return float(np.mean(losses)), float(np.nanmean(dices))
 

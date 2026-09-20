@@ -25,6 +25,19 @@ def distance_weights(target: torch.Tensor, tau: float, floor: float) -> torch.Te
     return weights / mean
 
 
+def _over(per_class: torch.Tensor, classes) -> torch.Tensor:
+    """Mean of a per-class term over the classes it should be scored on.
+
+    A prompted run is only asked for some of the classes its head can emit; averaging over the rest
+    would dilute the term by however many classes the dataset happens to define. `classes` are label
+    values, and `per_class` is indexed from the first foreground class.
+    """
+    if classes is None:
+        return per_class.mean()
+    index = torch.tensor([label - 1 for label in classes], device=per_class.device)
+    return per_class[index].mean() if index.numel() else per_class.sum() * 0.0
+
+
 class DiceCrossEntropyLoss(nn.Module):
     """Equal-weight cross entropy and foreground soft Dice loss.
 
@@ -37,7 +50,7 @@ class DiceCrossEntropyLoss(nn.Module):
         self.distance_tau = distance_tau
         self.distance_floor = distance_floor
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor, classes=None) -> torch.Tensor:
         valid = target != -1
         if self.distance_tau:
             weights = distance_weights(target, self.distance_tau, self.distance_floor)
@@ -55,7 +68,7 @@ class DiceCrossEntropyLoss(nn.Module):
         intersection = (probabilities * one_hot).sum(reduce_dims)
         denominator = probabilities.sum(reduce_dims) + one_hot.sum(reduce_dims)
         dice = (2 * intersection + 1e-5) / (denominator + 1e-5)
-        return ce - dice.mean()
+        return ce - _over(dice, classes)
 
 
 def tubed_skeleton(target: torch.Tensor, tube: bool = True) -> torch.Tensor:
@@ -91,14 +104,14 @@ class SkeletonRecallLoss(nn.Module):
         super().__init__()
         self.tube = tube
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor, classes=None) -> torch.Tensor:
         valid = target != -1
         skeleton = tubed_skeleton(target, self.tube)
         one_hot = F.one_hot(skeleton, logits.shape[1]).permute(0, 3, 1, 2).float()[:, 1:]
         probabilities = logits.softmax(dim=1)[:, 1:] * valid[:, None]
         reduce_dims = (0, 2, 3)
         recall = ((probabilities * one_hot).sum(reduce_dims) + 1e-5) / (one_hot.sum(reduce_dims) + 1e-5)
-        return -recall.mean()
+        return -_over(recall, classes)
 
 
 class DiceCrossEntropySkeletonRecallLoss(nn.Module):
@@ -115,8 +128,9 @@ class DiceCrossEntropySkeletonRecallLoss(nn.Module):
         self.generic = DiceCrossEntropyLoss(distance_tau, distance_floor)
         self.skeleton = SkeletonRecallLoss(tube)
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return self.generic(logits, target) + self.weight * self.skeleton(logits, target)
+    def forward(self, logits: torch.Tensor, target: torch.Tensor, classes=None) -> torch.Tensor:
+        return (self.generic(logits, target, classes)
+                + self.weight * self.skeleton(logits, target, classes))
 
 
 def build_loss(cfg) -> nn.Module:
@@ -129,11 +143,11 @@ def build_loss(cfg) -> nn.Module:
     return DiceCrossEntropyLoss(cfg.distance_weight_tau, cfg.distance_weight_floor)
 
 
-def mean_foreground_dice(logits: torch.Tensor, target: torch.Tensor) -> float:
+def mean_foreground_dice(logits: torch.Tensor, target: torch.Tensor, classes=None) -> float:
     prediction = logits.argmax(dim=1)
     valid = target != -1
     scores = []
-    for label in range(1, logits.shape[1]):
+    for label in classes if classes is not None else range(1, logits.shape[1]):
         pred = (prediction == label) & valid
         truth = target == label
         denominator = pred.sum() + truth.sum()
