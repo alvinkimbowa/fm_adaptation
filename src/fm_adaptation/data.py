@@ -3,7 +3,6 @@ import math
 from pathlib import Path
 
 from .datasets import dataset_dir
-from .prompting import NULL_PROMPT
 
 import cv2
 import numpy as np
@@ -24,11 +23,13 @@ def load_dataset_json(dataset_dir: Path) -> dict:
         return json.load(f)
 
 
-def prompt_indices(dataset_dir: Path, prompt) -> dict[str, int]:
-    """Each case's index into the prompt vocabulary, from the dataset's own image metadata.
+def prompt_values(dataset_dir: Path, prompt) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Each case's answer to every prompt field, from the dataset's own image metadata.
 
-    A case the metadata gives a value outside the vocabulary -- `unspecified`, or a location this run
-    does not train on -- takes the null index, which is what having no prompt means.
+    A field may be answered with one name or with several, and the metadata writes it either way, so
+    both are read back as a tuple. A name outside the field's vocabulary is dropped -- `unspecified`,
+    or a location this run does not train on -- and a field left with nothing takes its null, which
+    is what having no prompt for that field means.
     """
     path = Path(dataset_dir) / "image_metadata.json"
     if not path.is_file():
@@ -37,11 +38,18 @@ def prompt_indices(dataset_dir: Path, prompt) -> dict[str, int]:
         )
     with open(path) as f:
         metadata = json.load(f)
-    order = {name: index + 1 for index, name in enumerate(prompt.vocabulary)}
-    return {
-        case_id: order.get(entry.get(prompt.key), NULL_PROMPT)
-        for case_id, entry in metadata.items()
-    }
+    # A dataset recording more than its cases -- the label ids, the paint order -- keeps the cases
+    # themselves under `images`; the older files are the case map itself.
+    entries = metadata["images"] if "images" in metadata else metadata
+    values = {}
+    for case_id, entry in entries.items():
+        answers = {}
+        for field in prompt.fields:
+            given = entry.get(field.key)
+            names = (given,) if isinstance(given, str) else tuple(given or ())
+            answers[field.key] = tuple(name for name in names if name in field.vocabulary)
+        values[case_id] = answers
+    return values
 
 
 def prompt_batch(metadata, device=None):
@@ -49,6 +57,13 @@ def prompt_batch(metadata, device=None):
     if not metadata or "prompt" not in metadata[0]:
         return None
     return torch.tensor([item["prompt"] for item in metadata], dtype=torch.long, device=device)
+
+
+def prompt_classes(metadata):
+    """The classes a batch asked for, across its cases, or `None` when nothing narrowed them."""
+    if not metadata or "classes" not in metadata[0]:
+        return None
+    return sorted({label for item in metadata for label in item["classes"]})
 
 
 def stain_planes(channel_names: dict) -> dict[str, tuple[int, int]] | None:
@@ -318,7 +333,16 @@ class NnUNet2DDataset(Dataset):
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
         # Keyed by case id rather than by position: callers thin `self.ids` after construction.
         self.prompt = prompt
-        self.prompts = None if prompt is None else prompt_indices(self.dataset_dir, prompt)
+        self.prompts = None if prompt is None else prompt_values(self.dataset_dir, prompt)
+        # The classes a `multi` field names, so the target can be cut down to the ones asked for.
+        # Only a dataset labelled the way the model was trained can answer that, which is why it is
+        # asked of this dataset's own labels and left alone when they do not carry the names.
+        self.prompt_labels = None
+        if prompt is not None and any(field.multi for field in prompt.fields):
+            declared = {str(name): int(value) for name, value in info["labels"].items()}
+            wanted = {name for field in prompt.fields if field.multi for name in field.vocabulary}
+            if wanted <= set(declared):
+                self.prompt_labels = declared
         self.channel_dropout = tuple(str(name).upper() for name in channel_dropout)
         self.channel_dropout_p = float(channel_dropout_p)
         if not 0.0 <= self.channel_dropout_p <= 1.0:
@@ -405,9 +429,44 @@ class NnUNet2DDataset(Dataset):
             image_t, mask_t = _augment(image_t, mask_t, geometry, self.augment, self.fill)
         metadata = {"case_id": case_id, "has_label": has_label, **geometry}
         if self.prompt is not None:
-            dropped = self.subset == "train" and torch.rand(()) < self.prompt.dropout_p
-            metadata["prompt"] = NULL_PROMPT if dropped else self.prompts[case_id]
+            asked = self._ask(case_id)
+            metadata["prompt"] = self.prompt.row(asked)
+            if self.prompt_labels is not None:
+                wanted = sorted(
+                    self.prompt_labels[name]
+                    for field in self.prompt.fields if field.multi
+                    for name in asked[field.key]
+                )
+                # Everything the prompt did not ask for is background: that is what the question
+                # means, and it is also what makes a partly annotated frame a truthful target -- the
+                # structures nobody traced are ones nobody asked for either.
+                keep = torch.tensor(wanted, dtype=mask_t.dtype)
+                mask_t = torch.where(torch.isin(mask_t, keep) | (mask_t < 0), mask_t, 0)
+                metadata["classes"] = tuple(wanted)
         return image_t, mask_t, metadata
+
+    def _ask(self, case_id: str) -> dict[str, tuple[str, ...]]:
+        """What this sample's prompt asks of each field.
+
+        Training resamples a `multi` field every time the case comes round -- a subset of the
+        structures that frame has annotated, of a size drawn uniformly -- so the same image is seen
+        under many questions and the network cannot learn which frames were traced for what.
+        Validation and test ask a fixed question instead, and so are repeatable.
+        """
+        asked = {}
+        for field in self.prompt.fields:
+            names = self.prompts[case_id][field.key]
+            if self.subset != "train":
+                asked[field.key] = field.eval_values or names
+                continue
+            if field.dropout_p and torch.rand(()) < field.dropout_p:
+                names = ()
+            if field.multi and names:
+                size = int(torch.randint(1, len(names) + 1, ()))
+                chosen = torch.randperm(len(names))[:size].tolist()
+                names = tuple(names[index] for index in sorted(chosen))
+            asked[field.key] = names
+        return asked
 
 
 class CachedFeatureDataset(Dataset):

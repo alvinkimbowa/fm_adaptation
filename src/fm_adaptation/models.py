@@ -500,7 +500,7 @@ def build_model(
             else [encoder.feature_channels]
         )
         conditioner = PromptConditioner(
-            prompt.vocabulary, prompt.width, channels, gate_features=prompt.gates_encoder,
+            prompt, prompt.width, channels, gate_features=prompt.gates_encoder,
         )
     return SegmentationModel(encoder, probe, conditioner)
 

@@ -9,21 +9,42 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Index 0 means no prompt was given. The vocabulary occupies 1..len(vocabulary).
-NULL_PROMPT = 0
-
 
 class CategoricalPromptEncoder(nn.Module):
-    """One trainable embedding per entry of the vocabulary, behind a null embedding at index 0."""
+    """One trainable embedding per vocabulary entry, behind a null embedding per field.
 
-    def __init__(self, vocabulary, width: int):
+    The fields share one table, each holding a contiguous block of rows that opens with its own null.
+    A prompt is a row of indices into that table: one column for a field answered with a single
+    entry, as many columns as its vocabulary for a field answered with a set. The set's columns are
+    padded out with the field's null, so a field's answer is the mean of the columns that are not its
+    null -- and the null embedding itself when none of them are.
+
+    Fields are pooled by summing, which is what keeps them independent: dropping the location leaves
+    the anatomy's contribution untouched.
+    """
+
+    def __init__(self, prompt, width: int):
         super().__init__()
-        self.vocabulary = tuple(vocabulary)
         self.width = width
-        self.embedding = nn.Embedding(len(self.vocabulary) + 1, width)
+        self.slots = tuple(field.slots for field in prompt.fields)
+        self.offsets = prompt.offsets
+        self.embedding = nn.Embedding(prompt.rows, width)
 
     def forward(self, prompt):
-        return self.embedding(prompt)
+        if prompt.dim() == 1:
+            return self.embedding(prompt)
+        rows = self.embedding(prompt)
+        pooled = None
+        start = 0
+        for slots, offset in zip(self.slots, self.offsets):
+            columns = prompt[:, start:start + slots]
+            vectors = rows[:, start:start + slots]
+            answered = (columns != offset)[..., None]
+            mean = (vectors * answered).sum(1) / answered.sum(1).clamp(min=1)
+            field = torch.where(answered.any(1), mean, vectors[:, 0])
+            pooled = field if pooled is None else pooled + field
+            start += slots
+        return pooled
 
 
 class PromptGate(nn.Module):
@@ -53,9 +74,9 @@ class PromptConditioner(nn.Module):
     of the head rather than needing a checkpoint key of its own.
     """
 
-    def __init__(self, vocabulary, width: int, feature_channels, gate_features: bool):
+    def __init__(self, prompt, width: int, feature_channels, gate_features: bool):
         super().__init__()
-        self.encoder = CategoricalPromptEncoder(vocabulary, width)
+        self.encoder = CategoricalPromptEncoder(prompt, width)
         self.gates = (
             nn.ModuleList(PromptGate(channels, width) for channels in feature_channels)
             if gate_features

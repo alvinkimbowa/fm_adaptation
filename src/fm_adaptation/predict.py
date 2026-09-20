@@ -167,7 +167,8 @@ def main():
     )
     parser.add_argument(
         "--force-prompt",
-        help="predict every case with this vocabulary entry rather than its own, into a column of its own",
+        help="predict every case with this entry of the prompt's first field rather than its own, "
+             "into a column of its own",
     )
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
@@ -187,9 +188,24 @@ def main():
     seen = _seen_in_training(cfg)
     forced = None
     if args.force_prompt:
-        if cfg.prompt is None or args.force_prompt not in cfg.prompt.vocabulary:
-            raise SystemExit(f"--force-prompt must name one of {list(getattr(cfg.prompt, 'vocabulary', []))}")
-        forced = cfg.prompt.vocabulary.index(args.force_prompt) + 1
+        field = cfg.prompt.fields[0] if cfg.prompt is not None else None
+        if field is None or field.multi or args.force_prompt not in field.vocabulary:
+            raise SystemExit(
+                f"--force-prompt must name one of {list(getattr(field, 'vocabulary', []))}"
+            )
+        forced = cfg.prompt.offsets[0] + 1 + field.vocabulary.index(args.force_prompt)
+    # The label space the prediction is written in. A model trained on many structures is scored
+    # against a dataset labelled with one, so its classes are mapped onto that dataset's before the
+    # file is written; without this the two label spaces would only agree by coincidence.
+    relabel = None
+    if cfg.predict_labels:
+        declared = load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["labels"]
+        missing = [name for name in cfg.predict_labels if name not in declared]
+        if missing:
+            raise SystemExit(f"data.predict_labels names {missing}, absent from {cfg.train_dataset}")
+        relabel = torch.zeros(classes, dtype=torch.uint8)
+        for index, name in enumerate(cfg.predict_labels, start=1):
+            relabel[int(declared[name])] = index
     # What each column is supposed to hold once every job that writes into it has run. A column can
     # be reached by two jobs -- `test_split: all` sends `imagesTr` and `imagesTs` to one directory --
     # so this is only complete at the end, which is where the pruning below happens.
@@ -248,12 +264,15 @@ def main():
             for images, _, metadata in progress:
                 prompt = prompt_batch(metadata, device)
                 if prompt is not None and args.null_prompt:
-                    prompt = torch.zeros_like(prompt)
+                    null = torch.tensor(cfg.prompt.row({}), device=prompt.device)
+                    prompt = null.expand_as(prompt).clone()
                 elif prompt is not None and args.force_prompt:
-                    prompt = torch.full_like(prompt, forced)
+                    prompt[:, : cfg.prompt.fields[0].slots] = forced
                 with amp:
                     logits = model(images.to(device), prompt)
                 predictions = logits.argmax(1).cpu()
+                if relabel is not None:
+                    predictions = relabel[predictions]
                 for prediction, meta in zip(predictions, metadata):
                     # Restored to the case's own height and width, so the file on disk is directly
                     # comparable to the label the annotator drew -- that is what makes scoring a

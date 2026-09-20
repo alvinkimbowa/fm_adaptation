@@ -41,22 +41,73 @@ class AugmentConfig:
 
 
 @dataclass(frozen=True)
+class PromptField:
+    """One question the prompt asks, with the answers it accepts.
+
+    `vocabulary` is what fixes each answer's index, so it is written down in the config rather than
+    discovered from the data: the run directory keeps its config, and prediction reads the same order
+    back. A value outside the vocabulary is dropped, and a field left with nothing takes its null.
+
+    A `multi` field is answered with a set rather than one entry, and its vocabulary names classes of
+    the training dataset: training draws a subset of the structures a frame actually has annotated
+    and restricts the target to them, so the frames a structure was never traced on cannot teach that
+    it is absent. `eval_values` pins the answer for validation and test, which is what makes a run
+    trained on many structures scoreable on one.
+    """
+
+    key: str
+    vocabulary: tuple[str, ...]
+    multi: bool = False
+    # Probability a training case is given this field's null in place of its own value.
+    dropout_p: float = 0.0
+    eval_values: tuple[str, ...] = ()
+
+    @property
+    def slots(self) -> int:
+        """Columns this field occupies in a prompt row."""
+        return len(self.vocabulary) if self.multi else 1
+
+
+@dataclass(frozen=True)
 class PromptConfig:
     """The prompt naming what to segment, and where its embedding meets the network.
 
-    `vocabulary` is what fixes each prompt's index, so it is written down in the config rather than
-    discovered from the data: the run directory keeps its config, and prediction reads the same order
-    back. A case whose value is outside the vocabulary takes the null prompt.
+    Each field owns a contiguous block of the embedding table whose first row is that field's own
+    null, so the fields are asked and answered independently: a location can be dropped while the
+    anatomy is still named. One field at offset 0 is the whole table, which is what keeps a
+    single-field run identical to one written before fields existed.
     """
 
-    vocabulary: tuple[str, ...]
-    # Which field of the dataset's image_metadata.json names each case's prompt.
-    key: str = "location"
+    fields: tuple[PromptField, ...]
     width: int = 256
     # `encoder` gates the four feature maps, `decoder` the head's fused features, `both` all five.
     sites: str = "decoder"
-    # Probability a training case is given the null prompt in place of its own.
-    dropout_p: float = 0.2
+
+    @property
+    def offsets(self) -> tuple[int, ...]:
+        """The first embedding row of each field's block, which is that field's null."""
+        offsets, row = [], 0
+        for field in self.fields:
+            offsets.append(row)
+            row += 1 + len(field.vocabulary)
+        return tuple(offsets)
+
+    @property
+    def rows(self) -> int:
+        return sum(1 + len(field.vocabulary) for field in self.fields)
+
+    @property
+    def slots(self) -> int:
+        return sum(field.slots for field in self.fields)
+
+    def row(self, values: dict) -> tuple[int, ...]:
+        """A prompt row: each field's answers as embedding rows, padded out with its null."""
+        row = []
+        for field, offset in zip(self.fields, self.offsets):
+            indices = [offset + 1 + field.vocabulary.index(name)
+                       for name in values.get(field.key, ()) if name in field.vocabulary]
+            row.extend(indices + [offset] * (field.slots - len(indices)))
+        return tuple(row)
 
     @property
     def gates_encoder(self) -> bool:
@@ -65,6 +116,32 @@ class PromptConfig:
     @property
     def gates_decoder(self) -> bool:
         return self.sites in {"decoder", "both"}
+
+
+def _prompt_field(declared: dict) -> PromptField:
+    key = str(declared.get("key", "location"))
+    vocabulary = tuple(str(x) for x in declared.get("vocabulary", ()))
+    if not vocabulary:
+        raise ValueError(f"data.prompt field {key} needs a vocabulary")
+    if len(set(vocabulary)) != len(vocabulary):
+        raise ValueError(f"data.prompt field {key} repeats a vocabulary entry")
+    dropout_p = float(declared.get("dropout_p", 0.0))
+    if not 0.0 <= dropout_p < 1.0:
+        # Dropout reaches the training subset alone, so 1.0 would train the null embedding only and
+        # still hand validation and test the ones it never updated. A run meant to carry no prompt
+        # says so with a vocabulary every case maps to the same entry of.
+        raise ValueError(f"data.prompt field {key} dropout_p must be at least 0 and below 1")
+    eval_values = tuple(str(x) for x in declared.get("eval", ()))
+    outside = [name for name in eval_values if name not in vocabulary]
+    if outside:
+        raise ValueError(f"data.prompt field {key} eval names {outside}, outside its vocabulary")
+    return PromptField(
+        key=key,
+        vocabulary=vocabulary,
+        multi=bool(declared.get("multi", False)),
+        dropout_p=dropout_p,
+        eval_values=eval_values,
+    )
 
 
 @dataclass(frozen=True)
@@ -110,6 +187,7 @@ class ExperimentConfig:
     patching: "PatchConfig | None"
     augment: "AugmentConfig | None"
     prompt: "PromptConfig | None"
+    predict_labels: tuple[str, ...]
     stains: tuple[str, ...]
     channel_dropout: tuple[str, ...]
     channel_dropout_p: float
@@ -128,19 +206,22 @@ class ExperimentConfig:
         channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
         if not 0.0 <= channel_dropout_p <= 1.0:
             raise ValueError("data.channel_dropout_p must be between 0 and 1")
+        prompt_fields = ()
         if prompt:
-            vocabulary = tuple(str(x) for x in prompt.get("vocabulary", ()))
-            if not vocabulary:
-                raise ValueError("data.prompt needs a vocabulary")
-            if len(set(vocabulary)) != len(vocabulary):
-                raise ValueError("data.prompt.vocabulary repeats an entry")
+            if prompt.get("fields") and prompt.get("vocabulary"):
+                raise ValueError("data.prompt takes either fields or a single key and vocabulary")
+            # A prompt asking one question writes that question at the top level.
+            declared = prompt.get("fields") or [
+                {"key": prompt.get("key", "location"),
+                 "vocabulary": prompt.get("vocabulary", ()),
+                 "dropout_p": prompt.get("dropout_p", 0.2)}
+            ]
             if prompt.get("sites", "decoder") not in {"encoder", "decoder", "both"}:
                 raise ValueError("data.prompt.sites must be encoder, decoder or both")
-            if not 0.0 <= float(prompt.get("dropout_p", 0.2)) < 1.0:
-                # Dropout reaches the training subset alone, so 1.0 would train the null embedding
-                # only and still hand validation and test the ones it never updated. A run meant to
-                # carry no prompt says so with a vocabulary every case maps to the same entry of.
-                raise ValueError("data.prompt.dropout_p must be at least 0 and below 1")
+            prompt_fields = tuple(_prompt_field(field) for field in declared)
+            keys = [field.key for field in prompt_fields]
+            if len(set(keys)) != len(keys):
+                raise ValueError("data.prompt asks the same key twice")
         # Datasets may be given by number alone. Naming them the way the raw data directory does, once
         # and here, is what lets every path built from a config -- the run directory, the caches, the
         # prediction and metrics directories -- read the same as the data it was made from.
@@ -233,15 +314,17 @@ class ExperimentConfig:
             # existed builds exactly the network it always did.
             prompt=(
                 PromptConfig(
-                    vocabulary=vocabulary,
-                    key=str(prompt.get("key", "location")),
+                    fields=prompt_fields,
                     width=int(prompt.get("width", 256)),
                     sites=str(prompt.get("sites", "decoder")),
-                    dropout_p=float(prompt.get("dropout_p", 0.2)),
                 )
                 if prompt
                 else None
             ),
+            # The class names the written prediction is mapped onto, in order, so a model trained on
+            # many structures can be scored against a dataset labelled with one. Empty writes the
+            # model's own class indices.
+            predict_labels=tuple(str(x) for x in data.get("predict_labels", [])),
             patching=(
                 PatchConfig(
                     patch_size=int(patching.get("patch_size", 1008)),
@@ -280,7 +363,7 @@ class ExperimentConfig:
 # project does, but keep their own plans files instead of a config.yaml, so everything here is read
 # off the directory and the raw data directory the caller names.
 PLAIN_RUN_FIELDS = ("raw_data_dir", "train_dataset", "test_split", "test_splits", "patching",
-                    "stains", "prompt")
+                    "stains", "prompt", "predict_labels")
 
 
 def describe_run_dir(fold_dir, raw_data_dir=None):
@@ -303,4 +386,5 @@ def describe_run_dir(fold_dir, raw_data_dir=None):
         patching=None,
         stains=(),
         prompt=None,
+        predict_labels=(),
     )

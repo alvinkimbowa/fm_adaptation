@@ -30,16 +30,17 @@ def preprocess(image, mask):
 
 
 class DatasetFixture:
-    def __init__(self, root, name, channels):
+    def __init__(self, root, name, channels, labels=None):
         self.root = Path(root)
         self.name = name
         self.path = self.root / name
         for split in ("Tr", "Ts", "Ts_external", "Ts_interrater"):
             (self.path / f"images{split}").mkdir(parents=True)
             (self.path / f"labels{split}").mkdir()
+        self.labels = labels or {"background": 0, "lesion": 1}
         (self.path / "dataset.json").write_text(json.dumps({
             "channel_names": channels,
-            "labels": {"background": 0, "lesion": 1},
+            "labels": self.labels,
             "file_ending": ".png",
         }))
 
@@ -64,6 +65,11 @@ class DatasetFixture:
             str(self.path / f"labels{split}" / f"{case_id}.png"),
             np.zeros(shape, dtype=np.uint8) if label is None else label,
         )
+
+    def metadata(self, images, nested=True):
+        """The per-case sidecar a prompt is looked up in, in either shape a dataset writes it."""
+        body = {"labels": self.labels, "images": images} if nested else images
+        (self.path / "image_metadata.json").write_text(json.dumps(body))
 
     def split(self, train, val=()):
         (self.path / "splits_final.json").write_text(json.dumps([
