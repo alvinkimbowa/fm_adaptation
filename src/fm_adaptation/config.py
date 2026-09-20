@@ -41,6 +41,33 @@ class AugmentConfig:
 
 
 @dataclass(frozen=True)
+class PromptConfig:
+    """The prompt naming what to segment, and where its embedding meets the network.
+
+    `vocabulary` is what fixes each prompt's index, so it is written down in the config rather than
+    discovered from the data: the run directory keeps its config, and prediction reads the same order
+    back. A case whose value is outside the vocabulary takes the null prompt.
+    """
+
+    vocabulary: tuple[str, ...]
+    # Which field of the dataset's image_metadata.json names each case's prompt.
+    key: str = "location"
+    width: int = 256
+    # `encoder` gates the four feature maps, `decoder` the head's fused features, `both` all five.
+    sites: str = "decoder"
+    # Probability a training case is given the null prompt in place of its own.
+    dropout_p: float = 0.2
+
+    @property
+    def gates_encoder(self) -> bool:
+        return self.sites in {"encoder", "both"}
+
+    @property
+    def gates_decoder(self) -> bool:
+        return self.sites in {"decoder", "both"}
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     raw_data_dir: Path
     results_dir: Path
@@ -82,6 +109,7 @@ class ExperimentConfig:
     device: str
     patching: "PatchConfig | None"
     augment: "AugmentConfig | None"
+    prompt: "PromptConfig | None"
     stains: tuple[str, ...]
     channel_dropout: tuple[str, ...]
     channel_dropout_p: float
@@ -96,9 +124,23 @@ class ExperimentConfig:
         training = cfg["training"]
         patching = cfg.get("patching") or {}
         augment = data.get("augment") or {}
+        prompt = data.get("prompt") or {}
         channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
         if not 0.0 <= channel_dropout_p <= 1.0:
             raise ValueError("data.channel_dropout_p must be between 0 and 1")
+        if prompt:
+            vocabulary = tuple(str(x) for x in prompt.get("vocabulary", ()))
+            if not vocabulary:
+                raise ValueError("data.prompt needs a vocabulary")
+            if len(set(vocabulary)) != len(vocabulary):
+                raise ValueError("data.prompt.vocabulary repeats an entry")
+            if prompt.get("sites", "decoder") not in {"encoder", "decoder", "both"}:
+                raise ValueError("data.prompt.sites must be encoder, decoder or both")
+            if not 0.0 <= float(prompt.get("dropout_p", 0.2)) < 1.0:
+                # Dropout reaches the training subset alone, so 1.0 would train the null embedding
+                # only and still hand validation and test the ones it never updated. A run meant to
+                # carry no prompt says so with a vocabulary every case maps to the same entry of.
+                raise ValueError("data.prompt.dropout_p must be at least 0 and below 1")
         # Datasets may be given by number alone. Naming them the way the raw data directory does, once
         # and here, is what lets every path built from a config -- the run directory, the caches, the
         # prediction and metrics directories -- read the same as the data it was made from.
@@ -187,6 +229,19 @@ class ExperimentConfig:
                 if augment
                 else None
             ),
+            # Absent means the network takes no prompt at all, so every config written before this
+            # existed builds exactly the network it always did.
+            prompt=(
+                PromptConfig(
+                    vocabulary=vocabulary,
+                    key=str(prompt.get("key", "location")),
+                    width=int(prompt.get("width", 256)),
+                    sites=str(prompt.get("sites", "decoder")),
+                    dropout_p=float(prompt.get("dropout_p", 0.2)),
+                )
+                if prompt
+                else None
+            ),
             patching=(
                 PatchConfig(
                     patch_size=int(patching.get("patch_size", 1008)),
@@ -225,7 +280,7 @@ class ExperimentConfig:
 # project does, but keep their own plans files instead of a config.yaml, so everything here is read
 # off the directory and the raw data directory the caller names.
 PLAIN_RUN_FIELDS = ("raw_data_dir", "train_dataset", "test_split", "test_splits", "patching",
-                    "stains")
+                    "stains", "prompt")
 
 
 def describe_run_dir(fold_dir, raw_data_dir=None):
@@ -247,4 +302,5 @@ def describe_run_dir(fold_dir, raw_data_dir=None):
         test_splits={},
         patching=None,
         stains=(),
+        prompt=None,
     )

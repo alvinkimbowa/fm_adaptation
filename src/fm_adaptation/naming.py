@@ -38,6 +38,10 @@ TOKENS = (
     ("m2f", "Mask2Former"),
     # What was added to it.
     ("inj", "Inj"),
+    ("gateonly", "Gate-only"),
+    ("promptdec", "Prompt(dec)"),
+    ("promptenc", "Prompt(enc)"),
+    ("promptboth", "Prompt(enc+dec)"),
     ("kd", "KD"),
     ("ft", "FT"),
     ("finetune", "FT"),

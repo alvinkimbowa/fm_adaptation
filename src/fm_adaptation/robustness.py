@@ -44,6 +44,7 @@ from .data import (
     collate_cases,
     load_dataset_json,
     num_classes,
+    prompt_batch,
     trained_planes,
 )
 from .metrics import read_case_metrics
@@ -154,7 +155,10 @@ def evaluate(model, loader, transform, device, amp, fill, output_dir, descriptio
     with torch.no_grad():
         for images, _, metadata in tqdm(loader, desc=description, leave=False):
             with amp:
-                logits = model(apply(images, transform, fill).to(device, non_blocking=True))
+                logits = model(
+                    apply(images, transform, fill).to(device, non_blocking=True),
+                    prompt_batch(metadata, device),
+                )
             for prediction, meta in zip(invert(logits.argmax(1).cpu(), transform), metadata):
                 cv2.imwrite(
                     str(prediction_dir / f"{meta['case_id']}.png"),
@@ -273,7 +277,7 @@ def main():
             continue  # Dataset212 ships images only; a transform has nothing to be scored against.
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
-            keep_planes=keep_planes, require_labels=True,
+            keep_planes=keep_planes, require_labels=True, prompt=cfg.prompt,
         )
         if dataset_name != cfg.train_dataset:
             dataset.ids = [case for case in dataset.ids if case not in seen]

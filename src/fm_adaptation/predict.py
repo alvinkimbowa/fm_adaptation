@@ -16,6 +16,7 @@ from .data import (
     collate_cases,
     load_dataset_json,
     num_classes,
+    prompt_batch,
     stain_planes,
 )
 from .datasets import dataset_dir as resolve_dataset_dir, split_cases
@@ -199,7 +200,7 @@ def main():
             continue
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
-            keep_planes=keep_planes, require_labels=labelled,
+            keep_planes=keep_planes, require_labels=labelled, prompt=cfg.prompt,
         )
         if dataset_name != cfg.train_dataset:
             dataset.ids = [c for c in dataset.ids if c not in seen]
@@ -226,8 +227,9 @@ def main():
         progress = tqdm(loader, desc=f"{kind} {dataset_name}")
         with torch.no_grad():
             for images, _, metadata in progress:
+                prompt = prompt_batch(metadata, device)
                 with amp:
-                    logits = model(images.to(device))
+                    logits = model(images.to(device), prompt)
                 predictions = logits.argmax(1).cpu()
                 for prediction, meta in zip(predictions, metadata):
                     # Restored to the case's own height and width, so the file on disk is directly

@@ -9,13 +9,21 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .prompting import PromptConditioner, PromptGate
+
+
+def decoder_widths(in_channels):
+    """One width per pyramid level. The adapters emit the trunk's token width four times over; a
+    ConvNeXt widens as it goes, so it declares the four its stages actually have."""
+    return list(in_channels) if isinstance(in_channels, (list, tuple)) else [in_channels] * 4
+
 
 class LinearProbe(nn.Module):
     def __init__(self, in_channels: int, num_classes: int):
         super().__init__()
         self.classifier = nn.Conv2d(in_channels, num_classes, 1)
 
-    def forward(self, features, output_size):
+    def forward(self, features, output_size, prompt=None):
         return F.interpolate(
             self.classifier(features), size=output_size, mode="bilinear", align_corners=False
         )
@@ -35,7 +43,7 @@ class NonlinearProbe(nn.Module):
         self.decoder = nn.Sequential(*layers)
         self.classifier = nn.Conv2d(current, num_classes, 1)
 
-    def forward(self, features, output_size):
+    def forward(self, features, output_size, prompt=None):
         x = features
         for start in range(0, len(self.decoder), 3):
             x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
@@ -385,13 +393,11 @@ class UperNetDecoder(nn.Module):
     run is identical to a probe run apart from the decoder itself.
     """
 
-    def __init__(self, in_channels, num_classes: int):
+    def __init__(self, in_channels, num_classes: int, prompt_width: int | None = None):
         super().__init__()
         from mmseg.models.decode_heads import UPerHead
 
-        # One width per scale. The adapter emits the trunk's token width four times over; a ConvNeXt
-        # widens as it goes, so it declares the four its stages actually have.
-        widths = list(in_channels) if isinstance(in_channels, (list, tuple)) else [in_channels] * 4
+        widths = decoder_widths(in_channels)
         self.head = UPerHead(
             in_channels=widths,
             in_index=[0, 1, 2, 3],
@@ -404,9 +410,16 @@ class UperNetDecoder(nn.Module):
             # Required by the constructor, never called: we compute the loss ourselves.
             loss_decode={"type": "CrossEntropyLoss"},
         )
+        # Gates the features the FPN has already fused, so one gate reaches every scale at once.
+        self.gate = None if prompt_width is None else PromptGate(self.head.channels, prompt_width)
 
-    def forward(self, features, output_size):
-        return F.interpolate(self.head(features), size=output_size, mode="bilinear", align_corners=False)
+    def forward(self, features, output_size, prompt=None):
+        if self.gate is None:
+            logits = self.head(features)
+        else:
+            fused = self.head._forward_feature(features)
+            logits = self.head.cls_seg(self.gate(fused, prompt))
+        return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
 
 
 def _trainable_sam3_mlp_forward(mlp, x):
@@ -420,13 +433,21 @@ def _trainable_sam3_mlp_forward(mlp, x):
 
 
 class SegmentationModel(nn.Module):
-    def __init__(self, encoder, probe):
+    def __init__(self, encoder, probe, prompt=None):
         super().__init__()
         self.encoder = encoder
         self.probe = probe
+        self.prompt = prompt
 
-    def forward(self, images):
-        return self.probe(self.encoder(images), images.shape[-2:])
+    def forward(self, images, prompt=None):
+        features = self.encoder(images)
+        embedding = None
+        if self.prompt is not None:
+            if prompt is None:
+                raise ValueError("this model takes a prompt, and the batch carried none")
+            embedding = self.prompt.encode(prompt)
+            features = self.prompt.condition(features, embedding)
+        return self.probe(features, images.shape[-2:], embedding)
 
 
 def build_model(
@@ -437,6 +458,7 @@ def build_model(
     train_encoder: bool = False,
     injector: bool = False,
     variant: str = DEFAULT_DINOV3_VARIANT,
+    prompt=None,
 ):
     encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe, "upernet": UperNetDecoder}
@@ -461,8 +483,26 @@ def build_model(
             encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
-    probe = probes[probe_name](encoder.feature_channels, classes)
-    return SegmentationModel(encoder, probe)
+    if prompt is not None and probe_name != "upernet" and prompt.gates_decoder:
+        raise ValueError("data.prompt.sites reaches the decoder, which only upernet has")
+    probe_extra = (
+        {"prompt_width": prompt.width}
+        if prompt is not None and probe_name == "upernet" and prompt.gates_decoder
+        else {}
+    )
+    probe = probes[probe_name](encoder.feature_channels, classes, **probe_extra)
+    conditioner = None
+    if prompt is not None:
+        # A pyramid decoder is handed four maps; the probes are handed the trunk's one.
+        channels = (
+            decoder_widths(encoder.feature_channels)
+            if probe_name == "upernet"
+            else [encoder.feature_channels]
+        )
+        conditioner = PromptConditioner(
+            prompt.vocabulary, prompt.width, channels, gate_features=prompt.gates_encoder,
+        )
+    return SegmentationModel(encoder, probe, conditioner)
 
 
 def load_trained_model(cfg, checkpoint: str, device, classes: int):
@@ -470,12 +510,15 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
     model = build_model(
         cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
         train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
+        prompt=getattr(cfg, "prompt", None),
     )
     name = "final" if cfg.fold == "all" else checkpoint
     path = cfg.run_dir / f"{name}.pt"
     # `last.pt` also carries optimiser and RNG state, which the safe loader cannot unpickle.
     state = torch.load(path, map_location="cpu", weights_only=name != "last")
     model.probe.load_state_dict(state["probe"])
+    if "prompt" in state:
+        model.prompt.load_state_dict(state["prompt"])
     if "encoder" in state:
         model.encoder.trunk.load_state_dict(state["encoder"])
     if "adapter" in state:

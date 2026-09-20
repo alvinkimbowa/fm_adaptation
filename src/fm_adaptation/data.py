@@ -3,6 +3,7 @@ import math
 from pathlib import Path
 
 from .datasets import dataset_dir
+from .prompting import NULL_PROMPT
 
 import cv2
 import numpy as np
@@ -21,6 +22,33 @@ PLANE_LETTERS = {"R": 0, "G": 1, "B": 2}
 def load_dataset_json(dataset_dir: Path) -> dict:
     with open(dataset_dir / "dataset.json") as f:
         return json.load(f)
+
+
+def prompt_indices(dataset_dir: Path, prompt) -> dict[str, int]:
+    """Each case's index into the prompt vocabulary, from the dataset's own image metadata.
+
+    A case the metadata gives a value outside the vocabulary -- `unspecified`, or a location this run
+    does not train on -- takes the null index, which is what having no prompt means.
+    """
+    path = Path(dataset_dir) / "image_metadata.json"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is needed to look a prompt up per case; the dataset ships no image metadata"
+        )
+    with open(path) as f:
+        metadata = json.load(f)
+    order = {name: index + 1 for index, name in enumerate(prompt.vocabulary)}
+    return {
+        case_id: order.get(entry.get(prompt.key), NULL_PROMPT)
+        for case_id, entry in metadata.items()
+    }
+
+
+def prompt_batch(metadata, device=None):
+    """The prompt indices of a collated batch, or `None` for a run that carries no prompt."""
+    if not metadata or "prompt" not in metadata[0]:
+        return None
+    return torch.tensor([item["prompt"] for item in metadata], dtype=torch.long, device=device)
 
 
 def stain_planes(channel_names: dict) -> dict[str, tuple[int, int]] | None:
@@ -252,7 +280,7 @@ def _turn(image, mask, geometry, angle, scale, fill):
 class NnUNet2DDataset(Dataset):
     def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess,
                  channel_dropout=(), channel_dropout_p=0.5, keep_planes=None,
-                 require_labels=True, augment=None):
+                 require_labels=True, augment=None, prompt=None):
         self.dataset_dir = dataset_dir(raw_dir, dataset_name)
         self.split = split
         self.subset = subset
@@ -288,6 +316,9 @@ class NnUNet2DDataset(Dataset):
         # A dataset that ships images without labels can still be predicted; it just cannot be scored.
         self.require_labels = require_labels
         self.ids = _case_ids(self.dataset_dir, split, fold, subset)
+        # Keyed by case id rather than by position: callers thin `self.ids` after construction.
+        self.prompt = prompt
+        self.prompts = None if prompt is None else prompt_indices(self.dataset_dir, prompt)
         self.channel_dropout = tuple(str(name).upper() for name in channel_dropout)
         self.channel_dropout_p = float(channel_dropout_p)
         if not 0.0 <= self.channel_dropout_p <= 1.0:
@@ -372,7 +403,11 @@ class NnUNet2DDataset(Dataset):
         if self.augment is not None and self.subset == "train":
             # `geometry` says where the section sits on the canvas, which is what the crop needs.
             image_t, mask_t = _augment(image_t, mask_t, geometry, self.augment, self.fill)
-        return image_t, mask_t, {"case_id": case_id, "has_label": has_label, **geometry}
+        metadata = {"case_id": case_id, "has_label": has_label, **geometry}
+        if self.prompt is not None:
+            dropped = self.subset == "train" and torch.rand(()) < self.prompt.dropout_p
+            metadata["prompt"] = NULL_PROMPT if dropped else self.prompts[case_id]
+        return image_t, mask_t, metadata
 
 
 class CachedFeatureDataset(Dataset):

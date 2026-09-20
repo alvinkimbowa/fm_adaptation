@@ -17,6 +17,7 @@ from .data import (
     collate_cases,
     load_dataset_json,
     num_classes,
+    prompt_batch,
     stain_planes,
     trained_planes,
 )
@@ -49,6 +50,7 @@ def _raw_dataset(cfg, preprocess, subset):
         # Augment what the model learns from and nothing else: validation has to stay comparable
         # across runs, and prediction never builds its datasets through here at all.
         augment=cfg.augment if subset == "train" else None,
+        prompt=cfg.prompt,
     )
 
 
@@ -72,6 +74,8 @@ def _validate_data_mode(cfg, encoder_trains=None):
         raise ValueError("patchwise loading is not supported for multi-stain datasets")
     if cfg.patching is not None and cfg.channel_dropout:
         raise ValueError("channel_dropout is not supported with patchwise loading")
+    if cfg.patching is not None and cfg.prompt is not None:
+        raise ValueError("prompt is not supported with patchwise loading")
     # What rules perturbation out is caching, not a frozen trunk: features cached once, from the
     # unaugmented image, would make any perturbation silently do nothing, since the cached loader
     # never opens an image again. Patching is cut fresh every epoch and so never caches, and neither
@@ -81,6 +85,10 @@ def _validate_data_mode(cfg, encoder_trains=None):
         raise ValueError("channel_dropout requires an uncached encoder")
     if cached and cfg.augment is not None:
         raise ValueError("augment requires an uncached encoder")
+    # The cached loader steps the probe alone over stored features, so nothing between the encoder
+    # and the decoder ever runs -- a prompt gating either of them would silently do nothing.
+    if cached and cfg.prompt is not None:
+        raise ValueError("prompt requires an uncached encoder")
 
 
 def _cache_features(cfg, encoder, dataset, device):
@@ -156,6 +164,8 @@ def _rng_state():
 def _load_weights(model, state):
     """Copy a checkpoint's trained parts into `model`, leaving the rest as built."""
     model.probe.load_state_dict(state["probe"])
+    if "prompt" in state:
+        model.prompt.load_state_dict(state["prompt"])
     if "encoder" in state:
         # A finetuned trunk; `adapter` carries no `backbone.*` keys, so it cannot undo this.
         model.encoder.trunk.load_state_dict(state["encoder"])
@@ -295,7 +305,7 @@ def _lr_scheduler(optimizer, cfg, steps_per_epoch):
 def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None, accumulation_steps=1,
                scheduler=None):
     training = optimizer is not None
-    forward = forward or (lambda m, x, y: m(x, y.shape[-2:]))
+    forward = forward or (lambda m, x, y, prompt: m(x, y.shape[-2:], prompt))
     module.train(training)
     if getattr(module, "encoder", None) is not None and not module.encoder.trainable:
         # The trunk carries stochastic depth; a frozen encoder must never leave eval mode.
@@ -305,10 +315,11 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
     progress = tqdm(loader, desc=desc, leave=False)
     if training:
         optimizer.zero_grad(set_to_none=True)
-    for step, (images, masks, _) in enumerate(progress, start=1):
+    for step, (images, masks, metadata) in enumerate(progress, start=1):
         images, masks = images.to(device), masks.to(device)
+        prompt = prompt_batch(metadata, device)
         with amp:
-            logits = forward(module, images, masks)
+            logits = forward(module, images, masks, prompt)
             loss = loss_fn(logits, masks)
         if training:
             # Accumulation keeps the effective batch where the memory does not allow the real one.
@@ -350,6 +361,7 @@ def main():
         train_encoder=cfg.train_encoder,
         injector=cfg.injector,
         variant=cfg.variant,
+        prompt=cfg.prompt,
     )
     if cfg.init_from and not args.resume:
         # A resume restores this run's own state; seeding on top of it would throw the run away.
@@ -363,7 +375,7 @@ def main():
         # Nothing stable to cache -- patches are cut fresh every epoch, and a training adapter changes
         # the features it produces -- so the whole model is what gets stepped through.
         module = model.to(device)
-        forward = lambda m, images, masks: m(images)  # noqa: E731
+        forward = lambda m, images, masks, prompt: m(images, prompt)  # noqa: E731
         if cfg.patching is not None:
             train_loader = _patch_loader(cfg, model.encoder.preprocess, "train", shuffle=True)
             val_loader = None if cfg.fold == "all" else _patch_loader(cfg, model.encoder.preprocess, "val")
@@ -466,6 +478,10 @@ def main():
                 else:
                     epochs_without_improvement += 1
             weights = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
+            if model.prompt is not None:
+                # The prompt encoder and the gates on the encoder's features; the decoder's own gate
+                # is part of the head and is already in `probe`.
+                weights["prompt"] = model.prompt.state_dict()
             if cfg.train_encoder:
                 # A trunk that trains is no longer recoverable from its pretrained checkpoint, so it is
                 # stored whole under the key the finetuning runs already use.

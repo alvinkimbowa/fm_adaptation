@@ -1,0 +1,58 @@
+data:
+  raw_data_dir: ../nmus_segmentation/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset701_nmus_median_rgb
+  test_datasets:
+    - Dataset701_nmus_median_rgb
+  test_split: Ts
+  fold: 0
+  # Flips, rotation and zoom, on the square canvas the encoder sees. A rotation is cropped back to
+  # what is real image in every row and column, so nothing invented reaches the model. No vertical
+  # flip: a transverse nerve scan has an up, with the skin surface along the top edge.
+  augment:
+    hflip: true
+    vflip: false
+    rotation: 45
+    zoom_min: 0.5
+    zoom_max: 1.5
+
+  # The prompt names the target: which of the five scanned body locations this image was taken at,
+  # known at inference rather than predicted. The vocabulary is written down rather than discovered
+  # so that each entry keeps its index; index 0 is the null prompt, which a value outside this list
+  # -- `unspecified` -- also takes. `dropout_p` trains that null embedding, so the same checkpoint
+  # can be predicted with and without a prompt.
+  prompt:
+    key: location
+    vocabulary:
+      - wrist
+      - distal forearm
+      - mid-forearm
+      - elbow
+      - mid-arm
+    width: 256
+    sites: both
+    dropout_p: 0.2
+
+model:
+  name: dinov3
+  probe: upernet
+  variant: convnexts
+  injector: false
+  train_encoder: true
+  run_name: convnexts_upernet_ft_aug_promptboth_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda

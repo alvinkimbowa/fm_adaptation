@@ -17,6 +17,8 @@ from pathlib import Path
 
 import yaml
 
+from .config import ExperimentConfig
+
 MMSEG_RUNS = {"upernet", "upernet_inj", "m2f", "m2f_inj"}
 # Every dataset in the study is binary, and the head is the only part whose size depends on this.
 NUM_CLASSES = 2
@@ -29,7 +31,8 @@ def _counts(module):
     return {"total": total, "trainable": trainable}
 
 
-def _foundation_counts(model_name, run_name, probe, injector, train_encoder=False, variant="vitl16"):
+def _foundation_counts(model_name, run_name, probe, injector, train_encoder=False, variant="vitl16",
+                       prompt=None):
     from .models import build_model
 
     if run_name in MMSEG_RUNS:
@@ -50,6 +53,7 @@ def _foundation_counts(model_name, run_name, probe, injector, train_encoder=Fals
         model_name, probe, NUM_CLASSES, None,
         # The two-stage finetuning runs say so in their name; the adapter runs say so in their config.
         train_encoder=train_encoder or "finetune" in run_name, injector=injector, variant=variant,
+        prompt=prompt,
     )
     return _counts(model)
 
@@ -127,9 +131,13 @@ def main():
         injector = bool(cfg["model"].get("injector", False))
         train_encoder = bool(cfg["model"].get("train_encoder", False))
         variant = str(cfg["model"].get("variant", "vitl16"))
+        # The prompt sizes real parameters, so the count has to be made with it in place.
+        prompt = ExperimentConfig.from_yaml(config_path).prompt
         print(f"counting {model_name}/{run_name} ...", flush=True)
         try:
-            seen[key] = _foundation_counts(model_name, run_name, probe, injector, train_encoder, variant)
+            seen[key] = _foundation_counts(
+                model_name, run_name, probe, injector, train_encoder, variant, prompt
+            )
         except Exception as error:  # a missing optional dependency should not lose the rest
             print(f"  skipped: {type(error).__name__}: {error}")
             continue
