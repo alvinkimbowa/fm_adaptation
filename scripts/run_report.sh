@@ -43,6 +43,7 @@ train_datasets=(
     Dataset093_Echo_CardiacNet
     Dataset700_nmus_median
     Dataset701_nmus_median_rgb
+    Dataset702_nmus_all_rgb
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -77,6 +78,14 @@ configs=(
     convnexts_upernet_ft_aug_promptdec_ours
     convnexts_upernet_ft_aug_promptenc_ours
     convnexts_upernet_ft_aug_promptboth_ours
+    convnexts_upernet_ft_aug_gateonly_ours
+    convnextb_upernet_ft_aug_ours
+    convnextb_upernet_ft_aug_promptenc_ours
+    convnext_upernet_ft_aug_ours
+    convnext_upernet_ft_aug_promptenc_ours
+    convnexts_upernet_ft_aug_promptanat_ours
+    convnextb_upernet_ft_aug_promptanat_ours
+    convnext_upernet_ft_aug_promptanat_ours
     upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours

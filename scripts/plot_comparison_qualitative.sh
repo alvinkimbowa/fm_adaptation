@@ -25,6 +25,7 @@ train_datasets=(
     # Dataset072_GE_LQP9
     # Dataset073_GE_LE
     Dataset701_nmus_median_rgb
+    Dataset702_nmus_all_rgb
 )
 
 # Evaluation sets to draw. Empty takes every set all the chosen runs have predictions for.

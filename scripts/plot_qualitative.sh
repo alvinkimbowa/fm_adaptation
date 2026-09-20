@@ -49,6 +49,7 @@ train_datasets=(
     # Dataset072_GE_LQP9
     # Dataset073_GE_LE
     Dataset701_nmus_median_rgb
+    Dataset702_nmus_all_rgb
 )
 
 # Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
@@ -101,6 +102,14 @@ configs=(
     convnexts_upernet_ft_aug_promptdec_ours
     convnexts_upernet_ft_aug_promptenc_ours
     convnexts_upernet_ft_aug_promptboth_ours
+    convnexts_upernet_ft_aug_gateonly_ours
+    convnextb_upernet_ft_aug_ours
+    convnextb_upernet_ft_aug_promptenc_ours
+    convnext_upernet_ft_aug_ours
+    convnext_upernet_ft_aug_promptenc_ours
+    convnexts_upernet_ft_aug_promptanat_ours
+    convnextb_upernet_ft_aug_promptanat_ours
+    convnext_upernet_ft_aug_promptanat_ours
     upernet_inj_ft_ours
     upernet_inj_ft_vits_ours
     nnUNetTrainer__nnUNetResEncUNetMPlans__2d
