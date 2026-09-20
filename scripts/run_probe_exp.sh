@@ -10,6 +10,10 @@ checkpoint=${checkpoint:-final}   # final | best | last
 # Redoing a dataset that already has predictions costs a full forward pass per case for a result
 # that cannot change, so this defaults to reusing them; set overwrite=1 to force everything afresh.
 overwrite=${overwrite:-false}
+# Predict with the null prompt rather than each case's own, into a `_unprompted` column beside it.
+null_prompt=${null_prompt:-0}
+# Predict every case as this vocabulary entry instead of its own; empty keeps each case's own prompt.
+force_prompt=${force_prompt:-}
 gpu_id=${gpu_id:-0}
 # Empty keeps the fold the config names; set it to train and score another one of the split.
 fold=${fold:-}
@@ -35,6 +39,8 @@ if [[ "$predict" -eq 1 ]]; then
     if [[ "$overwrite" == true ]]; then
         predict_args+=(--overwrite)
     fi
+    [[ "$null_prompt" -eq 1 ]] && predict_args+=(--null-prompt)
+    [[ -n "$force_prompt" ]] && predict_args+=(--force-prompt "$force_prompt")
     python -m fm_adaptation.predict "${predict_args[@]}"
 fi
 

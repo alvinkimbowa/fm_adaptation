@@ -160,6 +160,15 @@ def main():
     parser.add_argument("--checkpoint", choices=("best", "final", "last"), default="best")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--fold", help="cross-validation fold to predict with, overriding the config's")
+    parser.add_argument(
+        "--null-prompt",
+        action="store_true",
+        help="predict with the null prompt rather than each case's own, into a `_unprompted` column",
+    )
+    parser.add_argument(
+        "--force-prompt",
+        help="predict every case with this vocabulary entry rather than its own, into a column of its own",
+    )
     args = parser.parse_args()
     cfg = ExperimentConfig.from_yaml(args.config)
     if args.fold is not None:
@@ -176,6 +185,11 @@ def main():
         load_dataset_json(cfg.raw_data_dir / cfg.train_dataset)["channel_names"], cfg.stains
     )
     seen = _seen_in_training(cfg)
+    forced = None
+    if args.force_prompt:
+        if cfg.prompt is None or args.force_prompt not in cfg.prompt.vocabulary:
+            raise SystemExit(f"--force-prompt must name one of {list(getattr(cfg.prompt, 'vocabulary', []))}")
+        forced = cfg.prompt.vocabulary.index(args.force_prompt) + 1
     # What each column is supposed to hold once every job that writes into it has run. A column can
     # be reached by two jobs -- `test_split: all` sends `imagesTr` and `imagesTs` to one directory --
     # so this is only complete at the end, which is where the pruning below happens.
@@ -186,6 +200,11 @@ def main():
             declared = stain_planes(load_dataset_json(cfg.raw_data_dir / dataset_name)["channel_names"])
             if declared is not None and len(declared) > 1:
                 raise ValueError("patchwise prediction is not supported for multi-stain datasets")
+        if args.null_prompt:
+            # A column of its own, so a null-prompt pass never overwrites the prompted predictions.
+            column_name = f"{column_name}_unprompted"
+        elif args.force_prompt:
+            column_name = f"{column_name}_as_{args.force_prompt.replace(' ', '-')}"
         output_dir = cfg.run_dir / kind / column_name
         # The loader still needs to know whether a label exists to return one; scoring happens later,
         # in `fm_adaptation.compute_metrics`, against the label on disk rather than the resized copy.
@@ -228,6 +247,10 @@ def main():
         with torch.no_grad():
             for images, _, metadata in progress:
                 prompt = prompt_batch(metadata, device)
+                if prompt is not None and args.null_prompt:
+                    prompt = torch.zeros_like(prompt)
+                elif prompt is not None and args.force_prompt:
+                    prompt = torch.full_like(prompt, forced)
                 with amp:
                     logits = model(images.to(device), prompt)
                 predictions = logits.argmax(1).cpu()
