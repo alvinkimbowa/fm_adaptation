@@ -25,9 +25,11 @@ models=(
 results_dirs=(
     models
     ../knee_us_segmentation/data/nnUNet_results
+    ../nmus_segmentation/data/nnUNet_results
     # ~/GAA/spinal_cord_injury/data/nnUNet_results
 )
-raw_data_dir=../knee_us_segmentation/data/nnUNet_raw
+# raw_data_dir=../knee_us_segmentation/data/nnUNet_raw
+raw_data_dir=../nmus_segmentation/data/nnUNet_raw
 
 train_datasets=(
     # Dataset105_lesion_eric_gfap_resized
@@ -42,10 +44,11 @@ train_datasets=(
     # Dataset301_neurite_yvonne_b2_smi
     # Dataset302_neurite_yvonne_b2_smi_1px
     # Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
-    Dataset070_Clarius_L15
-    Dataset071_Sonix-Touch
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
+    # Dataset070_Clarius_L15
+    # Dataset071_Sonix-Touch
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    Dataset701_nmus_median_rgb
 )
 
 # Evaluation sets to draw. A run only draws the sets it has predictions for, so naming one a run
@@ -70,6 +73,7 @@ test_datasets=(
     Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
     Dataset073_GE_LE
+    Dataset701_nmus_median_rgb
 )
 
 configs=(
@@ -93,6 +97,7 @@ configs=(
     # convnextt_upernet_ft_aug_p512_red_ours
     convnextt_upernet_ft_ours
     convnexts_upernet_ft_ours
+    convnexts_upernet_ft_aug_ours
     upernet_inj_ft_ours
     upernet_inj_ft_vits_ours
     nnUNetTrainer__nnUNetResEncUNetMPlans__2d
@@ -108,7 +113,7 @@ splits=(
     test
 )
 
-rows=3
+rows=5
 cols=4          # samples per row
 
 # overlay  : image + pred overlay + gt contour        (1 panel per sample)
@@ -116,7 +121,7 @@ cols=4          # samples per row
 # mask_pair: image, gt + pred on black                (2 panels)
 # split    : image, image + gt, image + pred          (3 panels)
 # masks    : image, gt mask, pred mask                (3 panels)
-layout=${layout:-masks}
+layout=${layout:-pair}
 
 # How a mask is painted, in every layout -- a layout only arranges the panels and decides
 # whether a mask sits on black or over the image.

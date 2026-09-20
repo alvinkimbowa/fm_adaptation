@@ -11,7 +11,7 @@ results_dir=models
 # plans, `nnUNetResEncM` the residual-encoder preset, and `nnUNet*` every plans at once.
 models=(
     nnUNet
-    # nnUNetResEncM
+    nnUNetResEncM
     XTinyUNet     # its own model, so no `nnUNet` entry above selects it
     MonoUNet
     sam3
@@ -41,6 +41,8 @@ train_datasets=(
     Dataset089_Echo_CardiacUDA
     Dataset090_Echo_EchoCP
     Dataset093_Echo_CardiacNet
+    Dataset700_nmus_median
+    Dataset701_nmus_median_rgb
 )
 
 # Columns, in this order. A `Test` column -- each row's own held-out split -- is always present and is
@@ -60,6 +62,8 @@ test_datasets=(
     Dataset089_Echo_CardiacUDA
     Dataset090_Echo_EchoCP
     Dataset093_Echo_CardiacNet
+    Dataset700_nmus_median
+    Dataset701_nmus_median_rgb
 )
 
 
@@ -69,6 +73,7 @@ configs=(
     # linear_finetune
     convnextt_upernet_ft_ours
     convnexts_upernet_ft_ours
+    convnexts_upernet_ft_aug_ours
     upernet_ours
     upernet_inj_ours
     upernet_inj_ft_ours
@@ -100,6 +105,7 @@ nnunet_dirs=(
     ../xtinyunet/data/nnUNet_results
     ~/GAA/spinal_cord_injury/data/nnUNet_results
     ../knee_us_segmentation/data/nnUNet_results
+    ../nmus_segmentation/data/nnUNet_results
 )
 nnunet_raw_data_dir=~/GAA/spinal_cord_injury/data/nnUNet_raw
 # MonoUNet keeps one architecture per directory and no configuration level, so each directory named

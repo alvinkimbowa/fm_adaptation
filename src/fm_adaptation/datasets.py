@@ -123,6 +123,7 @@ FAMILY_ALIASES = {
     "Clarius": "Knee Cartilage",
     "Sonix-Touch": "Knee Cartilage",
     "GE": "Knee Cartilage",
+    "nmus": "Median Nerve",
 }
 
 
