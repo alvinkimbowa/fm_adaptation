@@ -42,6 +42,7 @@ TOKENS = (
     ("promptdec", "Prompt(dec)"),
     ("promptenc", "Prompt(enc)"),
     ("promptboth", "Prompt(enc+dec)"),
+    ("promptanat", "Prompt(loc+anat)"),
     ("kd", "KD"),
     ("ft", "FT"),
     ("finetune", "FT"),

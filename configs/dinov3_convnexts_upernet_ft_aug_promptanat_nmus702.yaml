@@ -1,0 +1,99 @@
+data:
+  raw_data_dir: ../nmus_segmentation/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset702_nmus_all_rgb
+  # Scored on 701, whose test images are the 702 test frames the median nerve was traced on and
+  # whose labels are binary: the question here is the median nerve, and this is what puts the answer
+  # in the same column as the runs trained on 701 alone.
+  test_datasets:
+    - Dataset701_nmus_median_rgb
+  test_split: Ts
+  fold: 0
+  # Flips, rotation and zoom, on the square canvas the encoder sees. A rotation is cropped back to
+  # what is real image in every row and column, so nothing invented reaches the model. No vertical
+  # flip: a transverse nerve scan has an up, with the skin surface along the top edge.
+  augment:
+    hflip: true
+    vflip: false
+    rotation: 45
+    zoom_min: 0.5
+    zoom_max: 1.5
+
+  # Two questions, asked and answered apart. `location` is which of the five scanned body sites the
+  # image was taken at, known at inference rather than predicted; `dropout_p` trains its null so the
+  # same checkpoint can be predicted without it.
+  #
+  # `anatomy` is which structures to segment. 702 is annotated a frame at a time -- whatever the
+  # tracer drew -- so training draws a subset of the structures a frame actually has, and everything
+  # else becomes background. That is what the question means and it is what makes the target
+  # truthful: a structure nobody traced is one nobody asked for. Because the subset is redrawn every
+  # epoch, the same image is seen under many questions and which frames were traced for what cannot
+  # be memorised. `eval` pins the question to the median nerve for validation and test.
+  prompt:
+    width: 256
+    sites: encoder
+    fields:
+      - key: location
+        dropout_p: 0.2
+        vocabulary:
+          - wrist
+          - distal forearm
+          - mid-forearm
+          - elbow
+          - mid-arm
+      - key: anatomy
+        multi: true
+        eval:
+          - median
+        vocabulary:
+          - biceps_brachii
+          - bifid_median_nerve
+          - bone
+          - brach_art
+          - brachialis
+          - branch_of_ain
+          - fcr_musc
+          - fcr_tendon
+          - fdp
+          - fds
+          - humerus
+          - interosseous_space_membrane
+          - median
+          - persistent_median_artery
+          - pq_muscle
+          - pronator_teres
+          - radial_artery
+          - radius
+          - scaphoid
+          - subcutaneous_tissue
+          - transverse_carpal_ligament
+          - ulna
+
+  # The class the written prediction is mapped onto, so the 23-class head is scored against 701's
+  # two-class labels.
+  predict_labels:
+    - median
+
+model:
+  name: dinov3
+  probe: upernet
+  variant: convnexts
+  injector: false
+  train_encoder: true
+  run_name: convnexts_upernet_ft_aug_promptanat_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  device: cuda
