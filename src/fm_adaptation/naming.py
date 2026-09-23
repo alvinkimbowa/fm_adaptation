@@ -60,6 +60,7 @@ TOKENS = (
     # How the training set was sampled and perturbed.
     ("balanced", "balanced"),
     ("aug", "aug"),
+    ("zoom", "zoom"),
     ("dropsmi", "drop-SMI"),
     ("dropany", "drop-any"),
     ("gfap", "GFAP-only"),
