@@ -92,6 +92,11 @@ configs=(
     upernet_inj_ft_vitb_ours
     upernet_inj_ft_vits_ours
     upernet_inj_ft_vits_aug_ours
+    upernet_inj_ft_vitb_aug_ours
+    upernet_inj_ft_vits_aug_promptenc_ours
+    upernet_inj_ft_vitb_aug_promptenc_ours
+    upernet_inj_ft_aug_ours
+    upernet_inj_ft_aug_promptenc_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f

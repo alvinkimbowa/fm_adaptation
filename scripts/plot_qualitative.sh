@@ -112,6 +112,12 @@ configs=(
     convnext_upernet_ft_aug_promptanat_ours
     upernet_inj_ft_ours
     upernet_inj_ft_vits_ours
+    upernet_inj_ft_vits_aug_ours
+    upernet_inj_ft_vitb_aug_ours
+    upernet_inj_ft_vits_aug_promptenc_ours
+    upernet_inj_ft_vitb_aug_promptenc_ours
+    upernet_inj_ft_aug_ours
+    upernet_inj_ft_aug_promptenc_ours
     nnUNetTrainer__nnUNetResEncUNetMPlans__2d
 )
 
