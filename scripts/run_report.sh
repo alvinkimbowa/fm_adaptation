@@ -18,9 +18,25 @@ models=(
     dinov3
 )
 
+# Cut every results column into one column per value of this image-metadata field: `location` for
+# where along the nerve a scan was taken, `anatomy` for what was traced in it. Empty keeps one
+# column per evaluation set.
+split_by="${split_by:-location}"
+
+# Which values of that field to show, in this order; empty keeps every value the field takes,
+# sorted. The values belong to whichever field `split_by` names, so a list left behind from another
+# field selects nothing.
+split_groups=(
+    wrist
+    # "distal forearm"
+    mid-forearm
+    elbow
+    mid-arm
+)
+
 # Group rows by their training dataset and rank best/second-best values within each group. Set to 0
 # to sort by model/configuration and rank across all selected training datasets instead.
-group_by_train_dataset="${group_by_train_dataset:-1}"
+group_by_train_dataset="${group_by_train_dataset:-0}"
 
 # Row order within each group: empty follows the lists below -- `models` first, then `configs` and
 # `train_datasets`. `params` or `trainable` orders by network size instead, and `sort_descending=1`
@@ -63,8 +79,8 @@ test_datasets=(
     Dataset089_Echo_CardiacUDA
     Dataset090_Echo_EchoCP
     Dataset093_Echo_CardiacNet
-    Dataset700_nmus_median
-    Dataset701_nmus_median_rgb
+    # Dataset700_nmus_median
+    # Dataset701_nmus_median_rgb
 )
 
 
@@ -153,6 +169,8 @@ report_args=()
 [[ ${#configs[@]} -gt 0 ]] && report_args+=(--configs "${configs[@]}")
 [[ ${#test_datasets[@]} -gt 0 ]] && report_args+=(--test-datasets "${test_datasets[@]}")
 [[ ${#folds[@]} -gt 0 ]] && report_args+=(--folds "${folds[@]}")
+[[ -n "$split_by" ]] && report_args+=(--split-by "$split_by")
+[[ ${#split_groups[@]} -gt 0 ]] && report_args+=(--split-groups "${split_groups[@]}")
 [[ -n "$sort_by" ]] && report_args+=(--sort-by "$sort_by" --sort-descending "$sort_descending")
 
 python -m fm_adaptation.report \

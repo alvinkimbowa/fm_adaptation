@@ -2,7 +2,7 @@ import json
 import math
 from pathlib import Path
 
-from .datasets import dataset_dir
+from .datasets import dataset_dir, image_metadata
 
 import cv2
 import numpy as np
@@ -36,11 +36,7 @@ def prompt_values(dataset_dir: Path, prompt) -> dict[str, dict[str, tuple[str, .
         raise FileNotFoundError(
             f"{path} is needed to look a prompt up per case; the dataset ships no image metadata"
         )
-    with open(path) as f:
-        metadata = json.load(f)
-    # A dataset recording more than its cases -- the label ids, the paint order -- keeps the cases
-    # themselves under `images`; the older files are the case map itself.
-    entries = metadata["images"] if "images" in metadata else metadata
+    entries = image_metadata(dataset_dir)
     values = {}
     for case_id, entry in entries.items():
         answers = {}

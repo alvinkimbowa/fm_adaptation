@@ -4,15 +4,23 @@ import html
 import json
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import yaml
 
 
 from . import agreement
-from .datasets import dataset_dir as resolve_dataset_dir, family as _dataset_family, resolve, split_cases
+from .datasets import (
+    dataset_dir as resolve_dataset_dir,
+    dataset_root,
+    family as _dataset_family,
+    metadata_values,
+    resolve,
+    split_cases,
+)
 from .naming import MODEL_NAMES, describe_run
 from .metrics import read_case_metrics
 from .selection import list_order, matches
@@ -307,9 +315,11 @@ def _parameter_counts(model, adaptation, trained_on):
 
 
 def _dataset_label(dataset):
-    """A column heading: the row's own held-out split, else the dataset's short name."""
+    """A column heading: the row's own held-out split, the average, else the dataset's short name."""
     if dataset == OWN_TEST:
         return "Test"
+    if dataset == CROSS:
+        return "Cross-dataset average"
     return re.sub(r"^Dataset\d+_", "", dataset)
 
 
@@ -429,14 +439,178 @@ def _in_domain(records, datasets, raw_dirs):
     return pairs
 
 
+# Evaluation sets that earn their own table rather than a column among the transfer results. The
+# interrater set is the only place two annotators mark the same images, so it is measured against the
+# agreement table beside it. Paul's slides are widefield rather than the confocal tiles everything
+# else is built from, so they are external in the sense that matters here -- a different imaging
+# modality, not just a different annotator -- and as a column they would dominate an average meant to
+# compare the rest.
+# The stand-in for "whatever this row held out of its own training set". Not a dataset name, so it
+# can never collide with one, and the same is true of the two below.
+OWN_TEST = "\0own-test"
+# The average across evaluation sets, which is a section of columns like a dataset is.
+CROSS = "\0cross"
+# Where the cases a split field says nothing about are collected.
+UNGROUPED = "\0ungrouped"
+
+
+class Column(NamedTuple):
+    """One column of results: an evaluation set, and which slice of it the cell measures.
+
+    `group` is empty for the whole set, and otherwise one value of the field a split was asked for.
+    """
+
+    dataset: str
+    group: str = ""
+
+
+@dataclass
+class Split:
+    """How a results column is cut up: one column per value of an image-metadata field.
+
+    An empty `key` leaves each evaluation set whole, which is every table not asked for a split.
+    `order` narrows the values and puts them in the order it names them; empty keeps every value the
+    field takes, sorted. A case the field says nothing about is collected in a column of its own
+    rather than dropped, so the columns still account for every case the metrics hold.
+    """
+
+    key: str = ""
+    order: tuple[str, ...] = ()
+    raw_dirs: dict = dataclass_field(default_factory=dict)
+    roots: tuple = ()
+    _values: dict = dataclass_field(default_factory=dict)
+
+    def _case_values(self, dataset):
+        """One field for every case of a dataset, found wherever that dataset's images live.
+
+        A baseline carries no config of its own, so the root recorded against it is whatever its
+        loader was pointed at -- which for a dataset in another project does not hold it. Every root
+        any run named is searched, which is what gives the baselines their breakdown too.
+        """
+        if dataset not in self._values:
+            recorded = self.raw_dirs.get(dataset)
+            roots = [root for root in (recorded, *self.roots) if root is not None]
+            directory = (
+                resolve_dataset_dir(dataset_root(roots, dataset), dataset) if roots else Path()
+            )
+            self._values[dataset] = metadata_values(directory, self.key)
+        return self._values[dataset]
+
+    def label(self, group):
+        return f"no {self.key}" if group == UNGROUPED else group
+
+    def groups(self, dataset, cases):
+        """Which values the field takes over `cases`, before `order` narrows them."""
+        if not self.key:
+            return {""}
+        values = self._case_values(dataset)
+        found = set()
+        for case in cases:
+            answers = values.get(case) or ()
+            found |= set(answers) if answers else {UNGROUPED}
+        return found
+
+    def arrange(self, groups):
+        """The groups a table shows, in order. The ungrouped cases come last, and are never hidden."""
+        # A dataset recording nothing for the field is not split: it keeps the single pooled column
+        # it has without one.
+        if not self.key or not groups - {UNGROUPED, ""}:
+            return ("",)
+        named = (
+            [value for value in self.order if value in groups]
+            if self.order
+            else sorted(group for group in groups if group != UNGROUPED)
+        )
+        return tuple(named + ([UNGROUPED] if UNGROUPED in groups else []))
+
+    def select(self, dataset, values, group):
+        """`values` cut down to the cases in one group, or None where it holds none of them."""
+        if not self.key or not group:
+            return values
+        answers = self._case_values(dataset)
+        keep = np.array(
+            [
+                not answers.get(case) if group == UNGROUPED else group in (answers.get(case) or ())
+                for case in values["cases"]
+            ]
+        )
+        if not keep.any():
+            return None
+        return {name: column[keep] for name, column in values.items()}
+
+
+def _column_source(column, trained_on):
+    """Which evaluation set a column reads, `Test` being the row's own held-out split."""
+    return trained_on if column.dataset == OWN_TEST else column.dataset
+
+
+def _column_metrics(results, column, trained_on, split=Split()):
+    """What a row shows in one column, or None where it shows nothing.
+
+    `Test` is the row's own held-out split. Every other column is the evaluation set it names, which
+    for a set the run trained on is that set's `imagesTs` -- so a run trained on one dataset repeats
+    its `Test` value in that dataset's column. A split column reads the same metrics cut down to the
+    cases its group holds.
+    """
+    source = _column_source(column, trained_on)
+    values = results.get(source)
+    if values is None:
+        return None
+    return split.select(source, values, column.group)
+
+
+def _columns(records, datasets, split):
+    """One column per evaluation set, or one per slice of it when a split was asked for."""
+    columns = []
+    for dataset in datasets:
+        found = set()
+        for (_, _, trained_on, _), results in records.items():
+            source = _column_source(Column(dataset), trained_on)
+            values = results.get(source)
+            if values is not None:
+                found |= split.groups(source, values["cases"])
+        columns += [Column(dataset, group) for group in split.arrange(found)]
+    return columns
+
+
+def _sections(columns, average_groups, split_blocks=False):
+    """The columns grouped into the blocks one heading spans, and where a rule is drawn between them.
+
+    One block per evaluation set, then the average. The rule closing a block is drawn before the
+    average always, and between the evaluation sets only where each of them holds several columns --
+    an unsplit table is one column per set and reads better without them.
+    """
+    sections = [
+        (dataset, [column for column in columns if column.dataset == dataset])
+        for dataset in dict.fromkeys(column.dataset for column in columns)
+    ]
+    if average_groups:
+        sections.append((CROSS, [Column(CROSS, group) for group in average_groups]))
+    return [
+        (dataset, section, index < len(sections) - 1
+         and (split_blocks or sections[index + 1][0] == CROSS))
+        for index, (dataset, section) in enumerate(sections)
+    ]
+
+
+def _plan(sections):
+    """Each column in reading order, with whether its last metric closes a block of columns."""
+    return [
+        (column, closes and position == len(section) - 1)
+        for _, section, closes in sections
+        for position, column in enumerate(section)
+    ]
+
+
 def _best_values(
     records,
-    datasets,
+    columns,
     reducer,
     in_domain=(),
     averaged=(),
     metrics=DEFAULT_METRICS,
     group_by_train_dataset=True,
+    split=Split(),
 ):
     """Maps each column to its (best, second best) values within each comparison group.
 
@@ -449,10 +623,10 @@ def _best_values(
         return {}
     for (_, _, trained_on, _), results in records.items():
         group = trained_on if group_by_train_dataset else None
-        cross = {name: [] for name in metrics}
-        for dataset in datasets:
-            values = _column_metrics(results, dataset, trained_on)
-            if values is None or (trained_on, dataset) in in_domain:
+        cross = defaultdict(lambda: defaultdict(list))
+        for column in columns:
+            values = _column_metrics(results, column, trained_on, split)
+            if values is None or (trained_on, column.dataset) in in_domain:
                 continue
             for metric in metrics:
                 if metric not in values:
@@ -460,15 +634,14 @@ def _best_values(
                 value = _reduce(values[metric], reducer)
                 if np.isnan(value):
                     continue
-                seen[(group, dataset, metric)].append(value)
-                if dataset in averaged:
-                    cross[metric].append(value)
-        for metric, values in cross.items():
-            if not values:
-                continue
-            value = _reduce(values, reducer)
-            if not np.isnan(value):
-                seen[(group, "cross", metric)].append(value)
+                seen[(group, column, metric)].append(value)
+                if column in averaged:
+                    cross[column.group][metric].append(value)
+        for slice_, by_metric in cross.items():
+            for metric, values in by_metric.items():
+                value = _reduce(values, reducer)
+                if not np.isnan(value):
+                    seen[(group, Column(CROSS, slice_), metric)].append(value)
     ranked = {}
     for key, values in seen.items():
         ordered = sorted(set(values), reverse=METRICS[key[2]].higher_is_better)
@@ -498,27 +671,6 @@ def _sep(separator):
     return " class='sep'" if separator else ""
 
 
-# Evaluation sets that earn their own table rather than a column among the transfer results. The
-# interrater set is the only place two annotators mark the same images, so it is measured against the
-# agreement table beside it. Paul's slides are widefield rather than the confocal tiles everything
-# else is built from, so they are external in the sense that matters here -- a different imaging
-# modality, not just a different annotator -- and as a column they would dominate an average meant to
-# compare the rest.
-# The stand-in for "whatever this row held out of its own training set". Not a dataset name, so it
-# can never collide with one.
-OWN_TEST = "\0own-test"
-
-
-def _column_metrics(results, dataset, trained_on):
-    """What a row shows in one column, or None where it shows nothing.
-
-    `Test` is the row's own held-out split. Every other column is the evaluation set it names, which
-    for a set the run trained on is that set's `imagesTs` -- so a run trained on one dataset repeats
-    its `Test` value in that dataset's column.
-    """
-    return results.get(trained_on if dataset == OWN_TEST else dataset)
-
-
 def _render_table(
     records,
     datasets,
@@ -527,52 +679,70 @@ def _render_table(
     in_domain=(),
     metrics=DEFAULT_METRICS,
     group_by_train_dataset=True,
+    split=Split(),
 ):
-    fmt = _mean_sd if statistic == "Mean ± SD" else _median_iqr
-    reducer = np.mean if statistic == "Mean ± SD" else np.median
+    fmt = _mean_sd if statistic == "Mean \u00b1 SD" else _median_iqr
+    reducer = np.mean if statistic == "Mean \u00b1 SD" else np.median
     # Every row reports its own held-out split under `Test`, whatever else it is shown against.
-    datasets = [OWN_TEST] + list(datasets)
+    columns = _columns(records, [OWN_TEST] + list(datasets), split)
     # `Test` is a different set of images on every row, so it is never averaged.
-    averaged = [d for d in datasets if d != OWN_TEST]
+    averaged = [column for column in columns if column.dataset != OWN_TEST]
     show_average = (
         max(
             (
-                sum(
-                    1 for dataset in averaged
-                    if _column_metrics(results, dataset, trained_on) is not None
-                    and (trained_on, dataset) not in in_domain
-                )
+                len({
+                    column.dataset
+                    for column in averaged
+                    if _column_metrics(results, column, trained_on, split) is not None
+                    and (trained_on, column.dataset) not in in_domain
+                })
                 for (_, _, trained_on, _), results in records.items()
             ),
             default=0,
         )
         > 1
     )
+    # One average per slice, so a split table averages wrist against wrist rather than across the
+    # slices it was drawn to hold apart.
+    average_groups = split.arrange({column.group for column in averaged}) if show_average else ()
     best = _best_values(
         records,
-        datasets,
+        columns,
         reducer,
         in_domain,
         averaged,
         metrics,
         group_by_train_dataset,
+        split,
     )
+    # Whether this table's own columns were cut up: a family whose datasets record nothing for the
+    # split field is tabulated exactly as it is without one, down to the headings.
+    splitting = any(column.group for column in columns)
+    sections = _sections(columns, average_groups, splitting)
+    plan = _plan(sections)
+    # A split table names the evaluation set, then the slice, then the metric; without one the slice
+    # row would carry nothing and is left out.
+    heading_rows = 3 if splitting else 2
     parts = [f"<h2>{html.escape(statistic)}</h2><table><thead><tr>"]
     for heading in ("Config", "Params", "Trainable", "Trained on", "Fold"):
-        parts.append(f"<th rowspan='2'{_sep(heading == 'Fold')}>{heading}</th>")
-    for index, dataset in enumerate(datasets):
-        last = index == len(datasets) - 1 and show_average
+        parts.append(f"<th rowspan='{heading_rows}'{_sep(heading == 'Fold')}>{heading}</th>")
+    for dataset, section, closes in sections:
         parts.append(
-            f"<th colspan='{len(metrics)}'{_sep(last)}>{html.escape(_dataset_label(dataset))}</th>"
+            f"<th colspan='{len(metrics) * len(section)}'{_sep(closes)}>"
+            f"{html.escape(_dataset_label(dataset))}</th>"
         )
-    if show_average:
-        parts.append(f"<th colspan='{len(metrics)}'>Cross-dataset average</th>")
+    if splitting:
+        parts.append("</tr><tr>")
+        for column, separator in plan:
+            parts.append(
+                f"<th colspan='{len(metrics)}'{_sep(separator)}>"
+                f"{html.escape(split.label(column.group))}</th>"
+            )
     parts.append("</tr><tr>")
-    for index in range(len(datasets) + show_average):
-        last = index == len(datasets) - 1 and show_average
+    for _, separator in plan:
         for position, metric in enumerate(metrics):
-            separator = last and position == len(metrics) - 1
-            parts.append(f"<th{_sep(separator)}>{METRICS[metric].label}</th>")
+            last = separator and position == len(metrics) - 1
+            parts.append(f"<th{_sep(last)}>{METRICS[metric].label}</th>")
     parts.append("</tr></thead><tbody>")
     previous_trained_on = None
     for key, results in sorted(records.items(), key=order):
@@ -592,46 +762,54 @@ def _render_table(
         )
         previous_trained_on = trained_on
         ranking_group = trained_on if group_by_train_dataset else None
-        cross = {metric: [] for metric in metrics}
-        for index, dataset in enumerate(datasets):
-            last = index == len(datasets) - 1 and show_average
-            values = _column_metrics(results, dataset, trained_on)
-            reference = values is not None and (trained_on, dataset) in in_domain
+        cross = defaultdict(lambda: defaultdict(list))
+        for column, separator in plan:
+            if column.dataset == CROSS:
+                for position, metric in enumerate(metrics):
+                    last = separator and position == len(metrics) - 1
+                    pooled = cross[column.group][metric]
+                    if not pooled:
+                        parts.append(f"<td{_sep(last)}>\u2014</td>")
+                        continue
+                    parts.append(
+                        _metric_cell(
+                            fmt(np.asarray(pooled), METRICS[metric].scale),
+                            _reduce(pooled, reducer),
+                            best.get((ranking_group, column, metric)),
+                            separator=last,
+                        )
+                    )
+                continue
+            values = _column_metrics(results, column, trained_on, split)
+            reference = values is not None and (trained_on, column.dataset) in in_domain
             for position, metric in enumerate(metrics):
-                separator = last and position == len(metrics) - 1
+                last = separator and position == len(metrics) - 1
                 if values is None or metric not in values:
-                    parts.append(f"<td{_sep(separator)}>—</td>")
+                    parts.append(f"<td{_sep(last)}>\u2014</td>")
                     continue
                 value = _reduce(values[metric], reducer)
                 parts.append(
                     _metric_cell(
                         fmt(values[metric], METRICS[metric].scale),
                         value,
-                        best.get((ranking_group, dataset, metric)),
-                        separator=separator,
+                        best.get((ranking_group, column, metric)),
+                        separator=last,
                         reference=reference,
                     )
                 )
-                if dataset in averaged and not reference:
-                    cross[metric].append(value)
-        if show_average:
-            for metric in metrics:
-                if not cross[metric]:
-                    parts.append("<td>—</td>")
-                    continue
-                parts.append(
-                    _metric_cell(
-                        fmt(np.asarray(cross[metric]), METRICS[metric].scale),
-                        _reduce(cross[metric], reducer),
-                        best.get((ranking_group, "cross", metric)),
-                    )
-                )
+                if column in averaged and not reference:
+                    cross[column.group][metric].append(value)
         parts.append("</tr>")
     parts.append("</tbody></table>")
     return "".join(parts)
 
 
-def _write_summary_csv(records, path, order):
+def _write_summary_csv(records, path, order, split=Split()):
+    """One row per row of the tables and evaluation set, or per slice of it under a split.
+
+    `group` is what the split field said about the cases the row summarises, and is empty where the
+    whole evaluation set is one row.
+    """
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -641,6 +819,7 @@ def _write_summary_csv(records, path, order):
                 "trained_on",
                 "fold",
                 "tested_on",
+                "group",
                 "n",
                 *(f"{metric}_{statistic}" for metric in METRICS
                   for statistic in ("mean", "sd", "median", "q1", "q3")),
@@ -650,31 +829,36 @@ def _write_summary_csv(records, path, order):
             model, adaptation, trained_on, fold = key
             report_model = MODEL_NAMES.get(model, model)
             report_adaptation = describe_run(adaptation)
-            for tested_on, values in sorted(results.items()):
-                summary = []
-                for metric in METRICS:
-                    # A run scored before the metric existed has no column, and leaves blanks.
-                    if metric not in values:
-                        summary += [""] * 5
+            for tested_on, all_cases in sorted(results.items()):
+                for group in split.arrange(split.groups(tested_on, all_cases["cases"])):
+                    values = split.select(tested_on, all_cases, group)
+                    if values is None:
                         continue
-                    column = values[metric]
-                    summary += [
-                        np.mean(column),
-                        np.inf if np.isinf(column).any() else np.std(column, ddof=1),
-                        np.median(column),
-                        *np.percentile(column, [25, 75]),
-                    ]
-                writer.writerow(
-                    [
-                        report_model,
-                        report_adaptation,
-                        trained_on,
-                        fold,
-                        tested_on,
-                        len(values["dice"]),
-                        *summary,
-                    ]
-                )
+                    summary = []
+                    for metric in METRICS:
+                        # A run scored before the metric existed has no column, and leaves blanks.
+                        if metric not in values:
+                            summary += [""] * 5
+                            continue
+                        column = values[metric]
+                        summary += [
+                            np.mean(column),
+                            np.inf if np.isinf(column).any() else np.std(column, ddof=1),
+                            np.median(column),
+                            *np.percentile(column, [25, 75]),
+                        ]
+                    writer.writerow(
+                        [
+                            report_model,
+                            report_adaptation,
+                            trained_on,
+                            fold,
+                            tested_on,
+                            split.label(group),
+                            len(values["dice"]),
+                            *summary,
+                        ]
+                    )
 
 
 def main():
@@ -726,6 +910,20 @@ def main():
         default=[],
         help="Evaluation sets to show as columns, in the order given; empty keeps every one. The "
         "`Test` column is always present and is never averaged.",
+    )
+    parser.add_argument(
+        "--split-by",
+        default="",
+        help="Cut every results column into one column per value of this image-metadata field -- "
+        "`location` for where along the nerve a scan was taken, `anatomy` for what was traced in "
+        "it. Empty keeps one column per evaluation set.",
+    )
+    parser.add_argument(
+        "--split-groups",
+        nargs="*",
+        default=[],
+        help="Which values of --split-by to show, in the order given; empty keeps every value the "
+        "field takes, sorted",
     )
     parser.add_argument(
         "--group-by-train-dataset",
@@ -811,6 +1009,9 @@ def main():
     thead tr:first-child th:first-child,thead tr:first-child th:nth-child(4){text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
+    split = Split(
+        args.split_by, tuple(args.split_groups), raw_dirs, tuple(dict.fromkeys(raw_dirs.values()))
+    )
     order = _experiment_order(
         args.models, args.train_datasets, args.configs, bool(args.group_by_train_dataset),
         args.sort_by, bool(args.sort_descending),
@@ -862,6 +1063,7 @@ def main():
                     in_domain,
                     _family_metrics(family),
                     bool(args.group_by_train_dataset),
+                    split,
                 )
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
@@ -877,7 +1079,7 @@ def main():
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _write_summary_csv(records, output.with_suffix(".csv"), order)
+    _write_summary_csv(records, output.with_suffix(".csv"), order, split)
     for suffix, page_body in bodies.items():
         if not page_body:
             continue

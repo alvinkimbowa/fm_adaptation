@@ -8,6 +8,7 @@ Anything that turns a dataset into a path goes through `dataset_dir`; anything t
 person to read goes through `resolve`.
 """
 
+import json
 import re
 from functools import cache
 from pathlib import Path
@@ -114,6 +115,34 @@ def split_cases(dataset_dir, split):
     if not image_dir.is_dir():
         return set()
     return {path.name.rsplit("_", 1)[0] for path in image_dir.glob("*_0000.*")}
+
+
+def image_metadata(dataset_dir) -> dict[str, dict]:
+    """What a dataset records about each of its images, keyed by case id.
+
+    A dataset recording more than its cases -- the label ids, the paint order -- keeps the cases
+    themselves under `images`; the older files are the case map itself. A dataset shipping no
+    metadata answers with nothing.
+    """
+    path = Path(dataset_dir) / "image_metadata.json"
+    if not path.is_file():
+        return {}
+    with open(path) as f:
+        metadata = json.load(f)
+    return metadata["images"] if "images" in metadata else metadata
+
+
+def metadata_values(dataset_dir, key) -> dict[str, tuple[str, ...]]:
+    """Each case's answer to one metadata field, read back as a tuple either way it is written.
+
+    A field answered with several names -- the structures traced in one image -- gives the case one
+    entry per name, and a case the field says nothing about an empty tuple.
+    """
+    values = {}
+    for case_id, entry in image_metadata(dataset_dir).items():
+        given = entry.get(key) if isinstance(entry, dict) else None
+        values[case_id] = (given,) if isinstance(given, str) else tuple(given or ())
+    return values
 
 
 # The family is what a dataset name's second token says the task is. Sets that name the same task
