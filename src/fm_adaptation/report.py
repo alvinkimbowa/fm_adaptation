@@ -511,7 +511,8 @@ class Split:
         return found
 
     def arrange(self, groups):
-        """The groups a table shows, in order. The ungrouped cases come last, and are never hidden."""
+        """The groups a table shows, in order, then all of them together. The ungrouped cases come
+        after the named ones, and are never hidden."""
         # A dataset recording nothing for the field is not split: it keeps the single pooled column
         # it has without one.
         if not self.key or not groups - {UNGROUPED, ""}:
@@ -521,19 +522,28 @@ class Split:
             if self.order
             else sorted(group for group in groups if group != UNGROUPED)
         )
-        return tuple(named + ([UNGROUPED] if UNGROUPED in groups else []))
+        return tuple(named + ([UNGROUPED] if UNGROUPED in groups else []) + [""])
 
     def select(self, dataset, values, group):
-        """`values` cut down to the cases in one group, or None where it holds none of them."""
-        if not self.key or not group:
+        """`values` cut down to the cases in one group, or None where it holds none of them.
+
+        The whole-set group `""` keeps the cases of every group the table shows, so values `order`
+        leaves out are left out of it too.
+        """
+        if not self.key or (not group and not self.order):
             return values
         answers = self._case_values(dataset)
-        keep = np.array(
-            [
+        if not group:
+            keep = [
+                not answers.get(case) or bool(set(answers[case]) & set(self.order))
+                for case in values["cases"]
+            ]
+        else:
+            keep = [
                 not answers.get(case) if group == UNGROUPED else group in (answers.get(case) or ())
                 for case in values["cases"]
             ]
-        )
+        keep = np.array(keep)
         if not keep.any():
             return None
         return {name: column[keep] for name, column in values.items()}
@@ -736,7 +746,7 @@ def _render_table(
         for column, separator in plan:
             parts.append(
                 f"<th colspan='{len(metrics)}'{_sep(separator)}>"
-                f"{html.escape(split.label(column.group))}</th>"
+                f"{html.escape(split.label(column.group) or 'all')}</th>"
             )
     parts.append("</tr><tr>")
     for _, separator in plan:

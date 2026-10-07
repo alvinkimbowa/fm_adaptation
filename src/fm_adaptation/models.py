@@ -1,3 +1,4 @@
+import math
 import sys
 import types
 from contextlib import nullcontext
@@ -8,6 +9,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils import checkpoint
 
 from .prompting import PromptConditioner, PromptGate
 
@@ -325,14 +327,31 @@ class DINOv3ConvNeXtEncoder(nn.Module):
         checkpoint: str | None,
         trainable: bool = False,
         variant: str = "convnextl",
+        frames: int = 1,
     ):
         super().__init__()
         _dinov3_root()
         self.variant = variant
         self.feature_channels = list(_dinov3_variant(variant)["feature_channels"])
         self.trunk = _load_dinov3_backbone(checkpoint, variant)
+        if frames > 1:
+            self._widen_stem(frames)
         self.trainable = trainable
         self.trunk.requires_grad_(trainable)
+
+    def _widen_stem(self, frames: int):
+        """Have the stem read `frames` RGB images stacked as channels, the first being the case.
+
+        The case keeps the pretrained filters and every other frame starts at zero, so the widened
+        trunk computes exactly what the pretrained one does until training moves those weights.
+        """
+        stem = self.trunk.downsample_layers[0][0]
+        wide = nn.Conv2d(3 * frames, stem.out_channels, stem.kernel_size, stem.stride)
+        with torch.no_grad():
+            wide.weight.zero_()
+            wide.weight[:, :3] = stem.weight
+            wide.bias.copy_(stem.bias)
+        self.trunk.downsample_layers[0][0] = wide
 
     preprocess = DINOv3Encoder.preprocess
 
@@ -422,6 +441,124 @@ class UperNetDecoder(nn.Module):
         return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
 
 
+def _sine_positions(height: int, width: int, channels: int, device) -> torch.Tensor:
+    """A fixed position code per cell of a `height` x `width` grid, as `(height * width, channels)`.
+
+    Cells are placed by where they fall in the image rather than by their index, so grids of
+    different resolution over the same image agree on where a cell is.
+    """
+    if channels % 4:
+        raise ValueError(f"a 2D sine position code needs a width divisible by 4, got {channels}")
+    quarter = channels // 4
+    frequency = torch.exp(
+        torch.arange(quarter, device=device, dtype=torch.float32) * (-math.log(10000.0) / quarter)
+    )
+    y = (torch.arange(height, device=device, dtype=torch.float32) + 0.5) / height * 2 * math.pi
+    x = (torch.arange(width, device=device, dtype=torch.float32) + 0.5) / width * 2 * math.pi
+    y, x = y[:, None] / frequency, x[:, None] / frequency
+    rows = torch.cat([y.sin(), y.cos()], dim=1)[:, None].expand(height, width, 2 * quarter)
+    columns = torch.cat([x.sin(), x.cos()], dim=1)[None].expand(height, width, 2 * quarter)
+    return torch.cat([rows, columns], dim=2).flatten(0, 1)
+
+
+class ContextAttention(nn.Module):
+    """One feature map of a case attending to the same map of its context frames.
+
+    Every cell of the case's map is a query over every cell of every context frame. Both sides carry
+    a position code, and each context frame an embedding of how many strides it lies from the case,
+    before or after. `out` is zero-initialised, so a freshly built block is the identity.
+    """
+
+    def __init__(self, channels: int, frames: int, heads: int = 8):
+        super().__init__()
+        self.frames = frames
+        self.query_norm = nn.LayerNorm(channels)
+        self.context_norm = nn.LayerNorm(channels)
+        # A context frame lies between `frames` strides before the case and `frames` after.
+        self.step = nn.Embedding(2 * frames + 1, channels)
+        self.attention = nn.MultiheadAttention(channels, heads, batch_first=True)
+        self.out = nn.Linear(channels, channels)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(self, target, context, steps):
+        """`target` is `(B, C, H, W)`, `context` `(B, T, C, h, w)` and `steps` `(B, T)`."""
+        batch, channels, height, width = target.shape
+        query = self.query_norm(target.flatten(2).transpose(1, 2))
+        query = query + _sine_positions(height, width, channels, target.device).to(query.dtype)
+        keys = self.context_norm(context.flatten(3).transpose(2, 3))
+        keys = keys + _sine_positions(*context.shape[-2:], channels, target.device).to(keys.dtype)
+        keys = (keys + self.step(steps + self.frames)[:, :, None].to(keys.dtype)).flatten(1, 2)
+        attended = self.attention(query, keys, keys, need_weights=False)[0]
+        update = self.out(attended).transpose(1, 2).reshape(batch, channels, height, width)
+        return target + update
+
+
+class ContextConv(nn.Module):
+    """One feature map of a case concatenated with the same map of its context frames, and convolved.
+
+    The context frames are projected by one shared convolution, each given an embedding of how many
+    strides it lies from the case, and averaged, so the block does not depend on how many there are
+    or on which side of the case they fall. The average is concatenated with the case's map cell for
+    cell, which assumes a structure sits in about the same place across the frames. `out` is
+    zero-initialised, so a freshly built block is the identity.
+    """
+
+    def __init__(self, channels: int, frames: int):
+        super().__init__()
+        self.frames = frames
+        self.project = nn.Conv2d(channels, channels, 1)
+        self.step = nn.Embedding(2 * frames + 1, channels)
+        self.mix = nn.Sequential(
+            nn.Conv2d(2 * channels, channels, 1),
+            nn.GELU(),
+            nn.Conv2d(channels, channels, 3, padding=1, groups=channels),
+            nn.GELU(),
+        )
+        self.out = nn.Conv2d(channels, channels, 1)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(self, target, context, steps):
+        """`target` is `(B, C, H, W)`, `context` `(B, T, C, H, W)` and `steps` `(B, T)`."""
+        projected = self.project(context.flatten(0, 1)).unflatten(0, steps.shape)
+        projected = projected + self.step(steps + self.frames)[..., None, None].to(projected.dtype)
+        return target + self.out(self.mix(torch.cat([target, projected.mean(1)], dim=1)))
+
+
+class ContextFusion(nn.Module):
+    """Where a case's feature pyramid meets the pyramids of its context frames.
+
+    `late` fuses the coarsest level alone and `intermediate` all four, by attention or by
+    convolution. A context map that is attended to is first pooled to the coarsest level's grid,
+    whichever level it belongs to, so the cost of a fine level is its own cells against a short list
+    of keys rather than against as many again per context frame.
+    """
+
+    def __init__(self, channels, context):
+        super().__init__()
+        levels = range(len(channels)) if context.fusion == "intermediate" else [len(channels) - 1]
+        self.attends = context.operator == "attention"
+        block = ContextAttention if self.attends else ContextConv
+        self.blocks = nn.ModuleDict(
+            {str(level): block(channels[level], context.frames) for level in levels}
+        )
+
+    def keep(self, pyramid):
+        """What of a context frame's pyramid the blocks read: one map per fused level."""
+        grid = pyramid[-1].shape[-2:]
+        maps = [pyramid[int(key)] for key in self.blocks]
+        return [F.adaptive_avg_pool2d(kept, grid) for kept in maps] if self.attends else maps
+
+    def forward(self, features, context_maps, steps):
+        """`context_maps` is `keep` of every context frame, each map as `(B * T, C, h, w)`."""
+        fused = list(features)
+        for (key, block), frames in zip(self.blocks.items(), context_maps):
+            level = int(key)
+            fused[level] = block(fused[level], frames.unflatten(0, steps.shape), steps)
+        return fused
+
+
 def _trainable_sam3_mlp_forward(mlp, x):
     """Differentiable equivalent of SAM3's inference-only fused PE MLP."""
     x = mlp.fc1(x)
@@ -432,15 +569,80 @@ def _trainable_sam3_mlp_forward(mlp, x):
     return mlp.drop2(x)
 
 
+# Context frames encoded per forward pass of the encoder.
+CONTEXT_ENCODE_BATCH = 2
+
+
 class SegmentationModel(nn.Module):
-    def __init__(self, encoder, probe, prompt=None):
+    """An encoder, a decoder, and whatever conditions the features on their way between the two.
+
+    A case arriving with context frames is `(B, 1 + T, 3, H, W)`, the case first. With `context` set
+    each frame goes through the encoder on its own and the case's features are fused with those of
+    its context; without it the frames are stacked as channels for an encoder whose stem takes them.
+    `context_gradient` says whether the encoder is trained through the context frames too.
+    """
+
+    def __init__(self, encoder, probe, prompt=None, context=None, context_gradient=False):
         super().__init__()
         self.encoder = encoder
         self.probe = probe
         self.prompt = prompt
+        self.context = context
+        self.context_gradient = context_gradient
 
-    def forward(self, images, prompt=None):
+    def _context_maps(self, group):
+        """The feature maps the fusion reads from a few context frames."""
+        return tuple(self.context.keep(self.encoder(group)))
+
+    def _encode_context(self, frames):
+        """The feature maps the fusion reads from every context frame, each as `(B * T, C, h, w)`.
+
+        The frames go through the encoder a few at a time, each group cut down to the maps the
+        fusion reads before the next is encoded, so that a step never holds the encoder's
+        activations for all of them at once.
+
+        With `context_gradient` the encoder is trained through them: each group is checkpointed, its
+        activations dropped after the forward pass and recomputed, one group at a time, on the
+        backward pass. Normalisation layers that keep running statistics therefore see each group
+        twice per step.
+
+        Without it no gradient is kept and the encoder is in eval mode, so that what a small group
+        is normalised by, and whether a block is dropped, does not depend on how the frames were
+        grouped.
+        """
+        groups = frames.flatten(0, 1).split(CONTEXT_ENCODE_BATCH)
+        if self.context_gradient:
+            kept = [
+                checkpoint.checkpoint(self._context_maps, group, use_reentrant=False)
+                if torch.is_grad_enabled()
+                else self._context_maps(group)
+                for group in groups
+            ]
+            return [torch.cat(maps) for maps in zip(*kept)]
+        training = self.encoder.training
+        self.encoder.eval()
+        with torch.no_grad():
+            kept = [self._context_maps(group) for group in groups]
+        self.encoder.train(training)
+        # Autocast keeps the low-precision copy it makes of each weight for as long as its context
+        # is open, and the copies made above carry no gradient. Left in place, the case's own pass
+        # would reuse them and its weights would receive none either.
+        torch.clear_autocast_cache()
+        return [torch.cat(maps) for maps in zip(*kept)]
+
+    def forward(self, images, prompt=None, steps=None):
+        frames = None
+        if images.dim() == 5:
+            if self.context is None:
+                images = images.flatten(1, 2)
+            else:
+                images, frames = images[:, 0], images[:, 1:]
+        # Before the case, whose activations are held for the backward pass: the context's are
+        # released as they are encoded, so the two never peak together.
+        context_maps = None if frames is None else self._encode_context(frames)
         features = self.encoder(images)
+        if context_maps is not None:
+            features = self.context(features, context_maps, steps)
         embedding = None
         if self.prompt is not None:
             if prompt is None:
@@ -459,6 +661,7 @@ def build_model(
     injector: bool = False,
     variant: str = DEFAULT_DINOV3_VARIANT,
     prompt=None,
+    context=None,
 ):
     encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe, "upernet": UperNetDecoder}
@@ -471,13 +674,24 @@ def build_model(
     if model_name != "dinov3" and variant != DEFAULT_DINOV3_VARIANT:
         raise ValueError(f"model.variant is only meaningful for dinov3, not {model_name}")
     extra = {"variant": variant} if model_name == "dinov3" else {}
+    if context is not None and probe_name != "upernet":
+        raise ValueError("data.context is fused over a feature pyramid, which only upernet decodes")
+    is_convnext = model_name == "dinov3" and _dinov3_variant(variant).get("kind") == "convnext"
+    stacks_frames = context is not None and context.fusion == "early"
+    if stacks_frames and not (is_convnext and train_encoder):
+        # The stem's filters for the context frames start at zero and have to be learned.
+        raise ValueError("data.context.fusion early needs a convnext trunk that trains")
+    trains_context = context is not None and context.gradient and not stacks_frames
     if probe_name == "upernet":
         # UperNet consumes a feature pyramid. A ConvNeXt trunk is one already; a ViT needs the adapter
         # to build one.
-        if model_name == "dinov3" and _dinov3_variant(variant).get("kind") == "convnext":
+        if is_convnext:
             if injector:
                 raise ValueError("model.injector belongs to the ViT-Adapter, which convnext does not use")
-            encoder = DINOv3ConvNeXtEncoder(checkpoint, trainable=train_encoder, variant=variant)
+            encoder = DINOv3ConvNeXtEncoder(
+                checkpoint, trainable=train_encoder, variant=variant,
+                frames=1 + context.frames if stacks_frames else 1,
+            )
         else:
             adapters = {"dinov3": DINOv3AdapterEncoder, "sam3": SAM3AdapterEncoder}
             encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
@@ -502,7 +716,12 @@ def build_model(
         conditioner = PromptConditioner(
             prompt, prompt.width, channels, gate_features=prompt.gates_encoder,
         )
-    return SegmentationModel(encoder, probe, conditioner)
+    fusion = (
+        ContextFusion(decoder_widths(encoder.feature_channels), context)
+        if context is not None and not stacks_frames
+        else None
+    )
+    return SegmentationModel(encoder, probe, conditioner, fusion, context_gradient=trains_context)
 
 
 def load_trained_model(cfg, checkpoint: str, device, classes: int):
@@ -510,7 +729,7 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
     model = build_model(
         cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
         train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
-        prompt=getattr(cfg, "prompt", None),
+        prompt=getattr(cfg, "prompt", None), context=getattr(cfg, "context", None),
     )
     name = "final" if cfg.fold == "all" else checkpoint
     path = cfg.run_dir / f"{name}.pt"
@@ -519,6 +738,8 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
     model.probe.load_state_dict(state["probe"])
     if "prompt" in state:
         model.prompt.load_state_dict(state["prompt"])
+    if "context" in state:
+        model.context.load_state_dict(state["context"])
     if "encoder" in state:
         model.encoder.trunk.load_state_dict(state["encoder"])
     if "adapter" in state:

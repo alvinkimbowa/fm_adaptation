@@ -14,6 +14,7 @@ from .data import (
     _case_ids,
     trained_planes,
     collate_cases,
+    context_batch,
     load_dataset_json,
     num_classes,
     prompt_batch,
@@ -236,6 +237,7 @@ def main():
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,
             keep_planes=keep_planes, require_labels=labelled, prompt=cfg.prompt,
+            context=cfg.context,
         )
         if dataset_name != cfg.train_dataset:
             dataset.ids = [c for c in dataset.ids if c not in seen]
@@ -269,7 +271,7 @@ def main():
                 elif prompt is not None and args.force_prompt:
                     prompt[:, : cfg.prompt.fields[0].slots] = forced
                 with amp:
-                    logits = model(images.to(device), prompt)
+                    logits = model(images.to(device), prompt, context_batch(metadata, device))
                 predictions = logits.argmax(1).cpu()
                 if relabel is not None:
                     predictions = relabel[predictions]

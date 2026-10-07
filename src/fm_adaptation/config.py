@@ -40,6 +40,41 @@ class AugmentConfig:
     zoom_max: float = 1.0
 
 
+CONTEXT_FUSIONS = ("early", "intermediate", "late")
+CONTEXT_OPERATORS = ("attention", "conv")
+
+
+@dataclass(frozen=True)
+class ContextConfig:
+    """The video frames a case is shown with, and where the network brings them together.
+
+    A case is one frame of a video. Its context is `per_side` frames before it and as many after,
+    `stride` frames apart -- `data.context_frames` says which ones, and how the window moves when
+    the case sits near either end of its video.
+    """
+
+    per_side: int = 3
+    stride: int = 2
+    # `early` stacks the frames into the stem as extra channels. `late` has the case's features
+    # attend to its context's at the coarsest pyramid level, `intermediate` at every level.
+    fusion: str = "late"
+    # How a pyramid level takes its context in: `attention` lets every cell of the case look across
+    # every context frame, `conv` concatenates the case with its context cell for cell and convolves.
+    # Unused by `early`, which has no pyramid level to fuse at.
+    operator: str = "attention"
+    # Train the encoder through the context frames as well as through the case; without it they are
+    # encoded with no gradient. Unused by `early`, whose one encoder pass carries every frame.
+    gradient: bool = False
+    # Show the case its own frame in place of each context frame. The network and its parameter
+    # count are unchanged, so a run with this set measures what the added layers are worth without
+    # any video behind them.
+    copies: bool = False
+
+    @property
+    def frames(self) -> int:
+        return 2 * self.per_side
+
+
 @dataclass(frozen=True)
 class PromptField:
     """One question the prompt asks, with the answers it accepts.
@@ -187,6 +222,7 @@ class ExperimentConfig:
     patching: "PatchConfig | None"
     augment: "AugmentConfig | None"
     prompt: "PromptConfig | None"
+    context: "ContextConfig | None"
     predict_labels: tuple[str, ...]
     stains: tuple[str, ...]
     channel_dropout: tuple[str, ...]
@@ -203,6 +239,14 @@ class ExperimentConfig:
         patching = cfg.get("patching") or {}
         augment = data.get("augment") or {}
         prompt = data.get("prompt") or {}
+        context = data.get("context") or {}
+        if context:
+            if context.get("fusion", "late") not in CONTEXT_FUSIONS:
+                raise ValueError(f"data.context.fusion must be one of {list(CONTEXT_FUSIONS)}")
+            if context.get("operator", "attention") not in CONTEXT_OPERATORS:
+                raise ValueError(f"data.context.operator must be one of {list(CONTEXT_OPERATORS)}")
+            if int(context.get("per_side", 3)) < 1 or int(context.get("stride", 2)) < 1:
+                raise ValueError("data.context.per_side and data.context.stride must be at least 1")
         channel_dropout_p = float(data.get("channel_dropout_p", 0.5))
         if not 0.0 <= channel_dropout_p <= 1.0:
             raise ValueError("data.channel_dropout_p must be between 0 and 1")
@@ -319,6 +363,19 @@ class ExperimentConfig:
                     sites=str(prompt.get("sites", "decoder")),
                 )
                 if prompt
+                else None
+            ),
+            # Absent means the network sees the case alone.
+            context=(
+                ContextConfig(
+                    per_side=int(context.get("per_side", 3)),
+                    stride=int(context.get("stride", 2)),
+                    fusion=str(context.get("fusion", "late")),
+                    operator=str(context.get("operator", "attention")),
+                    gradient=bool(context.get("gradient", False)),
+                    copies=bool(context.get("copies", False)),
+                )
+                if context
                 else None
             ),
             # The class names the written prediction is mapped onto, in order, so a model trained on

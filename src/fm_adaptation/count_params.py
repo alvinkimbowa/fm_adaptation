@@ -32,7 +32,7 @@ def _counts(module):
 
 
 def _foundation_counts(model_name, run_name, probe, injector, train_encoder=False, variant="vitl16",
-                       prompt=None):
+                       prompt=None, context=None):
     from .models import build_model
 
     if run_name in MMSEG_RUNS:
@@ -53,7 +53,7 @@ def _foundation_counts(model_name, run_name, probe, injector, train_encoder=Fals
         model_name, probe, NUM_CLASSES, None,
         # The two-stage finetuning runs say so in their name; the adapter runs say so in their config.
         train_encoder=train_encoder or "finetune" in run_name, injector=injector, variant=variant,
-        prompt=prompt,
+        prompt=prompt, context=context,
     )
     return _counts(model)
 
@@ -131,12 +131,14 @@ def main():
         injector = bool(cfg["model"].get("injector", False))
         train_encoder = bool(cfg["model"].get("train_encoder", False))
         variant = str(cfg["model"].get("variant", "vitl16"))
-        # The prompt sizes real parameters, so the count has to be made with it in place.
-        prompt = ExperimentConfig.from_yaml(config_path).prompt
+        # The prompt and the context fusion size real parameters, so the count has to be made with
+        # them in place.
+        experiment = ExperimentConfig.from_yaml(config_path)
+        prompt, context = experiment.prompt, experiment.context
         print(f"counting {model_name}/{run_name} ...", flush=True)
         try:
             seen[key] = _foundation_counts(
-                model_name, run_name, probe, injector, train_encoder, variant, prompt
+                model_name, run_name, probe, injector, train_encoder, variant, prompt, context
             )
         except Exception as error:  # a missing optional dependency should not lose the rest
             print(f"  skipped: {type(error).__name__}: {error}")

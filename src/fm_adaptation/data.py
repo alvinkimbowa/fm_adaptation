@@ -1,5 +1,6 @@
 import json
 import math
+from collections import Counter
 from pathlib import Path
 
 from .datasets import dataset_dir, image_metadata
@@ -60,6 +61,34 @@ def prompt_classes(metadata):
     if not metadata or "classes" not in metadata[0]:
         return None
     return sorted({label for item in metadata for label in item["classes"]})
+
+
+def context_frames(frame: int, n_frames: int, per_side: int, stride: int) -> list[int]:
+    """The frames of a video shown beside `frame`, in time order.
+
+    They lie on a grid `stride` frames apart that passes through `frame`: `per_side` of them before
+    it and as many after. Where the video ends sooner than that on one side, the frames it cannot
+    supply are taken from the other, so every case has `2 * per_side` distinct frames whatever its
+    place in the video.
+    """
+    count = 2 * per_side
+    room_before, room_after = frame // stride, (n_frames - 1 - frame) // stride
+    before = min(per_side, room_before)
+    after = min(count - before, room_after)
+    before = min(count - after, room_before)
+    if before + after < count:
+        raise ValueError(
+            f"a video of {n_frames} frames cannot give frame {frame} {count} others {stride} apart"
+        )
+    return [frame + step * stride for step in range(-before, after + 1) if step]
+
+
+def context_batch(metadata, device=None):
+    """How many strides each context frame of a collated batch lies from its case, signed, or
+    `None` for a run that carries no context."""
+    if not metadata or "context_steps" not in metadata[0]:
+        return None
+    return torch.tensor([item["context_steps"] for item in metadata], dtype=torch.long, device=device)
 
 
 def stain_planes(channel_names: dict) -> dict[str, tuple[int, int]] | None:
@@ -291,7 +320,7 @@ def _turn(image, mask, geometry, angle, scale, fill):
 class NnUNet2DDataset(Dataset):
     def __init__(self, raw_dir, dataset_name, split, fold, subset, preprocess,
                  channel_dropout=(), channel_dropout_p=0.5, keep_planes=None,
-                 require_labels=True, augment=None, prompt=None):
+                 require_labels=True, augment=None, prompt=None, context=None):
         self.dataset_dir = dataset_dir(raw_dir, dataset_name)
         self.split = split
         self.subset = subset
@@ -339,6 +368,20 @@ class NnUNet2DDataset(Dataset):
             wanted = {name for field in prompt.fields if field.multi for name in field.vocabulary}
             if wanted <= set(declared):
                 self.prompt_labels = declared
+        self.context = context
+        # Frames per video, counted from the dataset's `frames` directory, which holds every frame
+        # of every video under the name a case cut from that frame has.
+        self.video_frames = None
+        if context is not None:
+            if self.stain_planes is not None:
+                raise ValueError("data.context needs a dataset of colour images")
+            frames_dir = self.dataset_dir / "frames"
+            names = [path.stem for path in frames_dir.glob(f"*{self.ending}")]
+            if not names:
+                raise FileNotFoundError(
+                    f"{frames_dir} is needed to read a case's context; the dataset ships no frames"
+                )
+            self.video_frames = Counter(name.rsplit("_", 1)[0] for name in names)
         self.channel_dropout = tuple(str(name).upper() for name in channel_dropout)
         self.channel_dropout_p = float(channel_dropout_p)
         if not 0.0 <= self.channel_dropout_p <= 1.0:
@@ -420,10 +463,20 @@ class NnUNet2DDataset(Dataset):
         if self.stain_planes is None:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image_t, mask_t, geometry = self.preprocess(image, mask)
+        steps = None
+        if self.context is not None:
+            frames_t, steps = self._context(case_id, image_t, mask)
+            # The case first, then its context in time order, as channels of one image: whatever
+            # the augmentation draws is then drawn once for all of them.
+            image_t = torch.cat([image_t, *frames_t])
         if self.augment is not None and self.subset == "train":
             # `geometry` says where the section sits on the canvas, which is what the crop needs.
-            image_t, mask_t = _augment(image_t, mask_t, geometry, self.augment, self.fill)
+            fill = self.fill * (image_t.shape[0] // len(self.fill))
+            image_t, mask_t = _augment(image_t, mask_t, geometry, self.augment, fill)
         metadata = {"case_id": case_id, "has_label": has_label, **geometry}
+        if steps is not None:
+            image_t = image_t.unflatten(0, (-1, 3))
+            metadata["context_steps"] = steps
         if self.prompt is not None:
             asked = self._ask(case_id)
             metadata["prompt"] = self.prompt.row(asked)
@@ -440,6 +493,27 @@ class NnUNet2DDataset(Dataset):
                 mask_t = torch.where(torch.isin(mask_t, keep) | (mask_t < 0), mask_t, 0)
                 metadata["classes"] = tuple(wanted)
         return image_t, mask_t, metadata
+
+    def _context(self, case_id: str, image_t, mask):
+        """The preprocessed context frames of a case, and each one's signed distance in strides."""
+        video, frame = case_id.rsplit("_", 1)
+        frame = int(frame)
+        if video not in self.video_frames:
+            raise FileNotFoundError(f"{self.dataset_dir / 'frames'} holds no frame of {video}")
+        indices = context_frames(
+            frame, self.video_frames[video], self.context.per_side, self.context.stride
+        )
+        steps = tuple((index - frame) // self.context.stride for index in indices)
+        if self.context.copies:
+            return [image_t] * len(indices), steps
+        frames_t = []
+        for index in indices:
+            path = self.dataset_dir / "frames" / f"{video}_{index:03d}{self.ending}"
+            neighbour = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if neighbour is None:
+                raise FileNotFoundError(path)
+            frames_t.append(self.preprocess(cv2.cvtColor(neighbour, cv2.COLOR_BGR2RGB), mask)[0])
+        return frames_t, steps
 
     def _ask(self, case_id: str) -> dict[str, tuple[str, ...]]:
         """What this sample's prompt asks of each field.

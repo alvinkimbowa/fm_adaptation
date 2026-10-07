@@ -28,7 +28,7 @@ split_by="${split_by:-location}"
 # field selects nothing.
 split_groups=(
     wrist
-    # "distal forearm"
+    # distal forearm
     mid-forearm
     elbow
     mid-arm
@@ -41,22 +41,22 @@ group_by_train_dataset="${group_by_train_dataset:-0}"
 # Row order within each group: empty follows the lists below -- `models` first, then `configs` and
 # `train_datasets`. `params` or `trainable` orders by network size instead, and `sort_descending=1`
 # puts the largest first. The columns are fixed by `test_datasets` either way.
-sort_by="${sort_by:-params}"
+sort_by="${sort_by:-}"
 sort_descending="${sort_descending:-0}"
 
 train_datasets=(
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
-    Dataset070_Clarius_L15
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    # Dataset070_Clarius_L15
     # Dataset071_Sonix-Touch
-    Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset080_BUSBRA_GE_Logiq_5
     # Dataset082_BUSBRA_Toshiba_Aplio_300
     # # Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
-    Dataset089_Echo_CardiacUDA
-    Dataset090_Echo_EchoCP
-    Dataset093_Echo_CardiacNet
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    # Dataset089_Echo_CardiacUDA
+    # Dataset090_Echo_EchoCP
+    # Dataset093_Echo_CardiacNet
     Dataset700_nmus_median
     Dataset701_nmus_median_rgb
     Dataset702_nmus_all_rgb
@@ -67,20 +67,21 @@ train_datasets=(
 # selected. A cell whose set shares images with the row's training set is greyed and left out of both
 # the average and the best-value marking.
 test_datasets=(
-    Dataset072_GE_LQP9
-    Dataset073_GE_LE
-    Dataset070_Clarius_L15
+    # Dataset072_GE_LQP9
+    # Dataset073_GE_LE
+    # Dataset070_Clarius_L15
     # Dataset071_Sonix-Touch
-    Dataset080_BUSBRA_GE_Logiq_5
-    Dataset082_BUSBRA_Toshiba_Aplio_300
-    Dataset083_BUSBRA_U_Systems
-    Dataset084_KidneyUS_Philips
-    Dataset086_MMOTU_2D
-    Dataset089_Echo_CardiacUDA
-    Dataset090_Echo_EchoCP
-    Dataset093_Echo_CardiacNet
+    # Dataset080_BUSBRA_GE_Logiq_5
+    # Dataset082_BUSBRA_Toshiba_Aplio_300
+    # Dataset083_BUSBRA_U_Systems
+    # Dataset084_KidneyUS_Philips
+    # Dataset086_MMOTU_2D
+    # Dataset089_Echo_CardiacUDA
+    # Dataset090_Echo_EchoCP
+    # Dataset093_Echo_CardiacNet
     # Dataset700_nmus_median
     # Dataset701_nmus_median_rgb
+    none
 )
 
 
@@ -88,31 +89,46 @@ test_datasets=(
 configs=(
     # linear
     # linear_finetune
-    convnextt_upernet_ft_ours
-    convnexts_upernet_ft_ours
-    convnexts_upernet_ft_aug_ours
-    convnexts_upernet_ft_aug_promptdec_ours
-    convnexts_upernet_ft_aug_promptenc_ours
-    convnexts_upernet_ft_aug_promptboth_ours
-    convnexts_upernet_ft_aug_gateonly_ours
-    convnextb_upernet_ft_aug_ours
-    convnextb_upernet_ft_aug_promptenc_ours
-    convnext_upernet_ft_aug_ours
-    convnext_upernet_ft_aug_promptenc_ours
-    convnexts_upernet_ft_aug_promptanat_ours
-    convnextb_upernet_ft_aug_promptanat_ours
-    convnext_upernet_ft_aug_promptanat_ours
-    upernet_ours
-    upernet_inj_ours
-    upernet_inj_ft_ours
-    upernet_inj_ft_vitb_ours
-    upernet_inj_ft_vits_ours
+    # convnextt_upernet_ft_ours
+    # convnexts_upernet_ft_ours
+    # convnexts_upernet_ft_aug_promptdec_ours
+    # convnexts_upernet_ft_aug_promptenc_ours
+    # convnexts_upernet_ft_aug_promptboth_ours
+    # convnexts_upernet_ft_aug_gateonly_ours
+    # convnextb_upernet_ft_aug_promptenc_ours
+    # convnext_upernet_ft_aug_promptenc_ours
+    # convnexts_upernet_ft_aug_promptanat_ours
+    # convnextb_upernet_ft_aug_promptanat_ours
+    # convnext_upernet_ft_aug_promptanat_ours
+    # upernet_ours
+    # upernet_inj_ours
+    
+    # convnexts_upernet_ft_aug_ours
+    # convnextb_upernet_ft_aug_ours
+    # convnext_upernet_ft_aug_ours
+    # convnext_upernet_ft_aug_ctxearly_ours
+    # convnext_upernet_ft_aug_ctxmid_ours
+    # convnext_upernet_ft_aug_ctxmidconv_ours
+    # convnext_upernet_ft_aug_ctxlate_ours
+    # convnext_upernet_ft_aug_ctxlateconv_ours
+
+    # upernet_inj_ft_ours
+    # upernet_inj_ft_vitb_ours
+    # upernet_inj_ft_vits_ours
+
     upernet_inj_ft_vits_aug_ours
     upernet_inj_ft_vitb_aug_ours
-    upernet_inj_ft_vits_aug_promptenc_ours
-    upernet_inj_ft_vitb_aug_promptenc_ours
     upernet_inj_ft_aug_ours
-    upernet_inj_ft_aug_promptenc_ours
+    
+    # upernet_inj_ft_vits_aug_ctxlate_ours
+    upernet_inj_ft_vits_aug_ctxlateconv_ours
+    # upernet_inj_ft_vits_aug_ctxlateconv_ctxcopy_ours
+    # upernet_inj_ft_vits_aug_ctxmid_ours
+    # upernet_inj_ft_vits_aug_ctxmidconv_ours
+    
+    # upernet_inj_ft_vits_aug_promptenc_ours
+    # upernet_inj_ft_vitb_aug_promptenc_ours
+    # upernet_inj_ft_aug_promptenc_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f

@@ -43,6 +43,16 @@ TOKENS = (
     ("promptenc", "Prompt(enc)"),
     ("promptboth", "Prompt(enc+dec)"),
     ("promptanat", "Prompt(loc+anat)"),
+    # Video frames around the case, by where they are fused and, past the stem, whether by attention
+    # or by convolution; `ctxcopy` is the same network shown the case itself in their place.
+    ("ctxearly", "Context(early)"),
+    ("ctxmid", "Context(mid, attn)"),
+    ("ctxmidconv", "Context(mid, conv)"),
+    ("ctxlate", "Context(late, attn)"),
+    ("ctxlateconv", "Context(late, conv)"),
+    # The encoder was not trained through the context frames.
+    ("nograd", "no context grad"),
+    ("ctxcopy", "copies"),
     ("kd", "KD"),
     ("ft", "FT"),
     ("finetune", "FT"),

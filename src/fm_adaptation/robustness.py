@@ -251,6 +251,9 @@ def main():
         transforms = tuple(t for t in TRANSFORMS if t.name in set(args.transforms))
 
     cfg = ExperimentConfig.from_yaml(args.config)
+    if cfg.context is not None:
+        # The transforms here are written for one image per case.
+        raise SystemExit("robustness does not cover runs that take context frames")
     device = torch.device(cfg.device)
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
     model = load_trained_model(cfg, args.checkpoint, device, classes)
