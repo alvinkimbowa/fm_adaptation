@@ -23,7 +23,7 @@ transforms=(
 )
 
 output_dir=${output_dir:-results/robustness}
-checkpoint=${checkpoint:-final}
+checkpoint=${checkpoint:-best}
 figures=${figures:-1}
 gpu_id=${gpu_id:-0}
 # The adapter decoder needs mmseg's UPerHead, which only .venv-mm has; the figures need scikit-image,

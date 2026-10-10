@@ -6,7 +6,7 @@ train=${train:-1}
 predict=${predict:-1}
 compute_metrics=${compute_metrics:-1}
 report=${report:-1}
-checkpoint=${checkpoint:-final}   # final | best | last
+checkpoint=${checkpoint:-best}   # final | best | last
 # Redoing a dataset that already has predictions costs a full forward pass per case for a result
 # that cannot change, so this defaults to reusing them; set overwrite=1 to force everything afresh.
 overwrite=${overwrite:-false}
