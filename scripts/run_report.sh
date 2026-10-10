@@ -106,10 +106,11 @@ configs=(
     # convnexts_upernet_ft_aug_ours
     # convnextb_upernet_ft_aug_ours
     # convnext_upernet_ft_aug_ours
+
     # convnext_upernet_ft_aug_ctxearly_ours
     # convnext_upernet_ft_aug_ctxmid_ours
-    # convnext_upernet_ft_aug_ctxmidconv_ours
     # convnext_upernet_ft_aug_ctxlate_ours
+    # convnext_upernet_ft_aug_ctxmidconv_ours
     # convnext_upernet_ft_aug_ctxlateconv_ours
 
     # upernet_inj_ft_ours
@@ -121,10 +122,12 @@ configs=(
     upernet_inj_ft_aug_ours
     
     # upernet_inj_ft_vits_aug_ctxlate_ours
-    upernet_inj_ft_vits_aug_ctxlateconv_ours
+    # upernet_inj_ft_vits_aug_ctxlateconv_ours
     # upernet_inj_ft_vits_aug_ctxlateconv_ctxcopy_ours
     # upernet_inj_ft_vits_aug_ctxmid_ours
     # upernet_inj_ft_vits_aug_ctxmidconv_ours
+    
+    # upernet_inj_ft_vitb_aug_ctxlateconv_ours
     
     # upernet_inj_ft_vits_aug_promptenc_ours
     # upernet_inj_ft_vitb_aug_promptenc_ours
