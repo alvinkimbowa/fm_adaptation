@@ -56,7 +56,8 @@ class ConfigTests(unittest.TestCase):
             ))
             configs = [ExperimentConfig.from_yaml(path) for path in paths]
             self.assertEqual([cfg.train_dataset[:10] for cfg in configs],
-                             ["Dataset301", "Dataset302", "Dataset304"])
+                             ["Dataset301", "Dataset302", "Dataset304", "Dataset306", "Dataset307",
+                              "Dataset308"])
             self.assertTrue(all(cfg.patching.respect_channels for cfg in configs))
             self.assertTrue(all(cfg.run_name.endswith("_red_ours") for cfg in configs))
 
