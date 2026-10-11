@@ -24,6 +24,7 @@ from .losses import build_loss, mean_foreground_dice
 from .models import build_model
 from .patching import patch_loader as _patch_loader
 from .plot_history import render_run
+from .progress_samples import SAMPLE_EVERY, pick_samples, render_samples
 
 
 def _raw_dataset(cfg, preprocess, subset):
@@ -403,6 +404,9 @@ def main():
     cfg.run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.config, cfg.run_dir / "config.yaml")
     history_path = cfg.run_dir / "history.csv"
+    # Cached features leave no image to draw a prediction on, so only runs that step the whole model
+    # get the sample figures.
+    samples = [] if caches_features or val_loader is None else pick_samples(val_loader.dataset)
     best_dice = -1.0
     stopping_reference_dice = -1.0
     epochs_without_improvement = 0
@@ -453,6 +457,14 @@ def main():
                 render_run(cfg.run_dir)
             except Exception as error:  # a plot must never take a training run down with it
                 print(f"skipped history plot: {error}")
+            if samples and (epoch == 1 or epoch % SAMPLE_EVERY == 0):
+                try:
+                    render_samples(
+                        module, samples, device, cfg.run_dir / "samples" / f"epoch_{epoch:03d}.png",
+                        title=f"epoch {epoch}  val_dice={val_dice:.4f}", forward=forward,
+                    )
+                except Exception as error:
+                    print(f"skipped sample figure: {error}")
             print(
                 f"epoch={epoch} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
                 f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} lr={learning_rate:.3g}"

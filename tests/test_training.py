@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import torch
 
+from fm_adaptation.progress_samples import pick_samples, render_samples
 from fm_adaptation.training import _balanced_sampler, _validate_data_mode
 from fixtures import DatasetFixture
 
@@ -63,6 +64,29 @@ class SamplingTests(unittest.TestCase):
             patched.patching = None
             with self.assertRaisesRegex(ValueError, "uncached"):
                 _validate_data_mode(patched, encoder_trains=False)
+
+class ProgressSampleTests(unittest.TestCase):
+        """The figure of validation samples written while a run trains."""
+
+        def test_background_only_items_are_skipped_and_a_figure_is_written(self):
+            items = []
+            for index in range(12):
+                mask = torch.zeros(16, 16, dtype=torch.long)
+                if index % 3 == 0:
+                    mask[4:8, 4:8] = 1
+                items.append((torch.rand(3, 16, 16), mask, {"case_id": f"case{index}", "y": 0, "x": 0}))
+            samples = pick_samples(items, count=3)
+            self.assertEqual(len(samples), 3)
+            self.assertTrue(all((mask > 0).any() for _, mask, _ in samples))
+            self.assertEqual([t for _, _, t in samples], [t for _, _, t in pick_samples(items, count=3)])
+
+            module = torch.nn.Conv2d(3, 2, 1)
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "samples" / "epoch_001.png"
+                render_samples(module, samples, torch.device("cpu"), path,
+                               forward=lambda m, images, masks: m(images))
+                self.assertGreater(path.stat().st_size, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
