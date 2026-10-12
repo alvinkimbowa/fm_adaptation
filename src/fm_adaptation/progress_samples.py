@@ -19,6 +19,9 @@ SAMPLE_EVERY = 5
 GT_COLOR = (0.0, 1.0, 0.0)
 PRED_COLOR = (1.0, 0.0, 1.0)
 ALPHA = 0.7
+# Width a panel is sure to get out of the three inches its column is given, once labels and spacing
+# have taken theirs.
+PANEL_INCHES = 2.4
 # Items looked at per sample wanted before settling for fewer; a whole-image dataset decodes a full
 # image per item, so the search has to be bounded.
 SCAN_PER_SAMPLE = 40
@@ -87,5 +90,7 @@ def render_samples(module, samples, device, path, title="", forward=None):
     fig.suptitle(title)
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=110)
+    # A panel drawn smaller than its patch drops rows and columns, which breaks a one-pixel line
+    # into dashes; this resolution gives every patch pixel at least one figure pixel.
+    fig.savefig(path, dpi=max(110, int(np.ceil(images.shape[-1] / PANEL_INCHES))))
     plt.close(fig)
