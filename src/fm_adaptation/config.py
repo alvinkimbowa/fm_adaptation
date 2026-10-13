@@ -23,8 +23,13 @@ class PatchConfig:
     # `encoder` hands 8-bit RGB patches to the encoder's own preprocessing. `zscore` hands over the
     # stored channels as they are, each standardised by its whole image's non-zero pixels.
     normalization: str = "encoder"
+    # Slices of a z-stack projected into each patch, for datasets that store one case per slice;
+    # see `slabs.slab_members`. 1 reads every case on its own.
+    slab_slices: int = 1
 
     def __post_init__(self):
+        if self.slab_slices < 1:
+            raise ValueError("patching.slab_slices must be at least 1")
         if self.normalization not in ("encoder", "zscore"):
             raise ValueError(f"unknown patching.normalization {self.normalization!r}")
 
@@ -105,6 +110,9 @@ class ExperimentConfig:
     refines_plane: int = 1
     weight_maps: bool = False
     weight_maps_dice: bool = False
+    weight_maps_from_labels: bool = False
+    weight_map_width: float = 5.0
+    weight_map_floor: float = 0.1
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -139,6 +147,12 @@ class ExperimentConfig:
             # weights into the Dice term.
             weight_maps=bool(training.get("weight_maps", False)),
             weight_maps_dice=bool(training.get("weight_maps_dice", False)),
+            # Computes the maps from each patch's label instead of reading them: 1 on the
+            # annotation, and beside it a bell curve of the distance to it, `weight_map_width`
+            # pixels wide, that never drops below `weight_map_floor`.
+            weight_maps_from_labels=bool(training.get("weight_maps_from_labels", False)),
+            weight_map_width=float(training.get("weight_map_width", 5.0)),
+            weight_map_floor=float(training.get("weight_map_floor", 0.1)),
             raw_data_dir=raw_data_dir,
             results_dir=Path(data.get("results_dir", "models")),
             train_dataset=resolve(raw_data_dir, data["train_dataset"]),
@@ -232,6 +246,7 @@ class ExperimentConfig:
                     ignore_masked_out=bool(patching.get("ignore_masked_out", False)),
                     respect_channels=bool(patching.get("respect_channels", False)),
                     normalization=str(patching.get("normalization", "encoder")),
+                    slab_slices=int(patching.get("slab_slices", 1)),
                 )
                 if patching.get("enabled")
                 else None

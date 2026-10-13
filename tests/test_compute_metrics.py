@@ -366,3 +366,40 @@ class CldiceToleranceTests(unittest.TestCase):
                 aggregate = list(csv.DictReader(stream))[-1]
             self.assertEqual(aggregate["image_id"], "MEAN")
             self.assertEqual(float(aggregate[CLDICE_FIELDS[-1]]), 1.0)
+
+
+@needs_scoring
+class SlabScoringTests(unittest.TestCase):
+    """A prediction of a slab of a z-stack is measured against the labels of the slab's slices."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = DatasetFixture(self.root, "Dataset001_slices", {"0": "SMI"})
+        self.labels = {}
+        for z in (1, 2, 3):
+            label = np.zeros((32, 32), dtype=np.uint8)
+            label[8 * z, 4:28] = 1
+            self.labels[z] = label
+            self.data.add(f"Src__a_z{z:03d}", split="Ts", planes={0: np.full((32, 32), 9, np.uint8)},
+                          label=label)
+        self.predictions = self.root / "run" / "test" / self.data.name / "predictions"
+        self.predictions.mkdir(parents=True)
+        import cv2
+        cv2.imwrite(str(self.predictions / "Src__a_z002.png"), np.max(list(self.labels.values()), axis=0))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def dice(self, slab_slices):
+        from fm_adaptation.compute_metrics import measure
+
+        measure(self.predictions, self.root, overwrite=True, slab_slices=slab_slices)
+        rows = read_case_metrics(self.predictions.parent / "metrics.csv")
+        return float(rows[0]["dice"])
+
+    def test_the_slab_prediction_matches_the_projected_labels(self):
+        self.assertAlmostEqual(self.dice(3), 1.0, places=5)
+
+    def test_without_a_slab_the_stored_label_is_the_reference(self):
+        self.assertAlmostEqual(self.dice(1), 0.5, places=5)

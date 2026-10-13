@@ -218,6 +218,9 @@ def main():
     exported = onnx.load(str(output))
     entry = exported.metadata_props.add()
     entry.key, entry.value = "input_normalization", "zscore" if cfg.zscore else "unit_range"
+    # Slices of a z-stack the model expects projected into each image it is given.
+    entry = exported.metadata_props.add()
+    entry.key, entry.value = "slab_slices", str(cfg.patching.slab_slices if cfg.patching else 1)
     onnx.save(exported, str(output))
     print(f"Saved ONNX model to {output}")
 

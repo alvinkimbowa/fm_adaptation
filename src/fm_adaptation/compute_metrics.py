@@ -36,6 +36,7 @@ from tqdm import tqdm
 from . import agreement
 from .datasets import dataset_dir as resolve_dataset_dir, dataset_root, resolve
 from .selection import matches
+from .slabs import slab_members
 from .metrics import CLDICE_TOLERANCES, METRIC_FIELDS, cldice as _cldice
 
 # Paul's widefield strips are 29739x6240 -- 186 megapixels against PIL's 89 megapixel ceiling, which
@@ -51,11 +52,14 @@ class Column(NamedTuple):
 
     `dataset` names the evaluation set for sources that do not put it in the path; `predictions` is
     then the directory the metrics are written into rather than the one below it.
+
+    `slab_slices` above 1 says each prediction is of a slab of a z-stack, see `slabs.slab_members`.
     """
     predictions: Path
     raw_data_dir: Path
     prepare: Callable = None
     dataset: str = None
+    slab_slices: int = 1
 
 
 @dataclass(frozen=True)
@@ -191,15 +195,18 @@ def _num_classes(dataset_dir: Path):
 
 
 def _read_run(fold_dir: Path):
-    """(model, run name, trained on, raw data dir) from the config the run was launched with."""
+    """(model, run name, trained on, raw data dir, slab slices) from the config the run was
+    launched with."""
     with open(fold_dir / "config.yaml") as f:
         cfg = yaml.safe_load(f)
     raw_data_dir = Path(cfg["data"]["raw_data_dir"])
+    patching = cfg.get("patching") or {}
     return (
         cfg["model"]["name"],
         cfg["model"].get("run_name", cfg["model"]["probe"]),
         resolve(raw_data_dir, cfg["data"]["train_dataset"]),
         raw_data_dir,
+        int(patching.get("slab_slices", 1)) if patching.get("enabled") else 1,
     )
 
 
@@ -213,7 +220,7 @@ def _columns(results_dir: Path, args):
     selected = []
     for config_path in sorted(results_dir.glob("*/*/*/fold_*/config.yaml")):
         fold_dir = config_path.parent
-        model, run_name, trained_on, raw_data_dir = _read_run(fold_dir)
+        model, run_name, trained_on, raw_data_dir, slab_slices = _read_run(fold_dir)
         if not (
             matches(model, args.models)
             and matches(trained_on, args.datasets)
@@ -223,7 +230,7 @@ def _columns(results_dir: Path, args):
             continue
         for prediction_dir in sorted(fold_dir.glob("*/*/predictions")):
             if matches(prediction_dir.parents[1].name, args.splits):
-                selected.append(Column(prediction_dir, raw_data_dir))
+                selected.append(Column(prediction_dir, raw_data_dir, slab_slices=slab_slices))
     return selected
 
 
@@ -308,7 +315,7 @@ def _is_current(metrics_path: Path, prediction_dir: Path):
 
 
 def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=False, prepare=None,
-            dataset=None):
+            dataset=None, slab_slices=1):
     """Write `metrics.csv` beside `prediction_dir`; returns a one-line report of what happened.
 
     `prepare(prediction, label)` puts a prediction into the label's space for sources that do not
@@ -317,6 +324,9 @@ def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=F
     `dataset` names the evaluation set for a source whose path does not, and the metrics then go
     inside `prediction_dir` rather than beside it -- there is no directory above the predictions
     belonging to this column alone.
+
+    With `slab_slices` above 1 a prediction describes a slab of a z-stack, and it is measured against
+    the labels of the slab's slices laid over each other.
     """
     output_dir = prediction_dir if dataset else prediction_dir.parent
     # The trail is what sits above the evaluation set: a directory named after the set is not
@@ -348,8 +358,12 @@ def measure(prediction_dir: Path, raw_data_dir: Path, overwrite=False, dry_run=F
     rows = []
     # Skeletonising a whole slide takes seconds, so a column of them is long enough that a silent run
     # is indistinguishable from a stalled one.
+    slabs = slab_members(sorted(ground_truth), slab_slices)
     for case_id in tqdm(case_ids, desc=label, unit="case", leave=False):
         truth = read_mask(ground_truth[case_id])
+        for member in slabs[case_id]:
+            if member != case_id:
+                truth = np.maximum(truth, read_mask(ground_truth[member]))
         prediction = read_mask(predictions[case_id])
         if prepare is not None:
             prediction = prepare(prediction, truth)
@@ -415,7 +429,7 @@ def main():
     for column in columns:
         print(
             measure(column.predictions, column.raw_data_dir, args.overwrite, args.dry_run,
-                    column.prepare, column.dataset),
+                    column.prepare, column.dataset, column.slab_slices),
             flush=True,
         )
 

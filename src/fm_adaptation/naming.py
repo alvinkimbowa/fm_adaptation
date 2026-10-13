@@ -48,6 +48,8 @@ TOKENS = (
     ("vits", "ViT-S"),
     # Patch size, where it is not the encoder's own input size.
     ("p512", "512px patches"),
+    # Slices of a z-stack projected into each patch, where it is more than one.
+    ("s3", "3-slice projections"),
     # Schedule and initialisation.
     ("poly", "poly"),
     ("init", "init"),

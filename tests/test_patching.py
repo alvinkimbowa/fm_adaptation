@@ -11,7 +11,8 @@ import torch
 from fm_adaptation.config import AugmentConfig, PatchConfig
 from fixtures import DatasetFixture, preprocess
 from fm_adaptation.patching import (
-    _PlaneCache, _augment_patch, _prepare, _source_size, build_index, foreground_statistics, zscore,
+    _PlaneCache, _augment_patch, _prepare, _source_size, bell_reach, bell_weights, build_index,
+    foreground_statistics, zscore,
 )
 
 
@@ -173,6 +174,93 @@ class WeightMapTests(unittest.TestCase):
         _, flipped, weights = _augment_patch(image, label, 16, augment, np.random.default_rng(0), weight)
         self.assertTrue((flipped != label).any())
         self.assertTrue(((weights == 255) == (flipped > 0)).all())
+
+
+class SlabTests(unittest.TestCase):
+    """Patches projected from neighbouring slices of a stack, and the weights computed for them."""
+
+    SHAPE = (48, 40)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = DatasetFixture(self.root, "Dataset001_slices", {"0": "SMI"})
+        rng = np.random.default_rng(0)
+        self.images, self.labels = {}, {}
+        for z in range(1, 6):
+            case_id = f"Src__a_z{z:03d}"
+            self.images[case_id] = rng.integers(1, 255, self.SHAPE, dtype=np.uint8)
+            label = np.zeros(self.SHAPE, dtype=np.uint8)
+            # One line per slice, each in its own row, so a projection is told from a single slice.
+            label[4 + 8 * z, 2:30] = 1
+            self.labels[case_id] = label
+            self.data.add(case_id, planes={0: self.images[case_id]}, label=label)
+        self.data.split(list(self.images))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def index(self, slices, **kwargs):
+        cfg = PatchConfig(patch_size=16, respect_channels=True, slab_slices=slices)
+        return {case.case_id: case
+                for case in build_index(self.root, self.data.name, "Tr", "0", "train", cfg,
+                                        self.root / "cache", **kwargs)}
+
+    def projected(self, arrays, centre):
+        members = [f"Src__a_z{z:03d}" for z in (centre - 1, centre, centre + 1) if 1 <= z <= 5]
+        return np.max([arrays[member] for member in members], axis=0)
+
+    def test_one_slice_reads_the_case_as_it_is_stored(self):
+        case = self.index(1)["Src__a_z003"]
+        image, label = case.crop(8, 4, 16)
+        np.testing.assert_array_equal(image[..., 0], self.images["Src__a_z003"][8:24, 4:20])
+        self.assertFalse(image[..., 1:].any())
+        np.testing.assert_array_equal(label, self.labels["Src__a_z003"][8:24, 4:20])
+
+    def test_a_slab_is_the_maximum_over_its_slices(self):
+        cases = self.index(3)
+        for centre in (1, 3, 5):
+            image, label = cases[f"Src__a_z{centre:03d}"].crop(8, 4, 32)
+            np.testing.assert_array_equal(image[..., 0], self.projected(self.images, centre)[8:40, 4:36])
+            np.testing.assert_array_equal(label, self.projected(self.labels, centre)[8:40, 4:36])
+
+    def test_computed_weights_are_those_of_the_whole_projected_label(self):
+        """The window is cut from the map of the full label, so a line just outside it still
+        weights the pixels inside."""
+        case = self.index(3, weight_bell=(5.0, 0.1))["Src__a_z003"]
+        whole = bell_weights(self.projected(self.labels, 3) > 0, 5.0, 0.1)
+        # Rows 21 to 27 hold no line; the lines of slices 2 and 3 sit just above and below.
+        window = case.crop_weight(21, 4, 7)
+        np.testing.assert_array_equal(window, whole[21:28, 4:11])
+        self.assertGreater(int(window.min()), round(255 * 0.1))
+        _, label, meta = _prepare(case, 8, 4, PatchConfig(patch_size=16), preprocess, 0)
+        np.testing.assert_allclose(meta["weight"].numpy() * 255, whole[8:24, 4:20], atol=1e-3)
+        self.assertTrue(torch.allclose(meta["weight"][label > 0], torch.tensor(1.0)))
+
+    def test_the_bell_curve_has_the_shape_the_stored_maps_have(self):
+        annotated = np.zeros((40, 40), dtype=bool)
+        annotated[20, 5:35] = True
+        weights = bell_weights(annotated, 5.0, 0.1)
+        self.assertEqual(weights[20, 20], 255)
+        self.assertEqual(weights[21, 20], 255)
+        self.assertEqual(weights[25, 20], round(255 * math.exp(-(4**2) / 50)))
+        self.assertEqual(weights[20 + bell_reach(5.0, 0.1), 20], round(255 * 0.1))
+        self.assertEqual(weights[39, 20], round(255 * 0.1))
+        self.assertTrue((bell_weights(np.zeros((4, 4), dtype=bool), 5.0, 0.1) == 26).all())
+
+    def test_stored_maps_of_a_slab_are_the_map_of_its_projected_label(self):
+        (self.data.path / "weight_maps").mkdir()
+        for case_id, label in self.labels.items():
+            cv2.imwrite(str(self.data.path / "weight_maps" / f"{case_id}.png"),
+                        bell_weights(label > 0, 5.0, 0.1))
+        case = self.index(3, weight_maps=True)["Src__a_z003"]
+        whole = bell_weights(self.projected(self.labels, 3) > 0, 5.0, 0.1)
+        np.testing.assert_array_equal(case.crop_weight(0, 0, 48), whole)
+
+    def test_a_slab_is_refused_under_zscoring(self):
+        cfg = PatchConfig(patch_size=16, normalization="zscore", slab_slices=3)
+        with self.assertRaisesRegex(ValueError, "slab_slices"):
+            build_index(self.root, self.data.name, "Tr", "0", "train", cfg, self.root / "cache")
 
 
 class ChannelLayoutTests(unittest.TestCase):

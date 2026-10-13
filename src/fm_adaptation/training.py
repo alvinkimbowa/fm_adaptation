@@ -79,6 +79,8 @@ def _validate_data_mode(cfg, encoder_trains=None):
         raise ValueError("weight_maps and distance_weight_tau both weight the cross entropy")
     if cfg.weight_maps_dice and not cfg.weight_maps:
         raise ValueError("weight_maps_dice requires weight_maps")
+    if getattr(cfg, "weight_maps_from_labels", False) and not cfg.weight_maps:
+        raise ValueError("weight_maps_from_labels requires weight_maps")
     if cfg.refines:
         # The refined model's output takes over one RGB plane, which is only free where the images
         # are built from declared stains that leave it black.

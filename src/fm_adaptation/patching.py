@@ -14,7 +14,8 @@ import math
 from collections import OrderedDict
 from pathlib import Path
 
-from .datasets import dataset_dir as resolve_dataset_dir
+from .datasets import dataset_dir as resolve_dataset_dir, split_cases
+from .slabs import slab_members
 
 import cv2
 import numpy as np
@@ -101,12 +102,42 @@ def zscore(plane, statistics) -> np.ndarray:
     return (values - mean) / std
 
 
+def bell_weights(annotated: np.ndarray, width: float, floor: float) -> np.ndarray:
+    """Loss weights of a boolean annotation, in the 8 bits a stored weight map has.
+
+    255 on the annotation. Beside it a bell curve of the distance to the nearest annotated pixel,
+    `width` pixels wide, that starts at 255 on the pixels touching the annotation and never drops
+    below `floor`.
+    """
+    if not annotated.any():
+        return np.full(annotated.shape, round(255 * floor), dtype=np.uint8)
+    distance = cv2.distanceTransform(
+        (~annotated).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE
+    )
+    halo = np.exp(-((np.maximum(distance, 1) - 1) ** 2) / (2 * width**2))
+    weights = np.where(annotated, 1.0, np.maximum(halo, floor))
+    return np.round(255 * weights).astype(np.uint8)
+
+
+def bell_reach(width: float, floor: float) -> int:
+    """Distance in pixels at which `bell_weights` has come down to its floor."""
+    return math.ceil(1 + width * math.sqrt(2 * math.log(1 / floor)))
+
+
 class CaseIndex:
-    """Paths, shape and per-block ROI occupancy for one case."""
+    """Paths, shape and per-block ROI occupancy for one case.
+
+    `slab` names the cases read together with this one, itself included: every crop is then the
+    per-pixel maximum over them. `weight_bell`, a `(width, floor)` pair, computes the loss weights
+    from the label with `bell_weights` instead of reading a stored map.
+    """
 
     def __init__(self, dataset_dir: Path, split: str, case_id: str, ending: str, block: int,
-                 channel_layout=None, weight_maps: bool = False, zscore: bool = False):
+                 channel_layout=None, weight_maps: bool = False, zscore: bool = False,
+                 slab=None, weight_bell=None):
         self.case_id = case_id
+        self.slab = tuple(slab) if slab else (case_id,)
+        self.weight_bell = weight_bell
         # Under z-scoring the layout's second entry is a channel's place in the patch, not an RGB
         # plane, and the patch has as many channels as the layout names.
         self.zscore = zscore
@@ -190,22 +221,42 @@ class CaseIndex:
     def label(self) -> np.ndarray:
         return _planes.get(self.label_path)
 
+    def _projected(self, path: Path, window, gray: bool = False) -> np.ndarray:
+        """A window of one of this case's files, as the maximum over the same file of its slab."""
+        crop = None
+        for member in self.slab:
+            member_path = path.with_name(path.name.replace(self.case_id, member, 1))
+            part = np.asarray(_planes.get(member_path, gray=gray)[window])
+            crop = part if crop is None else np.maximum(crop, part)
+        return crop
+
     def crop_weight(self, y: int, x: int, patch_size: int) -> np.ndarray:
-        """The loss weights over the window `crop` cuts, as stored: 8 bits spanning 0 to 1."""
-        return np.asarray(_planes.get(self.weight_path)[y : y + patch_size, x : x + patch_size])
+        """The loss weights over the window `crop` cuts: 8 bits spanning 0 to 1."""
+        if self.weight_bell is None:
+            return self._projected(self.weight_path, (slice(y, y + patch_size), slice(x, x + patch_size)))
+        # The label is read wider than the window by the reach of the bell curve, so an annotation
+        # just outside the window still weights the pixels inside it.
+        reach = bell_reach(*self.weight_bell)
+        top, left = max(y - reach, 0), max(x - reach, 0)
+        label = self._projected(
+            self.label_path,
+            (slice(top, y + patch_size + reach), slice(left, x + patch_size + reach)),
+        )
+        weights = bell_weights(label > 0, *self.weight_bell)
+        return weights[y - top : y - top + patch_size, x - left : x - left + patch_size]
 
     def crop(self, y: int, x: int, patch_size: int, require_label: bool = True):
+        window = (slice(y, y + patch_size), slice(x, x + patch_size))
         if self.channel_layout is None:
-            raw = np.asarray(self.images[0][1][y : y + patch_size, x : x + patch_size])
-            image = _to_rgb(raw)
+            image = _to_rgb(self._projected(self.image_paths[0][1], window))
         else:
             first = self.images[0][1]
             channels = len(self.image_paths) if self.zscore else 3
             image = np.zeros((min(patch_size, first.shape[0] - y),
                               min(patch_size, first.shape[1] - x), channels), dtype=first.dtype)
-            for rgb, plane in self.images:
-                image[..., rgb] = plane[y : y + patch_size, x : x + patch_size]
-        label = np.asarray(self.label[y : y + patch_size, x : x + patch_size]) if require_label else None
+            for rgb, path in self.image_paths:
+                image[..., rgb] = self._projected(path, window, gray=True)
+        label = self._projected(self.label_path, window) if require_label else None
         return image, label
 
     def roi_fractions(self, patch_size: int) -> np.ndarray:
@@ -246,8 +297,12 @@ class CaseIndex:
 
 
 def build_index(raw_dir, dataset_name, split, fold, subset, patch_cfg, cache_dir,
-                keep_planes=None, weight_maps=False) -> list[CaseIndex]:
-    """One `CaseIndex` per case, with the ROI occupancy map cached to disk on first use."""
+                keep_planes=None, weight_maps=False, weight_bell=None) -> list[CaseIndex]:
+    """One `CaseIndex` per case, with the ROI occupancy map cached to disk on first use.
+
+    With `patch_cfg.slab_slices` above 1 each case reads its neighbouring slices too. The ROI
+    occupancy stays that of the case's own slice.
+    """
     dataset_dir = resolve_dataset_dir(raw_dir, dataset_name)
     info = load_dataset_json(dataset_dir)
     ending = info["file_ending"]
@@ -268,9 +323,18 @@ def build_index(raw_dir, dataset_name, split, fold, subset, patch_cfg, cache_dir
                 raise ValueError(f"{dataset_name} has no stain in the planes this model was trained on")
     block = max(1, patch_cfg.patch_size // BLOCKS_PER_PATCH)
     cache_dir = Path(cache_dir)
+    case_ids = _case_ids(dataset_dir, split, fold, subset)
+    slabs = {}
+    if patch_cfg.slab_slices > 1:
+        if standardised:
+            raise ValueError("patching.slab_slices is not supported with zscore normalization")
+        # Neighbours are looked up among every case the split stores, not only this subset's.
+        slabs = slab_members(sorted(split_cases(dataset_dir, split) | set(case_ids)),
+                             patch_cfg.slab_slices)
     cases = [
-        CaseIndex(dataset_dir, split, case_id, ending, block, layout, weight_maps, standardised)
-        for case_id in _case_ids(dataset_dir, split, fold, subset)
+        CaseIndex(dataset_dir, split, case_id, ending, block, layout, weight_maps, standardised,
+                  slabs.get(case_id), weight_bell)
+        for case_id in case_ids
     ]
     if weight_maps:
         missing = [case.case_id for case in cases if not case.weight_path.exists()]
@@ -309,8 +373,15 @@ def patch_loader(cfg, preprocess, subset, shuffle=False):
         cfg.patching,
         cfg.patch_cache_dir(cfg.train_dataset),
         keep_planes,
-        cfg.weight_maps,
+        cfg.weight_maps and not cfg.weight_maps_from_labels,
+        (cfg.weight_map_width, cfg.weight_map_floor)
+        if cfg.weight_maps and cfg.weight_maps_from_labels else None,
     )
+    if cfg.patching.slab_slices > 1 and all(len(case.slab) == 1 for case in cases):
+        raise ValueError(
+            f"patching.slab_slices is {cfg.patching.slab_slices} but no case of {cfg.train_dataset} "
+            "is a slice of a stack"
+        )
     if subset == "train":
         dataset = RandomPatchDataset(cases, cfg.patching, preprocess, cfg.augment)
     else:
@@ -417,7 +488,8 @@ def _prepare(case, y, x, patch_cfg, preprocess, roi_threshold, augment=None, rng
         x = int(np.clip(x - (source - size) // 2, 0, max(case.shape[1] - source, 0)))
         size = source
     image, label = case.crop(y, x, size)
-    weight = None if case.weight_path is None else case.crop_weight(y, x, size)
+    weighted = case.weight_path is not None or getattr(case, "weight_bell", None) is not None
+    weight = case.crop_weight(y, x, size) if weighted else None
     if augment is not None:
         image, label, *turned = _augment_patch(image, label, patch_cfg.patch_size, augment, rng, weight)
         weight = turned[0] if turned else None

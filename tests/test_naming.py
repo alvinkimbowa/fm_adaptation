@@ -35,6 +35,13 @@ class DescribeRunTests(unittest.TestCase):
         self.assertEqual(describe_run("convnextt_upernet_ours"), "ConvNeXt-T + UperNet + ours")
         self.assertEqual(describe_run("convnextb_upernet_ours"), "ConvNeXt-B + UperNet + ours")
 
+    def test_a_run_on_projected_slices_says_how_many(self):
+        self.assertEqual(
+            describe_run("convnextt_upernet_ft_aug_p512_red_s3_wmapdice_ours"),
+            "ConvNeXt-T + UperNet + FT + aug + 512px patches + red + 3-slice projections"
+            " + weight-mapped + Dice + ours",
+        )
+
     def test_the_unet_trained_from_scratch_reads_as_itself(self):
         self.assertEqual(
             describe_run("unet_aug_p512_red_ours"), "UNet + aug + 512px patches + red + ours"

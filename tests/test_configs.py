@@ -1,3 +1,4 @@
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -81,6 +82,19 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(len({cfg.run_dir for cfg in (plain, mapped, dice)}), 3)
             self.assertEqual({cfg.train_dataset for cfg in (mapped, dice)}, {plain.train_dataset})
             self.assertEqual({cfg.patching for cfg in (mapped, dice)}, {plain.patching})
+
+        def test_the_projected_run_differs_from_the_weight_mapped_one_only_in_what_it_reads(self):
+            repo = Path(__file__).resolve().parents[1]
+            stem = "dinov3_convnextt_upernet_ft_aug_p512_red{}_wmapdice_sci311.yaml"
+            single, slab = (ExperimentConfig.from_yaml(repo / "configs" / stem.format(tag))
+                            for tag in ("", "_s3"))
+            self.assertEqual((single.patching.slab_slices, slab.patching.slab_slices), (1, 3))
+            self.assertEqual((single.weight_maps_from_labels, slab.weight_maps_from_labels),
+                             (False, True))
+            self.assertEqual((slab.weight_map_width, slab.weight_map_floor), (5.0, 0.1))
+            self.assertEqual(replace(slab.patching, slab_slices=1), single.patching)
+            self.assertEqual((slab.weight_maps, slab.weight_maps_dice), (True, True))
+            self.assertNotEqual(slab.run_dir, single.run_dir)
 
         def test_the_zscore_unet_reads_the_stored_channel_alone(self):
             repo = Path(__file__).resolve().parents[1]
