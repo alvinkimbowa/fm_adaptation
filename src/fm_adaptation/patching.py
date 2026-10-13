@@ -540,7 +540,11 @@ class RandomPatchDataset(Dataset):
 
 
 class GridPatchDataset(Dataset):
-    """Deterministic overlapping grid over the ROI, used for validation."""
+    """Deterministic overlapping grid over the ROI, used for validation.
+
+    With `patch_cfg.val_fraction` below 1 only that share of the grid is kept. The subset is drawn
+    by a generator of its own with a fixed seed, so it is spread over all cases and is the same on
+    every epoch, run and resume."""
 
     def __init__(self, cases, patch_cfg, preprocess):
         self.cases = cases
@@ -553,6 +557,11 @@ class GridPatchDataset(Dataset):
         ]
         if not self.items:
             raise ValueError("No grid patches cleared min_roi_fraction; lower it or check roi_threshold")
+        fraction = getattr(patch_cfg, "val_fraction", 1.0)
+        if fraction < 1.0:
+            keep = max(1, round(len(self.items) * fraction))
+            chosen = np.random.default_rng(0).permutation(len(self.items))[:keep]
+            self.items = [self.items[i] for i in sorted(chosen.tolist())]
 
     def __len__(self):
         return len(self.items)

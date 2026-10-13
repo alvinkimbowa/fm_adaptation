@@ -26,10 +26,16 @@ class PatchConfig:
     # Slices of a z-stack projected into each patch, for datasets that store one case per slice;
     # see `slabs.slab_members`. 1 reads every case on its own.
     slab_slices: int = 1
+    # Share of the validation grid patches scored after each epoch. Below 1 a fixed subset is kept,
+    # the same on every epoch and on a resume; see `GridPatchDataset`. Prediction and test scoring
+    # always cover every patch.
+    val_fraction: float = 1.0
 
     def __post_init__(self):
         if self.slab_slices < 1:
             raise ValueError("patching.slab_slices must be at least 1")
+        if not 0.0 < self.val_fraction <= 1.0:
+            raise ValueError("patching.val_fraction must be above 0 and at most 1")
         if self.normalization not in ("encoder", "zscore"):
             raise ValueError(f"unknown patching.normalization {self.normalization!r}")
 
@@ -247,6 +253,7 @@ class ExperimentConfig:
                     respect_channels=bool(patching.get("respect_channels", False)),
                     normalization=str(patching.get("normalization", "encoder")),
                     slab_slices=int(patching.get("slab_slices", 1)),
+                    val_fraction=float(patching.get("val_fraction", 1.0)),
                 )
                 if patching.get("enabled")
                 else None

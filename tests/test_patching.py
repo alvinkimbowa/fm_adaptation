@@ -373,3 +373,42 @@ class PlaneCacheTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValidationSubsetTests(unittest.TestCase):
+    """The share of the validation grid that `val_fraction` keeps."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = DatasetFixture(self.root, "Dataset001_grid", {"0": "SMI"})
+        rng = np.random.default_rng(0)
+        cases = [f"Src__case{i}" for i in range(4)]
+        for case_id in cases:
+            self.data.add(case_id, planes={0: rng.integers(1, 255, (64, 64), dtype=np.uint8)},
+                          label=np.ones((64, 64), dtype=np.uint8))
+        self.data.split(cases)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def items(self, fraction):
+        from fm_adaptation.patching import GridPatchDataset
+
+        cfg = PatchConfig(patch_size=16, respect_channels=True, val_fraction=fraction)
+        cases = build_index(self.root, self.data.name, "Tr", "0", "train", cfg, self.root / "cache")
+        return [(case.case_id, y, x) for case, y, x in GridPatchDataset(cases, cfg, None).items]
+
+    def test_a_fraction_keeps_that_share_of_the_grid_in_grid_order(self):
+        full, part = self.items(1.0), self.items(0.25)
+        self.assertEqual(len(part), round(len(full) * 0.25))
+        self.assertEqual(part, [item for item in full if item in set(part)])
+        self.assertEqual({case_id for case_id, _, _ in part}, {case_id for case_id, _, _ in full})
+
+    def test_the_subset_is_the_same_every_time(self):
+        self.assertEqual(self.items(0.25), self.items(0.25))
+
+    def test_the_fraction_must_be_in_range(self):
+        for fraction in (0.0, 1.5):
+            with self.assertRaisesRegex(ValueError, "val_fraction"):
+                PatchConfig(val_fraction=fraction)
