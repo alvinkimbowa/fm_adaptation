@@ -126,7 +126,7 @@ def validate_config(cfg):
         raise ValueError('This instance experiment requires native 256x256 patches')
     if cfg.stains != ('SMI',) or not cfg.patching.respect_channels or cfg.balance_sources:
         raise ValueError('Require stains: [SMI], respect_channels: true, balance_sources: false')
-    if cfg.skeleton_recall_weight or cfg.distance_weight_tau:
-        raise ValueError('Instance losses cannot include skeleton or distance weights')
+    if cfg.skeleton_recall_weight or cfg.distance_weight_tau or cfg.weight_maps:
+        raise ValueError('Instance losses cannot include skeleton, distance or weight-map weights')
     if cfg.augment and (cfg.augment.zoom_min != 1 or cfg.augment.zoom_max != 1):
         raise ValueError('Instance augmentation does not support zoom')

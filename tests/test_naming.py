@@ -35,9 +35,35 @@ class DescribeRunTests(unittest.TestCase):
         self.assertEqual(describe_run("convnextt_upernet_ours"), "ConvNeXt-T + UperNet + ours")
         self.assertEqual(describe_run("convnextb_upernet_ours"), "ConvNeXt-B + UperNet + ours")
 
+    def test_the_unet_trained_from_scratch_reads_as_itself(self):
+        self.assertEqual(
+            describe_run("unet_aug_p512_red_ours"), "UNet + aug + 512px patches + red + ours"
+        )
+        self.assertEqual(
+            describe_run("unet_aug_p512_red_zscore_ours"),
+            "UNet + aug + 512px patches + red + z-score + ours",
+        )
+
 
 class RunOrderTests(unittest.TestCase):
     """Where a run sorts, which also has to fall out of the name."""
+
+    def test_a_refining_run_sorts_straight_after_the_run_it_refines(self):
+        names = [
+            "convnextt_upernet_ft_aug_p512_red_refine_ours",
+            "convnextt_upernet_ft_aug_p512_red_ours",
+        ]
+        self.assertEqual(sorted(names, key=run_order), names[::-1])
+        self.assertTrue(describe_run(names[0]).endswith("red + refine + ours"))
+
+    def test_weight_mapped_runs_sort_straight_after_the_run_they_reweight(self):
+        names = [
+            "convnextt_upernet_ft_aug_p512_red_ours",
+            "convnextt_upernet_ft_aug_p512_red_wmap_ours",
+            "convnextt_upernet_ft_aug_p512_red_wmapdice_ours",
+        ]
+        self.assertEqual(sorted(names[::-1], key=run_order), names)
+        self.assertTrue(describe_run(names[2]).endswith("red + weight-mapped + Dice + ours"))
 
     def test_a_run_sorts_before_the_runs_that_extend_it(self):
         names = [

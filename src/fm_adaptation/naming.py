@@ -18,6 +18,7 @@ MODEL_NAMES = {
     "sam3": "SAM3",
     "dinov3": "DINOv3",
     "nnunet": "nnU-Net",
+    "unet": "UNet",
 }
 
 
@@ -35,6 +36,7 @@ TOKENS = (
     ("linear", "LP"),
     ("nonlinear", "NLP"),
     ("upernet", "UperNet"),
+    ("unet", "UNet"),
     ("m2f", "Mask2Former"),
     # What was added to it.
     ("inj", "Inj"),
@@ -52,6 +54,12 @@ TOKENS = (
     # The training objective, where it is not plain Dice and cross entropy.
     ("skelrec", "SkelRecall"),
     ("distw", "dist-weighted"),
+    ("wmap", "weight-mapped"),
+    ("wmapdice", "weight-mapped + Dice"),
+    # A second model trained to correct the output of the run the name otherwise describes.
+    ("refine", "refine"),
+    # How intensities reach the model, where it is not the encoder's own preprocessing.
+    ("zscore", "z-score"),
     # How the training set was sampled and perturbed.
     ("balanced", "balanced"),
     ("aug", "aug"),

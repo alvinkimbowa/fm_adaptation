@@ -9,6 +9,8 @@ config="${1:?usage: export_onnx.sh <config.yaml>}"
 checkpoint=${checkpoint:-best}   # best | final
 # Empty keeps the fold the config names.
 fold=${fold:-}
+# The file stem to deploy under; empty derives one from the model and its training dataset.
+export_name=${export_name:-}
 # Images the INT8 calibration and both checks are cut from; empty takes the training dataset's own
 # imagesTs. Point it at the images the model will meet once deployed.
 calib_dir=${calib_dir:-}
@@ -45,6 +47,7 @@ print(default_name(cfg), cfg.raw_data_dir / cfg.train_dataset / "imagesTs")
 EOF
 )
 [[ "$checkpoint" != best ]] && name+="-$checkpoint"
+[[ -n "$export_name" ]] && name="$export_name"
 calib_dir="${calib_dir:-$default_calib}"
 out_dir="${app_dir/#\~/$HOME}/assets"
 debug_dir="${app_dir/#\~/$HOME}/debug"

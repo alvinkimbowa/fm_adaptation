@@ -11,6 +11,7 @@ patch is free, so this is the one place where a rotation costs no tissue at all.
 """
 
 import math
+from collections import OrderedDict
 from pathlib import Path
 
 from .datasets import dataset_dir as resolve_dataset_dir
@@ -24,6 +25,8 @@ from tqdm import tqdm
 from .data import _case_ids, load_dataset_json, stain_planes, trained_planes
 
 BLOCKS_PER_PATCH = 8
+# Decoded pixels one process may keep between patches; see `_PlaneCache`.
+DECODED_PLANE_BUDGET = 2 * 1024**3
 
 
 def open_image(path: Path) -> np.ndarray:
@@ -41,12 +44,73 @@ def open_image(path: Path) -> np.ndarray:
     return image
 
 
+class _PlaneCache:
+    """Recently used planes of one process, decoded ones held to a byte budget.
+
+    A format that cannot be memory-mapped is decoded whole, and every dataloader worker ends up
+    touching every case, so planes kept without limit cost the decoded size of the dataset once per
+    worker. Past the budget the least recently used plane is dropped and decoded again when next
+    asked for. Memory maps hold no pixels and are never dropped.
+    """
+
+    def __init__(self, budget_bytes: int):
+        self.budget_bytes = budget_bytes
+        self.held_bytes = 0
+        self.planes: OrderedDict = OrderedDict()
+
+    def get(self, path: Path, gray: bool = False) -> np.ndarray:
+        key = (path, gray)
+        plane = self.planes.get(key)
+        if plane is not None:
+            self.planes.move_to_end(key)
+            return plane
+        plane = open_image(path)
+        if gray and plane.ndim != 2:
+            plane = cv2.cvtColor(np.asarray(plane), cv2.COLOR_RGB2GRAY)
+        self.planes[key] = plane
+        self.held_bytes += self._cost(plane)
+        while self.held_bytes > self.budget_bytes and len(self.planes) > 1:
+            _, dropped = self.planes.popitem(last=False)
+            self.held_bytes -= self._cost(dropped)
+        return plane
+
+    @staticmethod
+    def _cost(plane: np.ndarray) -> int:
+        return 0 if isinstance(plane, np.memmap) else plane.nbytes
+
+
+_planes = _PlaneCache(DECODED_PLANE_BUDGET)
+
+
+def foreground_statistics(plane) -> tuple[float, float] | None:
+    """Mean and standard deviation of a plane's non-zero pixels; None where it has none to vary."""
+    values = np.asarray(plane, dtype=np.float32)
+    foreground = values[values != 0]
+    if foreground.size == 0:
+        return None
+    std = float(foreground.std())
+    return (float(foreground.mean()), std) if std > 0 else None
+
+
+def zscore(plane, statistics) -> np.ndarray:
+    """A plane standardised by `foreground_statistics`, zeros included; all zero without any."""
+    values = np.asarray(plane, dtype=np.float32)
+    if statistics is None:
+        return np.zeros_like(values)
+    mean, std = statistics
+    return (values - mean) / std
+
+
 class CaseIndex:
     """Paths, shape and per-block ROI occupancy for one case."""
 
     def __init__(self, dataset_dir: Path, split: str, case_id: str, ending: str, block: int,
-                 channel_layout=None):
+                 channel_layout=None, weight_maps: bool = False, zscore: bool = False):
         self.case_id = case_id
+        # Under z-scoring the layout's second entry is a channel's place in the patch, not an RGB
+        # plane, and the patch has as many channels as the layout names.
+        self.zscore = zscore
+        self._statistics = None
         image_dir = dataset_dir / f"images{split}"
         self.channel_layout = None if channel_layout is None else tuple(sorted(channel_layout))
         self.layout_key = (
@@ -60,26 +124,19 @@ class CaseIndex:
                        for stored, rgb in self.channel_layout)
         )
         self.label_path = dataset_dir / f"labels{split}" / f"{case_id}{ending}"
+        # One folder holds the maps of every split, named as the labels are.
+        self.weight_path = dataset_dir / "weight_maps" / f"{case_id}{ending}" if weight_maps else None
         self.block = block
         self.shape: tuple[int, int] = (0, 0)
         self.occupancy: np.ndarray = np.zeros((0, 0), dtype=np.float32)
-        self._images = None
-        self._label = None
 
     @property
     def images(self):
-        if self._images is None:
-            loaded = []
-            for rgb, path in self.image_paths:
-                image = open_image(path)
-                if rgb is not None and image.ndim != 2:
-                    image = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY)
-                loaded.append((rgb, image))
-            shapes = {tuple(image.shape[:2]) for _, image in loaded}
-            if len(shapes) != 1:
-                raise ValueError(f"stain planes have different shapes for {self.case_id}")
-            self._images = tuple(loaded)
-        return self._images
+        loaded = tuple((rgb, _planes.get(path, gray=rgb is not None)) for rgb, path in self.image_paths)
+        shapes = {tuple(image.shape[:2]) for _, image in loaded}
+        if len(shapes) != 1:
+            raise ValueError(f"stain planes have different shapes for {self.case_id}")
+        return loaded
 
     def build(self, roi_threshold: int) -> None:
         image = self.images[0][1]
@@ -113,10 +170,29 @@ class CaseIndex:
         return True
 
     @property
+    def statistics(self):
+        """`foreground_statistics` of each whole image plane, in the order of `image_paths`."""
+        if self._statistics is None:
+            self._statistics = tuple(foreground_statistics(plane) for _, plane in self.images)
+        return self._statistics
+
+    def standardise(self, patch: np.ndarray) -> np.ndarray:
+        """A raw patch from `crop` with each channel z-scored by its whole image's statistics."""
+        if patch.ndim == 2:
+            patch = patch[..., None]
+        return np.stack(
+            [zscore(patch[..., slot], stats)
+             for (slot, _), stats in zip(self.image_paths, self.statistics)],
+            axis=-1,
+        )
+
+    @property
     def label(self) -> np.ndarray:
-        if self._label is None:
-            self._label = open_image(self.label_path)
-        return self._label
+        return _planes.get(self.label_path)
+
+    def crop_weight(self, y: int, x: int, patch_size: int) -> np.ndarray:
+        """The loss weights over the window `crop` cuts, as stored: 8 bits spanning 0 to 1."""
+        return np.asarray(_planes.get(self.weight_path)[y : y + patch_size, x : x + patch_size])
 
     def crop(self, y: int, x: int, patch_size: int, require_label: bool = True):
         if self.channel_layout is None:
@@ -124,8 +200,9 @@ class CaseIndex:
             image = _to_rgb(raw)
         else:
             first = self.images[0][1]
+            channels = len(self.image_paths) if self.zscore else 3
             image = np.zeros((min(patch_size, first.shape[0] - y),
-                              min(patch_size, first.shape[1] - x), 3), dtype=first.dtype)
+                              min(patch_size, first.shape[1] - x), channels), dtype=first.dtype)
             for rgb, plane in self.images:
                 image[..., rgb] = plane[y : y + patch_size, x : x + patch_size]
         label = np.asarray(self.label[y : y + patch_size, x : x + patch_size]) if require_label else None
@@ -169,13 +246,18 @@ class CaseIndex:
 
 
 def build_index(raw_dir, dataset_name, split, fold, subset, patch_cfg, cache_dir,
-                keep_planes=None) -> list[CaseIndex]:
+                keep_planes=None, weight_maps=False) -> list[CaseIndex]:
     """One `CaseIndex` per case, with the ROI occupancy map cached to disk on first use."""
     dataset_dir = resolve_dataset_dir(raw_dir, dataset_name)
     info = load_dataset_json(dataset_dir)
     ending = info["file_ending"]
     layout = None
-    if patch_cfg.respect_channels:
+    standardised = patch_cfg.normalization == "zscore"
+    if standardised:
+        layout = tuple(
+            (stored, slot) for slot, stored in enumerate(sorted(int(key) for key in info["channel_names"]))
+        )
+    elif patch_cfg.respect_channels:
         declared = stain_planes(info["channel_names"])
         if declared is not None:
             layout = tuple(
@@ -187,9 +269,16 @@ def build_index(raw_dir, dataset_name, split, fold, subset, patch_cfg, cache_dir
     block = max(1, patch_cfg.patch_size // BLOCKS_PER_PATCH)
     cache_dir = Path(cache_dir)
     cases = [
-        CaseIndex(dataset_dir, split, case_id, ending, block, layout)
+        CaseIndex(dataset_dir, split, case_id, ending, block, layout, weight_maps, standardised)
         for case_id in _case_ids(dataset_dir, split, fold, subset)
     ]
+    if weight_maps:
+        missing = [case.case_id for case in cases if not case.weight_path.exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"{dataset_name} has no weight map for {len(missing)} of {len(cases)} cases, "
+                f"first {missing[0]}"
+            )
     pending = [case for case in cases if not case.load(cache_dir / f"{case.case_id}.npz")]
     for case in tqdm(pending, desc=f"indexing {dataset_name} ROI", leave=False):
         case.build(patch_cfg.roi_threshold)
@@ -220,6 +309,7 @@ def patch_loader(cfg, preprocess, subset, shuffle=False):
         cfg.patching,
         cfg.patch_cache_dir(cfg.train_dataset),
         keep_planes,
+        cfg.weight_maps,
     )
     if subset == "train":
         dataset = RandomPatchDataset(cases, cfg.patching, preprocess, cfg.augment)
@@ -264,8 +354,10 @@ def _centre_crop(array, size):
     return array[top : top + size, left : left + size]
 
 
-def _augment_patch(image, label, patch_size, augment, rng):
+def _augment_patch(image, label, patch_size, augment, rng, weight=None):
     """Flip and turn an oversized patch, then take `patch_size` out of its middle.
+
+    A `weight` map goes through the same flips and turn and comes back as a third value.
 
     The centre square is inside the turned source by construction, so `warpAffine`'s border value
     never reaches the output and the model is never shown a corner that was not imaged. Where the
@@ -274,8 +366,10 @@ def _augment_patch(image, label, patch_size, augment, rng):
     """
     if augment.hflip and rng.random() < augment.flip_p:
         image, label = image[:, ::-1], label[:, ::-1]
+        weight = None if weight is None else weight[:, ::-1]
     if augment.vflip and rng.random() < augment.flip_p:
         image, label = image[::-1], label[::-1]
+        weight = None if weight is None else weight[::-1]
     limit = _supported_rotation(min(image.shape[:2]), patch_size, augment)
     zooming = (augment.zoom_min, augment.zoom_max) != (1.0, 1.0)
     if limit > 0 or zooming:
@@ -286,7 +380,22 @@ def _augment_patch(image, label, patch_size, augment, rng):
         size = (image.shape[1], image.shape[0])
         image = cv2.warpAffine(np.ascontiguousarray(image), matrix, size, flags=cv2.INTER_LINEAR)
         label = cv2.warpAffine(np.ascontiguousarray(label), matrix, size, flags=cv2.INTER_NEAREST)
-    return _centre_crop(image, patch_size), _centre_crop(label, patch_size)
+        if weight is not None:
+            weight = cv2.warpAffine(np.ascontiguousarray(weight), matrix, size, flags=cv2.INTER_LINEAR)
+    image, label = _centre_crop(image, patch_size), _centre_crop(label, patch_size)
+    if weight is None:
+        return image, label
+    return image, label, _centre_crop(weight, patch_size)
+
+
+def _fit_weight(weight, geometry, shape):
+    """A cropped weight map laid over the label tensor `preprocess` made of the same crop."""
+    size = (geometry["resized_width"], geometry["resized_height"])
+    weight = cv2.resize(np.ascontiguousarray(weight), size, interpolation=cv2.INTER_LINEAR)
+    fitted = np.zeros(tuple(shape), dtype=np.float32)
+    top, left = geometry["pad_top"], geometry["pad_left"]
+    fitted[top : top + size[1], left : left + size[0]] = weight.astype(np.float32) / 255.0
+    return torch.from_numpy(fitted)
 
 
 def _supported_rotation(source, patch_size, augment):
@@ -308,17 +417,24 @@ def _prepare(case, y, x, patch_cfg, preprocess, roi_threshold, augment=None, rng
         x = int(np.clip(x - (source - size) // 2, 0, max(case.shape[1] - source, 0)))
         size = source
     image, label = case.crop(y, x, size)
+    weight = None if case.weight_path is None else case.crop_weight(y, x, size)
     if augment is not None:
-        image, label = _augment_patch(image, label, patch_cfg.patch_size, augment, rng)
+        image, label, *turned = _augment_patch(image, label, patch_cfg.patch_size, augment, rng, weight)
+        weight = turned[0] if turned else None
     if patch_cfg.ignore_masked_out:
         occupied = image > roi_threshold
         if occupied.ndim == 3:
             occupied = occupied.any(axis=2)
         label = np.where(occupied, label, -1).astype(np.int16)
-    if image.ndim == 2:
+    if getattr(case, "zscore", False):
+        image = case.standardise(image)
+    elif image.ndim == 2:
         image = _to_rgb(image)
     image_t, label_t, geometry = preprocess(image, label)
-    return image_t, label_t, {"case_id": case.case_id, "y": y, "x": x, **geometry}
+    meta = {"case_id": case.case_id, "y": y, "x": x, **geometry}
+    if weight is not None:
+        meta["weight"] = _fit_weight(weight, geometry, label_t.shape)
+    return image_t, label_t, meta
 
 
 class RandomPatchDataset(Dataset):
@@ -434,6 +550,8 @@ def predict_case(model, case, patch_cfg, classes, device, amp, batch_size, prepr
         tensors, geometries = [], []
         for y, x in batch:
             image, _ = case.crop(int(y), int(x), patch_cfg.patch_size, require_label=False)
+            if case.zscore:
+                image = case.standardise(image)
             image_t, _, geometry = preprocess(image, empty)
             tensors.append(image_t)
             geometries.append(geometry)

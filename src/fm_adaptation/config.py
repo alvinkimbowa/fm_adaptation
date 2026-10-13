@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,13 @@ class PatchConfig:
     ignore_masked_out: bool = False
     # Compose known stain files into their declared RGB planes instead of replicating _0000.
     respect_channels: bool = False
+    # `encoder` hands 8-bit RGB patches to the encoder's own preprocessing. `zscore` hands over the
+    # stored channels as they are, each standardised by its whole image's non-zero pixels.
+    normalization: str = "encoder"
+
+    def __post_init__(self):
+        if self.normalization not in ("encoder", "zscore"):
+            raise ValueError(f"unknown patching.normalization {self.normalization!r}")
 
     @property
     def stride(self) -> int:
@@ -92,6 +100,11 @@ class ExperimentConfig:
     num_queries: int = 128
     instance_data_dir: Path = Path("data/instances_yvonne_b2")
     gradient_clip: float = 1.0
+    refines: str | None = None
+    refines_checkpoint: str = "final"
+    refines_plane: int = 1
+    weight_maps: bool = False
+    weight_maps_dice: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -115,6 +128,17 @@ class ExperimentConfig:
             num_queries=int(model.get("num_queries", 128)),
             instance_data_dir=Path(data.get("instance_data_dir", "data/instances_yvonne_b2")),
             gradient_clip=float(training.get("gradient_clip", 1.0)),
+            # Train a second model on top of a finished, frozen one: the run name whose output this
+            # run corrects, within the same model, dataset and fold. That run's foreground
+            # probability is written into RGB plane `refines_plane` of every image this one reads.
+            refines=model.get("refines"),
+            refines_checkpoint=str(model.get("refines_checkpoint", "final")),
+            refines_plane=int(model.get("refines_plane", 1)),
+            # Weights the cross entropy by the per-pixel maps in the training set's `weight_maps`
+            # folder, one image per case named as its label; `weight_maps_dice` carries the same
+            # weights into the Dice term.
+            weight_maps=bool(training.get("weight_maps", False)),
+            weight_maps_dice=bool(training.get("weight_maps_dice", False)),
             raw_data_dir=raw_data_dir,
             results_dir=Path(data.get("results_dir", "models")),
             train_dataset=resolve(raw_data_dir, data["train_dataset"]),
@@ -207,6 +231,7 @@ class ExperimentConfig:
                     overlap=float(patching.get("overlap", 0.5)),
                     ignore_masked_out=bool(patching.get("ignore_masked_out", False)),
                     respect_channels=bool(patching.get("respect_channels", False)),
+                    normalization=str(patching.get("normalization", "encoder")),
                 )
                 if patching.get("enabled")
                 else None
@@ -222,6 +247,23 @@ class ExperimentConfig:
             / self.run_name
             / f"fold_{self.fold}"
         )
+
+    @property
+    def zscore(self) -> bool:
+        return self.patching is not None and self.patching.normalization == "zscore"
+
+    @property
+    def input_channels(self) -> int:
+        """Channels of the tensor the model reads: RGB, or under z-scoring what the dataset stores."""
+        if not self.zscore:
+            return 3
+        with open(self.raw_data_dir / self.train_dataset / "dataset.json") as f:
+            return len(json.load(f)["channel_names"])
+
+    @property
+    def refined_run_dir(self) -> Path:
+        """The run directory of the model `refines` names."""
+        return self.run_dir.parents[1] / self.refines / f"fold_{self.fold}"
 
     @property
     def feature_cache_dir(self) -> Path:

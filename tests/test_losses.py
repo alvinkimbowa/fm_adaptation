@@ -125,5 +125,61 @@ class DistanceWeightTests(unittest.TestCase):
             self.assertGreater(weighted.item(), plain.item())
 
 
+class WeightMapTests(unittest.TestCase):
+        """A per-pixel weight map handed to the loss by the caller."""
+
+        def setUp(self):
+            self.target = torch.zeros(1, 64, 64, dtype=torch.long)
+            self.target[0, 32, 8:56] = 1
+            # Full weight on a band around the tracing, a tenth of it everywhere else.
+            self.weights = torch.full((1, 64, 64), 0.1)
+            self.weights[0, 28:37] = 1.0
+            self.near, self.far = _logits_for(self.target), _logits_for(self.target)
+            self.near[0, :, 34, 32] = torch.tensor([-10.0, 10.0])
+            self.far[0, :, 60, 32] = torch.tensor([-10.0, 10.0])
+
+        def test_uniform_weights_leave_the_loss_unweighted(self):
+            logits = _logits_for(self.target, confidence=1.0)
+            ones = torch.ones(1, 64, 64)
+            for weight_dice in (False, True):
+                loss = DiceCrossEntropyLoss(weight_dice=weight_dice)
+                self.assertAlmostEqual(loss(logits, self.target, ones).item(),
+                                       loss(logits, self.target).item(), places=5)
+
+        def test_an_error_on_a_heavy_pixel_costs_more_than_one_on_a_light_pixel(self):
+            for weight_dice in (False, True):
+                loss = DiceCrossEntropyLoss(weight_dice=weight_dice)
+                self.assertGreater(loss(self.near, self.target, self.weights).item(),
+                                   loss(self.far, self.target, self.weights).item())
+
+        def test_the_dice_term_is_weighted_only_when_asked(self):
+            # Zero weight off the band takes the far error out of the cross entropy altogether, so
+            # whatever it still costs is the Dice term's doing.
+            weights = (self.weights == 1.0).float()
+            clean = _logits_for(self.target)
+            plain = DiceCrossEntropyLoss()
+            self.assertGreater(plain(self.far, self.target, weights).item(),
+                               plain(clean, self.target, weights).item() + 1e-4)
+            both = DiceCrossEntropyLoss(weight_dice=True)
+            self.assertAlmostEqual(both(self.far, self.target, weights).item(),
+                                   both(clean, self.target, weights).item(), places=5)
+
+        def test_ignored_pixels_are_left_out_of_the_weighted_mean(self):
+            target = self.target.clone()
+            target[0, 48:, :] = -1
+            logits = _logits_for(self.target)
+            logits[0, :, 60, 32] = torch.tensor([-10.0, 10.0])
+            for weight_dice in (False, True):
+                loss = DiceCrossEntropyLoss(weight_dice=weight_dice)
+                self.assertAlmostEqual(loss(logits, target, self.weights).item(),
+                                       loss(_logits_for(self.target), target, self.weights).item(),
+                                       places=5)
+
+        def test_the_skeleton_loss_carries_the_weights_through(self):
+            loss = DiceCrossEntropySkeletonRecallLoss(1.0)
+            self.assertGreater(loss(self.near, self.target, self.weights).item(),
+                               loss(self.far, self.target, self.weights).item())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ from .data import (
     trained_planes,
 )
 from .losses import build_loss, mean_foreground_dice
-from .models import build_model
+from .models import build_model, load_first_stage
 from .patching import patch_loader as _patch_loader
 from .plot_history import render_run
 from .progress_samples import SAMPLE_EVERY, pick_samples, render_samples
@@ -73,6 +73,20 @@ def _validate_data_mode(cfg, encoder_trains=None):
         raise ValueError("patchwise loading is not supported for multi-stain datasets")
     if cfg.patching is not None and cfg.channel_dropout:
         raise ValueError("channel_dropout is not supported with patchwise loading")
+    if cfg.weight_maps and cfg.patching is None:
+        raise ValueError("weight_maps requires patchwise loading")
+    if cfg.weight_maps and cfg.distance_weight_tau:
+        raise ValueError("weight_maps and distance_weight_tau both weight the cross entropy")
+    if cfg.weight_maps_dice and not cfg.weight_maps:
+        raise ValueError("weight_maps_dice requires weight_maps")
+    if cfg.refines:
+        # The refined model's output takes over one RGB plane, which is only free where the images
+        # are built from declared stains that leave it black.
+        occupied = None if declared_stains is None else {plane for _, plane in declared_stains.values()}
+        if cfg.patching is None or not cfg.patching.respect_channels or occupied is None:
+            raise ValueError("refines requires patchwise loading with respect_channels")
+        if cfg.refines_plane not in {0, 1, 2} - occupied:
+            raise ValueError(f"refines_plane {cfg.refines_plane} is not an empty RGB plane")
     # What rules perturbation out is caching, not a frozen trunk: features cached once, from the
     # unaugmented image, would make any perturbation silently do nothing, since the cached loader
     # never opens an image again. Patching is cut fresh every epoch and so never caches, and neither
@@ -293,6 +307,13 @@ def _lr_scheduler(optimizer, cfg, steps_per_epoch):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
 
 
+def _pixel_weights(metadata, device):
+    """The batch's loss weight maps, where its items carry one."""
+    if not metadata or "weight" not in metadata[0]:
+        return None
+    return torch.stack([item["weight"] for item in metadata]).to(device)
+
+
 def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None, accumulation_steps=1,
                scheduler=None):
     training = optimizer is not None
@@ -306,11 +327,12 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
     progress = tqdm(loader, desc=desc, leave=False)
     if training:
         optimizer.zero_grad(set_to_none=True)
-    for step, (images, masks, _) in enumerate(progress, start=1):
+    for step, (images, masks, metadata) in enumerate(progress, start=1):
         images, masks = images.to(device), masks.to(device)
+        weights = _pixel_weights(metadata, device)
         with amp:
             logits = forward(module, images, masks)
-            loss = loss_fn(logits, masks)
+            loss = loss_fn(logits, masks) if weights is None else loss_fn(logits, masks, weights)
         if training:
             # Accumulation keeps the effective batch where the memory does not allow the real one.
             (loss / accumulation_steps).backward()
@@ -354,6 +376,10 @@ def main():
         train_encoder=cfg.train_encoder,
         injector=cfg.injector,
         variant=cfg.variant,
+        refines=load_first_stage(cfg, classes),
+        refines_plane=cfg.refines_plane,
+        input_channels=cfg.input_channels,
+        zscore=cfg.zscore,
     )
     if cfg.init_from and not args.resume:
         # A resume restores this run's own state; seeding on top of it would throw the run away.

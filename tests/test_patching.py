@@ -6,10 +6,13 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import torch
 
 from fm_adaptation.config import AugmentConfig, PatchConfig
-from fixtures import DatasetFixture
-from fm_adaptation.patching import _augment_patch, _prepare, _source_size, build_index
+from fixtures import DatasetFixture, preprocess
+from fm_adaptation.patching import (
+    _PlaneCache, _augment_patch, _prepare, _source_size, build_index, foreground_statistics, zscore,
+)
 
 
 def _augment(**overrides):
@@ -95,7 +98,7 @@ class PrepareTests(unittest.TestCase):
     def case(self, side=2000):
         image = np.random.default_rng(0).integers(1, 255, (side, side), dtype=np.uint8)
         return SimpleNamespace(
-            case_id="c", shape=image.shape,
+            case_id="c", shape=image.shape, weight_path=None,
             crop=lambda y, x, size: (image[y : y + size, x : x + size],
                                      np.ones((size, size), dtype=np.uint8)),
         )
@@ -121,6 +124,55 @@ class PrepareTests(unittest.TestCase):
         """No margin to be had, so the angle is cut back to what the case supports rather than the
         crop being padded out to the size the rotation would like."""
         self.assertEqual(self.prepare(self.case(side=520), _augment(rotation=180.0)), (512, 512))
+
+
+class WeightMapTests(unittest.TestCase):
+    """The loss weight map, which has to stay registered with the label it weights."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data = DatasetFixture(self.root, "Dataset001_weighted", {"0": "SMI"})
+        self.label = np.zeros((16, 12), dtype=np.uint8)
+        self.label[3:6, 2:9] = 1
+        self.data.add("case", planes={0: 31}, label=self.label)
+        self.data.split(["case"])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def index(self):
+        return build_index(self.root, self.data.name, "Tr", "0", "train", PatchConfig(patch_size=8),
+                           self.root / "cache", weight_maps=True)
+
+    def write_map(self):
+        """255 where the label is set and 51 elsewhere."""
+        (self.data.path / "weight_maps").mkdir()
+        cv2.imwrite(str(self.data.path / "weight_maps" / "case.png"),
+                    np.where(self.label > 0, 255, 51).astype(np.uint8))
+
+    def test_a_case_without_a_map_stops_the_index(self):
+        with self.assertRaises(FileNotFoundError):
+            self.index()
+
+    def test_the_patch_carries_its_weights_scaled_to_one(self):
+        self.write_map()
+        case = self.index()[0]
+        _, label, meta = _prepare(case, 0, 0, PatchConfig(patch_size=8), preprocess, 0)
+        weight = meta["weight"]
+        self.assertEqual(weight.shape, label.shape)
+        self.assertTrue(torch.allclose(weight[label > 0], torch.tensor(1.0)))
+        self.assertTrue(torch.allclose(weight[label == 0], torch.tensor(0.2)))
+
+    def test_the_weights_flip_with_the_label(self):
+        label = np.zeros((16, 16), dtype=np.uint8)
+        label[2:5, 1:4] = 1
+        weight = np.where(label > 0, 255, 51).astype(np.uint8)
+        image = np.dstack([label * 200] * 3)
+        augment = AugmentConfig(hflip=True, vflip=True, flip_p=1.0)
+        _, flipped, weights = _augment_patch(image, label, 16, augment, np.random.default_rng(0), weight)
+        self.assertTrue((flipped != label).any())
+        self.assertTrue(((weights == 255) == (flipped > 0)).all())
 
 
 class ChannelLayoutTests(unittest.TestCase):
@@ -150,6 +202,85 @@ class ChannelLayoutTests(unittest.TestCase):
         self.assertTrue(np.all(channels[..., 0] == 31))
         self.assertFalse(channels[..., 1].any())
         self.assertTrue(np.all(channels[..., 2] == 47))
+
+
+class ZScoreTests(unittest.TestCase):
+    """Patches standardised by their whole image, as the tracer app standardises what it sends."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        rng = np.random.default_rng(0)
+        self.image = rng.integers(0, 255, (64, 48), dtype=np.uint8)
+        self.image[:, :16] = 0
+        data = DatasetFixture(self.root, "Dataset311_z", {"0": "SMI"})
+        data.add("case", planes={0: self.image})
+        data.split(["case"])
+        self.cfg = PatchConfig(patch_size=16, respect_channels=True, normalization="zscore")
+        self.case = build_index(self.root, data.name, "Tr", "0", "train", self.cfg, self.root / "cache")[0]
+
+    def test_statistics_leave_the_zeros_out(self):
+        foreground = self.image[self.image != 0].astype(np.float32)
+        mean, std = foreground_statistics(self.image)
+        self.assertAlmostEqual(mean, float(foreground.mean()), places=4)
+        self.assertAlmostEqual(std, float(foreground.std()), places=4)
+        self.assertAlmostEqual(
+            float(zscore(np.zeros((2, 2), np.uint8), (mean, std))[0, 0]), -mean / std, places=5
+        )
+
+    def test_an_image_with_nothing_to_vary_becomes_zeros(self):
+        for flat in (np.zeros((4, 4), np.uint8), np.full((4, 4), 9, np.uint8)):
+            self.assertIsNone(foreground_statistics(flat))
+            self.assertFalse(zscore(flat, None).any())
+
+    def test_a_patch_is_the_same_window_of_the_standardised_image(self):
+        whole = zscore(self.image, foreground_statistics(self.image))
+        image, _, meta = _prepare(self.case, 8, 24, self.cfg, preprocess, 0)
+        self.assertEqual(tuple(image.shape), (1, 16, 16))
+        self.assertTrue(np.allclose(image[0].numpy(), whole[8:24, 24:40]))
+
+    def test_the_raw_crop_keeps_one_channel_per_stored_plane(self):
+        raw, _ = self.case.crop(8, 24, 16)
+        self.assertEqual(raw.shape, (16, 16, 1))
+        self.assertTrue(np.array_equal(raw[..., 0], self.image[8:24, 24:40]))
+
+    def test_an_unknown_mode_is_refused(self):
+        with self.assertRaises(ValueError):
+            PatchConfig(normalization="minmax")
+
+
+class PlaneCacheTests(unittest.TestCase):
+    """Decoded planes are kept only up to a byte budget; one that was dropped is read again."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.paths = []
+        for value in (10, 20, 30):
+            path = Path(self.directory.name) / f"{value}.png"
+            cv2.imwrite(str(path), np.full((8, 8), value, dtype=np.uint8))
+            self.paths.append(path)
+
+    def test_a_plane_within_budget_is_decoded_once(self):
+        cache = _PlaneCache(budget_bytes=64 * 3)
+        self.assertIs(cache.get(self.paths[0]), cache.get(self.paths[0]))
+
+    def test_the_least_recently_used_plane_is_dropped_past_the_budget(self):
+        cache = _PlaneCache(budget_bytes=64 * 2)
+        first = cache.get(self.paths[0])
+        second = cache.get(self.paths[1])
+        cache.get(self.paths[0])
+        cache.get(self.paths[2])
+        self.assertIs(cache.get(self.paths[0]), first)
+        self.assertIsNot(cache.get(self.paths[1]), second)
+        self.assertLessEqual(cache.held_bytes, 64 * 2)
+
+    def test_a_dropped_plane_reads_back_the_same(self):
+        cache = _PlaneCache(budget_bytes=64)
+        cache.get(self.paths[0])
+        cache.get(self.paths[1])
+        self.assertTrue((cache.get(self.paths[0]) == 10).all())
 
 
 if __name__ == "__main__":

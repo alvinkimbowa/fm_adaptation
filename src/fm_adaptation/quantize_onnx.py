@@ -24,14 +24,27 @@ from onnxruntime.quantization import (
 IMAGE_SUFFIXES = {".png", ".tif", ".tiff"}
 
 
-def centre_patch(path, size):
-    """The middle `size` x `size` of one stored 8-bit plane in 0-1, zero-padded where it is smaller."""
+def standardise(image):
+    """An image z-scored by its non-zero pixels, zeros included; all zero where those do not vary."""
+    image = image.astype(np.float32)
+    foreground = image[image != 0]
+    if foreground.size == 0 or foreground.std() <= 0:
+        return np.zeros_like(image)
+    return (image - foreground.mean()) / foreground.std()
+
+
+def centre_patch(path, size, standardised=False):
+    """The middle `size` x `size` of one stored 8-bit plane, zero-padded where it is smaller.
+
+    In 0-1, or with `standardised` z-scored over the whole plane, whichever the model was exported
+    to take.
+    """
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise FileNotFoundError(path)
-    image = image / 255.0
     if image.ndim == 3:
         image = image[..., 0]
+    image = standardise(image) if standardised else image / 255.0
     patch = np.zeros((size, size), dtype=np.float32)
     height, width = min(size, image.shape[0]), min(size, image.shape[1])
     top, left = (image.shape[0] - height) // 2, (image.shape[1] - width) // 2
@@ -42,26 +55,29 @@ def centre_patch(path, size):
     return patch
 
 
-def model_input(path, size, channels):
+def model_input(path, size, channels, standardised=False):
     planes = [
-        centre_patch(path.with_name(f"{path.stem[:-5]}_{channel:04d}{path.suffix}"), size)
+        centre_patch(path.with_name(f"{path.stem[:-5]}_{channel:04d}{path.suffix}"), size, standardised)
         for channel in range(channels)
     ]
     return np.stack(planes)[None].astype(np.float32)
 
 
 class PatchReader(CalibrationDataReader):
-    def __init__(self, paths, input_name, size, channels):
+    def __init__(self, paths, input_name, size, channels, standardised):
         self._paths = iter(paths)
         self._input_name = input_name
         self._size = size
         self._channels = channels
+        self._standardised = standardised
 
     def get_next(self):
         path = next(self._paths, None)
         if path is None:
             return None
-        return {self._input_name: model_input(path, self._size, self._channels)}
+        return {
+            self._input_name: model_input(path, self._size, self._channels, self._standardised)
+        }
 
 
 def dice(a, b):
@@ -86,7 +102,12 @@ def main():
     parser.add_argument("--report", required=True, help="where to write the JSON report")
     args = parser.parse_args()
 
-    graph_input = onnx.load(args.fp32).graph.input[0]
+    exported = onnx.load(args.fp32)
+    graph_input = exported.graph.input[0]
+    standardised = any(
+        entry.key == "input_normalization" and entry.value == "zscore"
+        for entry in exported.metadata_props
+    )
     _, channels, size, _ = (d.dim_value for d in graph_input.type.tensor_type.shape.dim)
     paths = sorted(
         p for p in Path(args.calib_dir).iterdir()
@@ -103,7 +124,7 @@ def main():
     quantize_static(
         args.fp32,
         args.int8,
-        PatchReader(paths, graph_input.name, size, channels),
+        PatchReader(paths, graph_input.name, size, channels, standardised),
         per_channel=args.per_channel,
         activation_type=QuantType.QUInt8,
         weight_type=QuantType.QInt8,
@@ -129,7 +150,7 @@ def main():
 
     samples = []
     for path in paths:
-        inputs = model_input(path, size, channels)
+        inputs = model_input(path, size, channels, standardised)
         fp32_mask, int8_mask = run(fp32, inputs).argmax(1), run(int8, inputs).argmax(1)
         samples.append({
             "image": path.name,

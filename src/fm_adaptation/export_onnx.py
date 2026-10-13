@@ -6,6 +6,10 @@ channel the model was trained to find it in, and the normalisation, are part of 
 says so in its metadata (`input_normalization: unit_range`), which is how the tracer app knows not to
 standardise the image before handing it over.
 
+A run trained on z-scored patches (`patching.normalization: zscore`) is exported as the bare
+network instead and marked `input_normalization: zscore`: it takes one channel per stored plane,
+each standardised by the mean and deviation of its whole image's non-zero pixels.
+
 Quantising and checking the export is `quantize_onnx.py`, which needs ONNX Runtime and no torch; this
 module needs torch and the model's own dependencies and no ONNX Runtime. `--reference` writes the
 inputs and logits the second stage compares the exported file against.
@@ -26,6 +30,7 @@ from torch import nn
 from .config import ExperimentConfig
 from .data import load_dataset_json, num_classes, stain_planes
 from .models import load_trained_model
+from .patching import foreground_statistics, zscore
 
 IMAGE_SUFFIXES = {".png", ".tif", ".tiff"}
 
@@ -113,14 +118,17 @@ class DeployedModel(nn.Module):
         return self.model((rgb - self.mean) / self.std)
 
 
-def centre_patch(path, size):
-    """The middle `size` x `size` of one stored 8-bit plane in 0-1, zero-padded where it is smaller."""
+def centre_patch(path, size, standardised=False):
+    """The middle `size` x `size` of one stored 8-bit plane, zero-padded where it is smaller.
+
+    In 0-1, or with `standardised` z-scored by the whole plane's non-zero pixels.
+    """
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise FileNotFoundError(path)
-    image = image / 255.0
     if image.ndim == 3:
         image = image[..., 0]
+    image = zscore(image, foreground_statistics(image)) if standardised else image / 255.0
     patch = np.zeros((size, size), dtype=np.float32)
     height, width = min(size, image.shape[0]), min(size, image.shape[1])
     top, left = (image.shape[0] - height) // 2, (image.shape[1] - width) // 2
@@ -131,7 +139,7 @@ def centre_patch(path, size):
     return patch
 
 
-def sample_inputs(image_dir, size, channels, limit):
+def sample_inputs(image_dir, size, channels, limit, standardised=False):
     """Up to `limit` model inputs cut from the images in `image_dir`, with the files they came from."""
     first_planes = sorted(
         p for p in Path(image_dir).iterdir()
@@ -139,7 +147,9 @@ def sample_inputs(image_dir, size, channels, limit):
     )[:limit]
     inputs = [
         np.stack([
-            centre_patch(path.with_name(f"{path.stem[:-5]}_{channel:04d}{path.suffix}"), size)
+            centre_patch(
+                path.with_name(f"{path.stem[:-5]}_{channel:04d}{path.suffix}"), size, standardised
+            )
             for channel in range(channels)
         ])
         for path in first_planes
@@ -148,10 +158,17 @@ def sample_inputs(image_dir, size, channels, limit):
 
 
 def default_name(cfg):
-    """The file stem a run is deployed under: `dinov3-convnext-t-307` for ConvNeXt-T trained on 307."""
+    """The file stem a run is deployed under: `dinov3-convnext-t-307` for ConvNeXt-T trained on 307.
+
+    A run refining another carries both models in its one file and is named apart from the run it
+    refines: `dinov3-convnext-t-307-refine`. The UNet comes in one size and is named without one:
+    `unet-311`.
+    """
     number = re.search(r"\d+", cfg.train_dataset).group(0)
-    variant = re.sub(r"^convnext(?=.)", "convnext-", cfg.variant)
-    return f"{cfg.model_name}-{variant}-{number}"
+    parts = [cfg.model_name, number]
+    if cfg.model_name != "unet":
+        parts.insert(1, re.sub(r"^convnext(?=.)", "convnext-", cfg.variant))
+    return "-".join(parts) + ("-refine" if cfg.refines else "")
 
 
 def main():
@@ -172,10 +189,16 @@ def main():
         raise SystemExit("only patchwise runs have a fixed input size to export at")
     device = torch.device("cpu")
     classes = num_classes(cfg.raw_data_dir / cfg.train_dataset)
-    mixing = channel_mixing(cfg)
     size = cfg.patching.patch_size
-    deployed = DeployedModel(load_trained_model(cfg, args.checkpoint, device, classes), mixing).eval()
-    example = torch.rand(1, mixing.shape[1], size, size)
+    model = load_trained_model(cfg, args.checkpoint, device, classes)
+    if cfg.zscore:
+        channels = cfg.input_channels
+        deployed = model.eval()
+    else:
+        mixing = channel_mixing(cfg)
+        channels = mixing.shape[1]
+        deployed = DeployedModel(model, mixing).eval()
+    example = torch.rand(1, channels, size, size)
     _fix_adaptive_pools(deployed, example)
 
     output = Path(args.output)
@@ -194,13 +217,13 @@ def main():
     )
     exported = onnx.load(str(output))
     entry = exported.metadata_props.add()
-    entry.key, entry.value = "input_normalization", "unit_range"
+    entry.key, entry.value = "input_normalization", "zscore" if cfg.zscore else "unit_range"
     onnx.save(exported, str(output))
     print(f"Saved ONNX model to {output}")
 
     if args.reference:
         inputs, names = sample_inputs(
-            args.reference_dir, size, mixing.shape[1], args.reference_samples
+            args.reference_dir, size, channels, args.reference_samples, cfg.zscore
         )
         with torch.no_grad():
             logits = deployed(torch.from_numpy(inputs)).numpy()

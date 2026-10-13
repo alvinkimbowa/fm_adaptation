@@ -60,6 +60,50 @@ class ConfigTests(unittest.TestCase):
                               "Dataset308"])
             self.assertTrue(all(cfg.patching.respect_channels for cfg in configs))
             self.assertTrue(all(cfg.run_name.endswith("_red_ours") for cfg in configs))
+            self.assertTrue(all(cfg.refines is None for cfg in configs))
+
+        def test_the_unet_config_trains_everything_at_one_rate(self):
+            repo = Path(__file__).resolve().parents[1]
+            cfg = ExperimentConfig.from_yaml(repo / "configs" / "unet_aug_p512_red_sci311.yaml")
+            self.assertEqual((cfg.model_name, cfg.probe_name, cfg.run_name),
+                             ("unet", "unet", "unet_aug_p512_red_ours"))
+            self.assertTrue(cfg.train_encoder)
+            self.assertIsNone(cfg.encoder_learning_rate)
+            self.assertEqual(cfg.train_dataset[:10], "Dataset311")
+
+        def test_weight_mapped_runs_differ_from_the_plain_one_only_in_the_loss(self):
+            repo = Path(__file__).resolve().parents[1]
+            stem = "dinov3_convnextt_upernet_ft_aug_p512_red{}_sci311.yaml"
+            plain, mapped, dice = (ExperimentConfig.from_yaml(repo / "configs" / stem.format(tag))
+                                   for tag in ("", "_wmap", "_wmapdice"))
+            self.assertEqual([(cfg.weight_maps, cfg.weight_maps_dice) for cfg in (plain, mapped, dice)],
+                             [(False, False), (True, False), (True, True)])
+            self.assertEqual(len({cfg.run_dir for cfg in (plain, mapped, dice)}), 3)
+            self.assertEqual({cfg.train_dataset for cfg in (mapped, dice)}, {plain.train_dataset})
+            self.assertEqual({cfg.patching for cfg in (mapped, dice)}, {plain.patching})
+
+        def test_the_zscore_unet_reads_the_stored_channel_alone(self):
+            repo = Path(__file__).resolve().parents[1]
+            plain = ExperimentConfig.from_yaml(repo / "configs" / "unet_aug_p512_red_sci311.yaml")
+            cfg = ExperimentConfig.from_yaml(repo / "configs" / "unet_aug_p512_red_zscore_sci311.yaml")
+            self.assertEqual((plain.zscore, cfg.zscore), (False, True))
+            self.assertEqual(cfg.run_name, "unet_aug_p512_red_zscore_ours")
+            self.assertEqual(plain.input_channels, 3)
+            if (cfg.raw_data_dir / cfg.train_dataset).exists():
+                self.assertEqual(cfg.input_channels, 1)
+
+        def test_a_refining_run_names_a_run_beside_it(self):
+            repo = Path(__file__).resolve().parents[1]
+            first = ExperimentConfig.from_yaml(
+                repo / "configs" / "dinov3_convnextt_upernet_ft_aug_p512_red_sci307.yaml"
+            )
+            cfg = ExperimentConfig.from_yaml(
+                repo / "configs" / "dinov3_convnextt_upernet_ft_aug_p512_red_refine_sci307.yaml"
+            )
+            self.assertEqual((cfg.refines, cfg.refines_checkpoint, cfg.refines_plane),
+                             (first.run_name, "final", 1))
+            self.assertEqual(cfg.refined_run_dir, first.run_dir)
+            self.assertNotEqual(cfg.run_dir, first.run_dir)
 
 if __name__ == "__main__":
     unittest.main()

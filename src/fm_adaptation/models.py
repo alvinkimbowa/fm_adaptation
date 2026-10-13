@@ -1,6 +1,7 @@
 import sys
 import types
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -409,6 +410,101 @@ class UperNetDecoder(nn.Module):
         return F.interpolate(self.head(features), size=output_size, mode="bilinear", align_corners=False)
 
 
+class UNetEncoder(nn.Module):
+    """nnU-Net's residual encoder, trained from scratch: one feature map per stage, from stride 1.
+
+    The first stage runs at the input resolution and each one after it halves that, so a decoder
+    over these skips classifies every pixel from features computed at full resolution. The norm,
+    activation and bias settings are the ones nnU-Net's ResEnc plans carry for the SCI datasets.
+
+    With `zscore` it reads patches the loader has already standardised, one channel per stored
+    channel, and adds no scaling of its own. Without, it reads 8-bit RGB the way `DINOv3Encoder`
+    does.
+    """
+
+    name = "unet"
+    input_size = 512
+    mean = DINOv3Encoder.mean
+    std = DINOv3Encoder.std
+    trainable = True
+    feature_channels = (32, 64, 128, 256, 512)
+    blocks_per_stage = (3, 3, 4, 4, 4)
+
+    def __init__(self, input_channels: int = 3, zscore: bool = False):
+        super().__init__()
+        from dynamic_network_architectures.building_blocks.residual_encoders import ResidualEncoder
+
+        self.zscore = zscore
+        stages = len(self.feature_channels)
+        self.trunk = ResidualEncoder(
+            input_channels=input_channels,
+            n_stages=stages,
+            features_per_stage=list(self.feature_channels),
+            conv_op=nn.Conv2d,
+            kernel_sizes=[[3, 3]] * stages,
+            strides=[[1, 1]] + [[2, 2]] * (stages - 1),
+            n_blocks_per_stage=list(self.blocks_per_stage),
+            conv_bias=True,
+            norm_op=nn.InstanceNorm2d,
+            norm_op_kwargs={"eps": 1e-5, "affine": True},
+            nonlin=nn.LeakyReLU,
+            nonlin_kwargs={"inplace": True},
+            return_skips=True,
+        )
+
+    def preprocess(self, image: np.ndarray, mask: np.ndarray):
+        if not self.zscore:
+            return DINOv3Encoder.preprocess(self, image, mask)
+        height, width = mask.shape
+        if max(height, width) > self.input_size:
+            raise ValueError(f"a {height}x{width} patch does not fit the {self.input_size} input")
+        top, left = (self.input_size - height) // 2, (self.input_size - width) // 2
+        bottom, right = self.input_size - height - top, self.input_size - width - left
+        image = np.pad(image, ((top, bottom), (left, right), (0, 0)))
+        mask = np.pad(mask.astype(np.int64), ((top, bottom), (left, right)), constant_values=-1)
+        geometry = {
+            "original_height": height,
+            "original_width": width,
+            "resized_height": height,
+            "resized_width": width,
+            "pad_top": top,
+            "pad_left": left,
+        }
+        return (
+            torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1))).float(),
+            torch.from_numpy(mask),
+            geometry,
+        )
+
+    def forward(self, images):
+        return self.trunk(images)
+
+
+class UNetDecoder(nn.Module):
+    """nnU-Net's decoder over `UNetEncoder`'s skips, ending in logits at the input resolution.
+
+    Each stage upsamples by a transposed convolution, concatenates the encoder stage of the same
+    resolution and convolves once. Only the last stage's output is used: there is no deep
+    supervision, since the loss is computed on a single prediction.
+    """
+
+    def __init__(self, encoder: UNetEncoder, num_classes: int):
+        super().__init__()
+        from dynamic_network_architectures.building_blocks.unet_decoder import (
+            UNetDecoder as ResidualUNetDecoder,
+        )
+
+        self.decoder = ResidualUNetDecoder(
+            encoder.trunk, num_classes, n_conv_per_stage=1, deep_supervision=False
+        )
+        # The library keeps the encoder it was sized against as a submodule, which would store the
+        # whole trunk a second time under this decoder's weights. Its forward never reads it.
+        del self.decoder.encoder
+
+    def forward(self, features, output_size):
+        return self.decoder(features)
+
+
 def _trainable_sam3_mlp_forward(mlp, x):
     """Differentiable equivalent of SAM3's inference-only fused PE MLP."""
     x = mlp.fc1(x)
@@ -429,6 +525,39 @@ class SegmentationModel(nn.Module):
         return self.probe(self.encoder(images), images.shape[-2:])
 
 
+class RefinementModel(nn.Module):
+    """A segmentation model that corrects the output of another, frozen one.
+
+    The first model's foreground probability is written into one colour plane of the image the
+    refiner reads, a plane the dataset's stains leave black. `encoder` and `probe` are the refiner's
+    own, so this trains, saves and predicts as a `SegmentationModel` does, and the first model's
+    weights stay in the run that trained them.
+    """
+
+    def __init__(self, first, encoder, probe, plane: int):
+        super().__init__()
+        self.first = first.requires_grad_(False).eval()
+        self.encoder = encoder
+        self.probe = probe
+        self.plane = plane
+        self.plane_mean = encoder.mean[plane]
+        self.plane_std = encoder.std[plane]
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.first.eval()  # frozen, and its batch norm and stochastic depth must not see training
+        return self
+
+    def forward(self, images):
+        with torch.no_grad():
+            foreground = 1.0 - self.first(images).float().softmax(1)[:, :1]
+        # The image arrives standardised, so the probability is put on the same scale as a plane
+        # holding it as a 0-1 intensity would be.
+        guide = ((foreground - self.plane_mean) / self.plane_std).to(images.dtype)
+        images = torch.cat([images[:, : self.plane], guide, images[:, self.plane + 1 :]], dim=1)
+        return self.probe(self.encoder(images), images.shape[-2:])
+
+
 def build_model(
     model_name: str,
     probe_name: str,
@@ -437,7 +566,23 @@ def build_model(
     train_encoder: bool = False,
     injector: bool = False,
     variant: str = DEFAULT_DINOV3_VARIANT,
+    refines=None,
+    refines_plane: int = 1,
+    input_channels: int = 3,
+    zscore: bool = False,
 ):
+    """`refines` is a trained model for this one to correct; see `RefinementModel`.
+
+    `zscore` and `input_channels` describe patches the loader standardises itself, which only the
+    UNet reads; see `UNetEncoder`.
+    """
+    if "unet" in (model_name, probe_name):
+        return _build_unet(
+            model_name, probe_name, classes, checkpoint, train_encoder, injector, variant,
+            refines, refines_plane, input_channels, zscore,
+        )
+    if zscore:
+        raise ValueError(f"patching.normalization zscore is only read by unet, not {model_name}")
     encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe, "upernet": UperNetDecoder}
     if model_name not in encoders:
@@ -462,7 +607,49 @@ def build_model(
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
     probe = probes[probe_name](encoder.feature_channels, classes)
+    if refines is not None:
+        return RefinementModel(refines, encoder, probe, refines_plane)
     return SegmentationModel(encoder, probe)
+
+
+def _build_unet(
+    model_name, probe_name, classes, checkpoint, train_encoder, injector, variant, refines,
+    refines_plane, input_channels, zscore,
+):
+    """The from-scratch UNet, whose encoder and decoder only fit each other."""
+    if model_name != probe_name:
+        raise ValueError("model.name unet and model.probe unet only go together")
+    # It has no pretrained weights to load and none to keep frozen, so the settings that say how a
+    # foundation model is brought in have nothing to act on.
+    if checkpoint is not None or injector or variant != DEFAULT_DINOV3_VARIANT:
+        raise ValueError("model.checkpoint, model.injector and model.variant do not apply to unet")
+    if not train_encoder:
+        raise ValueError("unet trains from scratch and needs model.train_encoder: true")
+    if zscore and refines is not None:
+        # The refined output is written into an RGB plane, which a standardised patch does not have.
+        raise ValueError("refines is not supported with patching.normalization zscore")
+    encoder = UNetEncoder(input_channels, zscore)
+    probe = UNetDecoder(encoder, classes)
+    if refines is not None:
+        return RefinementModel(refines, encoder, probe, refines_plane)
+    return SegmentationModel(encoder, probe)
+
+
+def load_first_stage(cfg, classes: int):
+    """The trained model `cfg.refines` names, built from that run's own config, or None."""
+    if not cfg.refines:
+        return None
+    from .config import ExperimentConfig
+
+    run_dir = cfg.refined_run_dir
+    name = "final" if cfg.fold == "all" else cfg.refines_checkpoint
+    if not (run_dir / f"{name}.pt").exists():
+        raise SystemExit(f"refines given but there is no {run_dir / f'{name}.pt'}")
+    first = replace(
+        ExperimentConfig.from_yaml(run_dir / "config.yaml"),
+        results_dir=cfg.results_dir, fold=cfg.fold,
+    )
+    return load_trained_model(first, cfg.refines_checkpoint, "cpu", classes)
 
 
 def load_trained_model(cfg, checkpoint: str, device, classes: int):
@@ -470,6 +657,8 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
     model = build_model(
         cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
         train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
+        refines=load_first_stage(cfg, classes), refines_plane=cfg.refines_plane,
+        input_channels=cfg.input_channels, zscore=cfg.zscore,
     )
     name = "final" if cfg.fold == "all" else checkpoint
     path = cfg.run_dir / f"{name}.pt"

@@ -39,6 +39,7 @@ datasets=(          # what a run was trained on
     Dataset301_neurite_yvonne_b2_smi
     Dataset302_neurite_yvonne_b2_smi_1px
     Dataset304_neurite_yvonne_b2_smi_1px_scaleaug
+    Dataset307_neurite_yvonne_in_vitro_sim_smi
     Dataset070_Clarius_L15
     Dataset071_Sonix-Touch
     Dataset072_GE_LQP9
@@ -65,6 +66,8 @@ experiments=(       # the adaptation, i.e. the run name
     convnextt_upernet_ft_aug_p512_red_distw10_ours
     convnextt_upernet_ft_aug_p512_red_skelrec_distw10_ours
     convnextt_upernet_ft_aug_p512_red_ours
+    convnextt_upernet_ft_aug_p512_red_wmap_ours
+    convnextt_upernet_ft_aug_p512_red_wmapdice_ours
     convnextb_upernet_aug_p512_ours
     convnextt_upernet_aug_p512_ours
     # _ours                        # every run whose name ends in `ours`
@@ -110,6 +113,8 @@ tested_on=(
     Dataset203_neurites_yvonne_smi_2px_scaleaug
     Dataset300_neurite_yvonne_smi
     Dataset301_neurite_yvonne_b2_smi
+    Dataset307_neurite_yvonne_in_vitro_sim_smi
+    Dataset309_neurite_yvonne_in_vitro_smi_10slices
     Dataset070_Clarius_L15
     Dataset071_Sonix-Touch
     Dataset072_GE_LQP9

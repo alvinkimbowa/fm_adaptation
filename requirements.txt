@@ -12,6 +12,8 @@ matplotlib
 pandas
 monai
 Pillow
+# nnU-Net's network building blocks, which the from-scratch UNet is assembled from.
+dynamic-network-architectures==0.4.2
 
 # Development only.
 pytest

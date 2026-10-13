@@ -29,26 +29,41 @@ class DiceCrossEntropyLoss(nn.Module):
     """Equal-weight cross entropy and foreground soft Dice loss.
 
     `distance_tau` above zero weights the cross entropy by `distance_weights`; the Dice term stays a
-    plain overlap either way, so it remains comparable between a weighted run and an unweighted one.
+    plain overlap, so it remains comparable between a weighted run and an unweighted one.
+
+    `weights`, a per-pixel map the caller reads from disk, turns the cross entropy into a mean
+    weighted by it. With `weight_dice` it also scales every pixel's share of the soft Dice sums; a
+    map that is 1 on the annotation leaves the overlap and the annotated mass as they were, so what
+    changes is the cost of a false positive, which becomes the weight where it lands.
     """
 
-    def __init__(self, distance_tau: float = 0.0, distance_floor: float = 0.1):
+    def __init__(self, distance_tau: float = 0.0, distance_floor: float = 0.1,
+                 weight_dice: bool = False):
         super().__init__()
         self.distance_tau = distance_tau
         self.distance_floor = distance_floor
+        self.weight_dice = weight_dice
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor,
+                weights: torch.Tensor | None = None) -> torch.Tensor:
         valid = target != -1
-        if self.distance_tau:
-            weights = distance_weights(target, self.distance_tau, self.distance_floor)
+        if weights is not None:
+            scored = weights * valid
             per_pixel = F.cross_entropy(logits, target, ignore_index=-1, reduction="none")
-            ce = (per_pixel * weights * valid).sum() / valid.sum().clamp(min=1)
+            ce = (per_pixel * scored).sum() / scored.sum().clamp(min=1e-5)
+        elif self.distance_tau:
+            distance = distance_weights(target, self.distance_tau, self.distance_floor)
+            per_pixel = F.cross_entropy(logits, target, ignore_index=-1, reduction="none")
+            ce = (per_pixel * distance * valid).sum() / valid.sum().clamp(min=1)
         else:
             ce = F.cross_entropy(logits, target, ignore_index=-1)
         probabilities = logits.softmax(dim=1)
         dice_target = torch.where(valid, target, 0)
         one_hot = F.one_hot(dice_target, logits.shape[1]).permute(0, 3, 1, 2).float()
         valid = valid[:, None]
+        if weights is not None and self.weight_dice:
+            valid = valid * weights[:, None]
+            one_hot = one_hot * weights[:, None]
         probabilities = probabilities[:, 1:] * valid
         one_hot = one_hot[:, 1:]
         reduce_dims = (0, 2, 3)
@@ -91,7 +106,8 @@ class SkeletonRecallLoss(nn.Module):
         super().__init__()
         self.tube = tube
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, target: torch.Tensor,
+                weights: torch.Tensor | None = None) -> torch.Tensor:
         valid = target != -1
         skeleton = tubed_skeleton(target, self.tube)
         one_hot = F.one_hot(skeleton, logits.shape[1]).permute(0, 3, 1, 2).float()[:, 1:]
@@ -109,14 +125,15 @@ class DiceCrossEntropySkeletonRecallLoss(nn.Module):
     """
 
     def __init__(self, weight: float, tube: bool = True, distance_tau: float = 0.0,
-                 distance_floor: float = 0.1):
+                 distance_floor: float = 0.1, weight_dice: bool = False):
         super().__init__()
         self.weight = weight
-        self.generic = DiceCrossEntropyLoss(distance_tau, distance_floor)
+        self.generic = DiceCrossEntropyLoss(distance_tau, distance_floor, weight_dice)
         self.skeleton = SkeletonRecallLoss(tube)
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return self.generic(logits, target) + self.weight * self.skeleton(logits, target)
+    def forward(self, logits: torch.Tensor, target: torch.Tensor,
+                weights: torch.Tensor | None = None) -> torch.Tensor:
+        return self.generic(logits, target, weights) + self.weight * self.skeleton(logits, target)
 
 
 def build_loss(cfg) -> nn.Module:
@@ -124,9 +141,10 @@ def build_loss(cfg) -> nn.Module:
     if cfg.skeleton_recall_weight:
         return DiceCrossEntropySkeletonRecallLoss(
             cfg.skeleton_recall_weight, cfg.skeleton_tube,
-            cfg.distance_weight_tau, cfg.distance_weight_floor,
+            cfg.distance_weight_tau, cfg.distance_weight_floor, cfg.weight_maps_dice,
         )
-    return DiceCrossEntropyLoss(cfg.distance_weight_tau, cfg.distance_weight_floor)
+    return DiceCrossEntropyLoss(cfg.distance_weight_tau, cfg.distance_weight_floor,
+                                cfg.weight_maps_dice)
 
 
 def mean_foreground_dice(logits: torch.Tensor, target: torch.Tensor) -> float:
