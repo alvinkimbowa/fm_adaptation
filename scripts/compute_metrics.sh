@@ -69,6 +69,7 @@ experiments=(       # the adaptation, i.e. the run name
     convnextt_upernet_ft_aug_p512_red_wmap_ours
     convnextt_upernet_ft_aug_p512_red_wmapdice_ours
     convnextt_upernet_ft_aug_p512_red_s3_wmapdice_ours
+    unet_aug_p512_red_s3_wmapdice_ours
     convnextb_upernet_aug_p512_ours
     convnextt_upernet_aug_p512_ours
     # _ours                        # every run whose name ends in `ours`

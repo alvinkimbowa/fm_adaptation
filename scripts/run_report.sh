@@ -140,6 +140,7 @@ configs=(
     convnextt_upernet_ft_aug_p512_red_wmap_ours
     convnextt_upernet_ft_aug_p512_red_wmapdice_ours
     convnextt_upernet_ft_aug_p512_red_s3_wmapdice_ours
+    unet_aug_p512_red_s3_wmapdice_ours
 )
 
 # One fold gives that fold's row; several are pooled into a single row, labelled with the folds each
