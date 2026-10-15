@@ -1,0 +1,52 @@
+data:
+  raw_data_dir: ../../../GAA/spinal_cord_injury/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset311_neurite_yvonne_in_vitro_sim_smi_slices
+  test_datasets:
+    - Dataset311_neurite_yvonne_in_vitro_sim_smi_slices
+  test_split: all
+  fold: 0
+  augment:
+    hflip: true
+    vflip: true
+    rotation: 180
+    flip_p: 0.5
+
+model:
+  name: dinov3
+  probe: upernet
+  variant: convnextt
+  injector: false
+  train_encoder: true
+  full_resolution: true
+  run_name: convnextt_upernet_fullres_ft_aug_p512_red_s3_wmapdice_ours
+  checkpoint: null
+
+training:
+  epochs: 100
+  min_epochs: 20
+  early_stopping_patience: 12
+  early_stopping_min_delta: 0.001
+  eval_every: 2280
+  batch_size: 2
+  encoder_batch_size: 4
+  num_workers: 8
+  learning_rate: 0.001
+  weight_decay: 0.01
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_maps: true
+  weight_maps_dice: true
+  weight_maps_from_labels: true
+  seed: 0
+  device: cuda
+
+patching:
+  enabled: true
+  patch_size: 512
+  patches_per_case: 16
+  min_roi_fraction: 0.05
+  overlap: 0.5
+  respect_channels: true
+  slab_slices: 3
+  val_fraction: 0.1

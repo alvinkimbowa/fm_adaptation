@@ -119,6 +119,8 @@ class ExperimentConfig:
     weight_maps_from_labels: bool = False
     weight_map_width: float = 5.0
     weight_map_floor: float = 0.1
+    full_resolution: bool = False
+    eval_every: int | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -178,6 +180,8 @@ class ExperimentConfig:
             injector=bool(model.get("injector", False)),
             # Unfreeze the foundation-model trunk and train it along with the adapter and the head.
             train_encoder=bool(model.get("train_encoder", False)),
+            # UperNet's logits come out at stride 4; this adds two learned stages up to stride 1.
+            full_resolution=bool(model.get("full_resolution", False)),
             # Start from another run's weights instead of a fresh head, the way `LP + FT` starts from
             # its own probe: the run name to seed from, within the same model, dataset and fold.
             init_from=model.get("init_from"),
@@ -213,6 +217,11 @@ class ExperimentConfig:
             # Exponent of the poly decay; 1.0 is a straight line to zero.
             lr_power=float(training.get("lr_power", 1.0)),
             accumulation_steps=int(training.get("accumulation_steps", 1)),
+            # Optimiser steps between validations; unset validates once per epoch. Epoch-valued
+            # settings (`min_epochs`, `early_stopping_patience`) still count epochs of steps.
+            eval_every=(
+                int(training["eval_every"]) if training.get("eval_every") is not None else None
+            ),
             weight_decay=float(training.get("weight_decay", 0.0)),
             skeleton_recall_weight=float(training.get("skeleton_recall_weight", 0.0)),
             skeleton_tube=bool(training.get("skeleton_tube", True)),

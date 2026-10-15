@@ -1,5 +1,6 @@
 import argparse
 import csv
+import itertools
 import random
 import shutil
 from contextlib import nullcontext
@@ -218,15 +219,28 @@ def _resume(run_dir, model, optimizer, scheduler=None):
     return state
 
 
-def _truncate_history(path, last_epoch):
-    """Drop any rows past the epoch we are resuming from, so the file matches the checkpoint."""
+def _truncate_history(path, last_step, steps_per_epoch):
+    """Drop any rows past the step we are resuming from, so the file matches the checkpoint.
+
+    Returns the file's header. One written before validation was counted in steps has no `step`
+    column and an epoch in whole numbers, so its rows are placed by that instead.
+    """
     if not path.exists():
-        return
+        return None
     with open(path, newline="") as f:
         rows = list(csv.reader(f))
-    header, body = rows[0], [r for r in rows[1:] if r and int(float(r[0])) <= last_epoch]
+    header = rows[0]
+    column = header.index("step") if "step" in header else None
+
+    def step_of(row):
+        if column is not None:
+            return int(float(row[column]))
+        return round(float(row[0]) * steps_per_epoch)
+
+    body = [r for r in rows[1:] if r and step_of(r) <= last_step]
     with open(path, "w", newline="") as f:
         csv.writer(f).writerows([header, *body])
+    return header
 
 
 def _layer_id(name: str, blocks: int) -> int:
@@ -316,36 +330,86 @@ def _pixel_weights(metadata, device):
     return torch.stack([item["weight"] for item in metadata]).to(device)
 
 
-def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward=None, accumulation_steps=1,
-               scheduler=None):
-    training = optimizer is not None
-    forward = forward or (lambda m, x, y: m(x, y.shape[-2:]))
+def _set_mode(module, training):
     module.train(training)
     if getattr(module, "encoder", None) is not None and not module.encoder.trainable:
         # The trunk carries stochastic depth; a frozen encoder must never leave eval mode.
         module.encoder.eval()
-    losses, dices = [], []
+
+
+def _loss_and_logits(module, forward, batch, loss_fn, device):
+    images, masks, metadata = batch
+    images, masks = images.to(device), masks.to(device)
+    weights = _pixel_weights(metadata, device)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
+    with amp:
+        logits = forward(module, images, masks)
+        loss = loss_fn(logits, masks) if weights is None else loss_fn(logits, masks, weights)
+    return loss, logits, masks
+
+
+def _default_forward(forward):
+    return forward or (lambda m, x, y: m(x, y.shape[-2:]))
+
+
+def _run_epoch(module, loader, loss_fn, device, desc="", forward=None):
+    """The mean loss and dice over one pass of `loader`, without training."""
+    forward = _default_forward(forward)
+    _set_mode(module, False)
+    losses, dices = [], []
     progress = tqdm(loader, desc=desc, leave=False)
-    if training:
-        optimizer.zero_grad(set_to_none=True)
-    for step, (images, masks, metadata) in enumerate(progress, start=1):
-        images, masks = images.to(device), masks.to(device)
-        weights = _pixel_weights(metadata, device)
-        with amp:
-            logits = forward(module, images, masks)
-            loss = loss_fn(logits, masks) if weights is None else loss_fn(logits, masks, weights)
-        if training:
-            # Accumulation keeps the effective batch where the memory does not allow the real one.
-            (loss / accumulation_steps).backward()
-            if step % accumulation_steps == 0 or step == len(loader):
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                if scheduler is not None:
-                    scheduler.step()
+    for batch in progress:
+        loss, logits, masks = _loss_and_logits(module, forward, batch, loss_fn, device)
         losses.append(loss.item())
         dices.append(mean_foreground_dice(logits.detach(), masks))
         progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
+    return float(np.mean(losses)), float(np.nanmean(dices))
+
+
+def _training_batches(loader, start_step, accumulation_steps):
+    """Training batches from optimiser step `start_step` on, epoch after epoch, each as
+    `(index within its epoch, batch)`.
+
+    A run resumed part-way through an epoch starts a fresh pass of the loader and takes only as
+    many batches as that epoch had left, so every epoch still holds the same number of steps.
+    """
+    steps_per_epoch = -(-len(loader) // accumulation_steps)
+    skip = (start_step % steps_per_epoch) * accumulation_steps
+    while True:
+        yield from enumerate(itertools.islice(loader, len(loader) - skip), start=skip + 1)
+        skip = 0
+
+
+def _train_steps(module, batches, steps, epoch_length, loss_fn, device, optimizer, desc="", forward=None,
+                 accumulation_steps=1, scheduler=None):
+    """Take `steps` optimiser steps from `batches`; the mean training loss and dice over them.
+
+    `epoch_length` is the loader's length: an epoch's last batch always closes a step, whether or not
+    it completes an accumulation.
+    """
+    forward = _default_forward(forward)
+    _set_mode(module, True)
+    losses, dices = [], []
+    taken = 0
+    progress = tqdm(total=steps, desc=desc, leave=False)
+    optimizer.zero_grad(set_to_none=True)
+    for index, batch in batches:
+        loss, logits, masks = _loss_and_logits(module, forward, batch, loss_fn, device)
+        # Accumulation keeps the effective batch where the memory does not allow the real one.
+        (loss / accumulation_steps).backward()
+        losses.append(loss.item())
+        dices.append(mean_foreground_dice(logits.detach(), masks))
+        if index % accumulation_steps == 0 or index == epoch_length:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            if scheduler is not None:
+                scheduler.step()
+            taken += 1
+            progress.update()
+            progress.set_postfix(loss=f"{np.mean(losses):.4f}", dice=f"{np.nanmean(dices):.4f}")
+            if taken == steps:
+                break
+    progress.close()
     return float(np.mean(losses)), float(np.nanmean(dices))
 
 
@@ -382,6 +446,7 @@ def main():
         refines_plane=cfg.refines_plane,
         input_channels=cfg.input_channels,
         zscore=cfg.zscore,
+        full_resolution=cfg.full_resolution,
     )
     if cfg.init_from and not args.resume:
         # A resume restores this run's own state; seeding on top of it would throw the run away.
@@ -391,6 +456,8 @@ def main():
     encoder_trains = any(p.requires_grad for p in model.encoder.parameters())
     _validate_data_mode(cfg, encoder_trains)
     caches_features = cfg.patching is None and not encoder_trains
+    if caches_features and cfg.full_resolution:
+        raise ValueError("model.full_resolution reads the image, which cached features leave behind")
     if not caches_features:
         # Nothing stable to cache -- patches are cut fresh every epoch, and a training adapter changes
         # the features it produces -- so the whole model is what gets stepped through.
@@ -435,80 +502,105 @@ def main():
     # Cached features leave no image to draw a prediction on, so only runs that step the whole model
     # get the sample figures.
     samples = [] if caches_features or val_loader is None else pick_samples(val_loader.dataset)
+    if cfg.eval_every is not None and cfg.eval_every < 1:
+        raise ValueError("training.eval_every must be at least 1")
+    total_steps = cfg.epochs * steps_per_epoch
+    eval_every = cfg.eval_every or steps_per_epoch
+    min_steps = cfg.min_epochs * steps_per_epoch
+    patience_steps = cfg.early_stopping_patience * steps_per_epoch
+    print(
+        f"steps_per_epoch={steps_per_epoch} total_steps={total_steps} eval_every={eval_every} "
+        f"min_steps={min_steps} patience_steps={patience_steps}"
+    )
     best_dice = -1.0
     stopping_reference_dice = -1.0
-    epochs_without_improvement = 0
-    start_epoch = 1
+    stopping_reference_step = 0
+    step = 0
+    header = None
     if args.resume:
         resumed = _resume(cfg.run_dir, model, optimizer, scheduler)
-        start_epoch = resumed["epoch"] + 1
+        # A checkpoint from before validation was counted in steps was written at an epoch's end.
+        step = resumed.get("step", resumed["epoch"] * steps_per_epoch)
         best_dice = resumed["best_dice"]
         stopping_reference_dice = resumed["stopping_reference_dice"]
-        epochs_without_improvement = resumed["epochs_without_improvement"]
-        _truncate_history(history_path, resumed["epoch"])
-        print(f"resumed from epoch {resumed['epoch']} (best_val_dice={best_dice:.4f})")
-    with open(history_path, "a" if start_epoch > 1 else "w", newline="") as history_file:
+        stopping_reference_step = resumed.get(
+            "stopping_reference_step",
+            step - resumed.get("epochs_without_improvement", 0) * steps_per_epoch,
+        )
+        header = _truncate_history(history_path, step, steps_per_epoch)
+        print(f"resumed from step {step} (best_val_dice={best_dice:.4f})")
+    columns = header or ["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr", "step"]
+    batches = _training_batches(train_loader, step, cfg.accumulation_steps)
+    first_evaluation = True
+    with open(history_path, "a" if header else "w", newline="") as history_file:
         writer = csv.writer(history_file)
-        if start_epoch == 1:
-            writer.writerow(["epoch", "train_loss", "train_dice", "val_loss", "val_dice", "lr"])
-        for epoch in range(start_epoch, cfg.epochs + 1):
-            # The head's rate, which is the last group `_param_groups` appends, as this epoch starts.
+        if not header:
+            writer.writerow(columns)
+        while step < total_steps:
+            # The head's rate, which is the last group `_param_groups` appends, as this stretch starts.
             # Under a schedule this is the only place the decay is visible, and a schedule you cannot
             # see is one you cannot debug.
             learning_rate = optimizer.param_groups[-1]["lr"]
-            train_loss, train_dice = _run_epoch(
+            steps = min(eval_every, total_steps - step)
+            epoch_label = f"epoch {step // steps_per_epoch + 1}/{cfg.epochs}"
+            train_loss, train_dice = _train_steps(
                 module,
-                train_loader,
+                batches,
+                steps,
+                len(train_loader),
                 loss_fn,
                 device,
                 optimizer,
-                desc=f"epoch {epoch}/{cfg.epochs} train",
+                desc=f"{epoch_label} train",
                 forward=forward,
                 accumulation_steps=cfg.accumulation_steps,
                 scheduler=scheduler,
             )
+            previous_step, step = step, step + steps
+            epoch = step / steps_per_epoch
             if val_loader is None:
                 val_loss, val_dice = float("nan"), float("nan")
             else:
                 with torch.no_grad():
                     val_loss, val_dice = _run_epoch(
-                        module,
-                        val_loader,
-                        loss_fn,
-                        device,
-                        desc=f"epoch {epoch}/{cfg.epochs} val",
-                        forward=forward,
+                        module, val_loader, loss_fn, device, desc=f"{epoch_label} val", forward=forward
                     )
-            writer.writerow([epoch, train_loss, train_dice, val_loss, val_dice, learning_rate])
+            row = {
+                "epoch": round(epoch, 4), "train_loss": train_loss, "train_dice": train_dice,
+                "val_loss": val_loss, "val_dice": val_dice, "lr": learning_rate, "step": step,
+            }
+            writer.writerow([row[column] for column in columns])
             history_file.flush()
             try:
                 render_run(cfg.run_dir)
             except Exception as error:  # a plot must never take a training run down with it
                 print(f"skipped history plot: {error}")
-            if samples and (epoch == 1 or epoch % SAMPLE_EVERY == 0):
+            whole_epochs = step // steps_per_epoch
+            if samples and (
+                first_evaluation
+                or whole_epochs // SAMPLE_EVERY > (previous_step // steps_per_epoch) // SAMPLE_EVERY
+            ):
                 try:
                     render_samples(
-                        module, samples, device, cfg.run_dir / "samples" / f"epoch_{epoch:03d}.png",
-                        title=f"epoch {epoch}  val_dice={val_dice:.4f}", forward=forward,
+                        module, samples, device, cfg.run_dir / "samples" / f"epoch_{whole_epochs:03d}.png",
+                        title=f"epoch {epoch:.2f}  val_dice={val_dice:.4f}", forward=forward,
                     )
                 except Exception as error:
                     print(f"skipped sample figure: {error}")
+            first_evaluation = False
             print(
-                f"epoch={epoch} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
+                f"step={step} epoch={epoch:.2f} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
                 f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} lr={learning_rate:.3g}"
             )
             # The bookkeeping happens before the save so a resumed run picks up the counters as they
-            # stood at the end of this epoch, not as they were before it.
+            # stood at this validation, not as they were before it.
             improved = val_loader is not None and val_dice > best_dice
             if improved:
                 best_dice = val_dice
-            if val_loader is not None:
-                if val_dice > stopping_reference_dice + cfg.early_stopping_min_delta:
-                    stopping_reference_dice = val_dice
-                    epochs_without_improvement = 0
-                else:
-                    epochs_without_improvement += 1
-            weights = {"probe": probe.state_dict(), "epoch": epoch, "val_dice": val_dice}
+            if val_loader is not None and val_dice > stopping_reference_dice + cfg.early_stopping_min_delta:
+                stopping_reference_dice = val_dice
+                stopping_reference_step = step
+            weights = {"probe": probe.state_dict(), "epoch": epoch, "step": step, "val_dice": val_dice}
             if cfg.train_encoder:
                 # A trunk that trains is no longer recoverable from its pretrained checkpoint, so it is
                 # stored whole under the key the finetuning runs already use.
@@ -531,7 +623,7 @@ def main():
                     "scheduler": None if scheduler is None else scheduler.state_dict(),
                     "best_dice": best_dice,
                     "stopping_reference_dice": stopping_reference_dice,
-                    "epochs_without_improvement": epochs_without_improvement,
+                    "stopping_reference_step": stopping_reference_step,
                     "rng": _rng_state(),
                 },
                 cfg.run_dir / "last.pt",
@@ -540,11 +632,11 @@ def main():
                 torch.save(weights, cfg.run_dir / "best.pt")
             if (
                 val_loader is not None
-                and epoch >= cfg.min_epochs
+                and step >= min_steps
                 and cfg.early_stopping_patience > 0
-                and epochs_without_improvement >= cfg.early_stopping_patience
+                and step - stopping_reference_step >= patience_steps
             ):
-                print(f"early_stopping epoch={epoch} best_val_dice={best_dice:.4f}")
+                print(f"early_stopping step={step} epoch={epoch:.2f} best_val_dice={best_dice:.4f}")
                 break
 
     # Training finished: `final.pt` keeps the last epoch's weights for inference, and `last.pt` goes --

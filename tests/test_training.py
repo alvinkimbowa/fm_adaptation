@@ -9,7 +9,13 @@ import torch
 
 from fm_adaptation.models import RefinementModel, SegmentationModel, build_model
 from fm_adaptation.progress_samples import pick_samples, render_samples
-from fm_adaptation.training import _balanced_sampler, _validate_data_mode
+from fm_adaptation.training import (
+    _balanced_sampler,
+    _train_steps,
+    _training_batches,
+    _truncate_history,
+    _validate_data_mode,
+)
 from fixtures import DatasetFixture
 
 
@@ -148,6 +154,57 @@ class _StubProbe(torch.nn.Module):
         return self.classifier(features)
 
 
+class StepwiseTrainingTests(unittest.TestCase):
+        """Training counted in optimiser steps, validated every so many of them."""
+
+        def test_batches_run_on_across_epochs_and_a_resume_finishes_its_epoch(self):
+            loader = list(range(5))
+            batches = _training_batches(loader, 0, 1)
+            self.assertEqual([next(batches) for _ in range(7)],
+                             [(1, 0), (2, 1), (3, 2), (4, 3), (5, 4), (1, 0), (2, 1)])
+            # Two batches to a step leaves an epoch of 5 three steps long, its last batch alone. A
+            # resume after two steps draws a fresh pass and takes the three batches left.
+            resumed = _training_batches(loader, 4, 2)
+            self.assertEqual([next(resumed) for _ in range(3)], [(3, 0), (4, 1), (5, 2)])
+            self.assertEqual(next(resumed), (1, 0))
+
+        def test_a_stretch_takes_its_steps_and_the_next_carries_on(self):
+            torch.manual_seed(0)
+            model = SegmentationModel(_StubEncoder(), _StubProbe())
+            item = (torch.rand(1, 3, 4, 4), torch.zeros(1, 4, 4, dtype=torch.long), [{}])
+            loader = [item] * 5
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+            calls = []
+            original = optimizer.step
+            optimizer.step = lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+            loss_fn = lambda logits, masks: torch.nn.functional.cross_entropy(logits, masks)  # noqa: E731
+            batches = _training_batches(loader, 0, 2)
+            device = torch.device("cpu")
+            forward = lambda m, images, masks: m(images)  # noqa: E731
+            run = lambda: _train_steps(  # noqa: E731
+                model, batches, 2, len(loader), loss_fn, device, optimizer, forward=forward,
+                accumulation_steps=2,
+            )
+            run()
+            self.assertEqual(len(calls), 2)
+            # Steps three and four: the epoch's lone fifth batch, then two from the next epoch.
+            run()
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(next(batches)[0], 3)
+
+        def test_history_is_cut_back_to_the_resumed_step(self):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "history.csv"
+                path.write_text("epoch,train_loss,lr,step\n0.5,1,1,10\n1.0,1,1,20\n1.5,1,1,30\n")
+                header = _truncate_history(path, 20, 20)
+                self.assertEqual(header, ["epoch", "train_loss", "lr", "step"])
+                self.assertEqual(path.read_text().splitlines()[-1], "1.0,1,1,20")
+                # Written once an epoch, before the step column: placed by its epoch.
+                path.write_text("epoch,train_loss\n1,1\n2,1\n3,1\n")
+                _truncate_history(path, 40, 20)
+                self.assertEqual(path.read_text().splitlines()[-1], "2,1")
+
+
 class RefinementModelTests(unittest.TestCase):
         """A model trained to correct the output of another, frozen one."""
 
@@ -170,6 +227,54 @@ class RefinementModelTests(unittest.TestCase):
             logits.sum().backward()
             self.assertIsNotNone(model.probe.classifier.weight.grad)
             self.assertIsNone(first.probe.classifier.weight.grad)
+
+class FullResolutionUperNetTests(unittest.TestCase):
+        """UperNet extended from its stride-4 logits to stride 1 by stages that read the image."""
+
+        def setUp(self):
+            try:
+                import mmseg.models  # noqa: F401
+            except ImportError:
+                self.skipTest("needs mmsegmentation")
+            from fm_adaptation.models import UperNetDecoder
+
+            self.widths = [96, 192, 384, 768]
+            self.decoder = UperNetDecoder(self.widths, 2, full_resolution=True)
+
+        def _features(self, size):
+            return tuple(
+                torch.rand(2, width, size // stride, size // stride)
+                for width, stride in zip(self.widths, (4, 8, 16, 32))
+            )
+
+        def test_logits_come_out_at_the_image_size_and_the_skips_train(self):
+            stages = self.decoder.full_resolution
+            self.assertEqual(sum(p.numel() for p in stages.parameters()), 271_954)
+            self.assertTrue(self.decoder.reads_image)
+
+            logits = self.decoder(self._features(64), (64, 64), torch.rand(2, 3, 64, 64))
+            self.assertEqual(tuple(logits.shape), (2, 2, 64, 64))
+            logits.sum().backward()
+            self.assertIsNotNone(stages.skip_full[0][0].weight.grad)
+            self.assertIsNotNone(stages.up_half[0].weight.grad)
+
+        def test_an_input_off_a_multiple_of_four_still_meets_its_skips(self):
+            logits = self.decoder(self._features(64), (66, 66), torch.rand(2, 3, 66, 66))
+            self.assertEqual(tuple(logits.shape), (2, 2, 66, 66))
+
+        def test_it_needs_the_image_and_only_extends_upernet(self):
+            with self.assertRaises(ValueError):
+                self.decoder(self._features(64), (64, 64))
+            with self.assertRaises(ValueError):
+                build_model("dinov3", "linear", 2, None, full_resolution=True)
+
+        def test_the_plain_head_is_unchanged(self):
+            from fm_adaptation.models import UperNetDecoder
+
+            plain = UperNetDecoder(self.widths, 2)
+            self.assertFalse(plain.reads_image)
+            self.assertFalse(any(key.startswith("full_resolution") for key in plain.state_dict()))
+            self.assertEqual(tuple(plain(self._features(64), (64, 64)).shape), (2, 2, 64, 64))
 
 class UNetTests(unittest.TestCase):
         """The UNet trained from scratch, which predicts at the resolution of its input."""

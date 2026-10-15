@@ -386,7 +386,7 @@ class UperNetDecoder(nn.Module):
     run is identical to a probe run apart from the decoder itself.
     """
 
-    def __init__(self, in_channels, num_classes: int):
+    def __init__(self, in_channels, num_classes: int, full_resolution: bool = False):
         super().__init__()
         from mmseg.models.decode_heads import UPerHead
 
@@ -405,9 +405,98 @@ class UperNetDecoder(nn.Module):
             # Required by the constructor, never called: we compute the loss ourselves.
             loss_decode={"type": "CrossEntropyLoss"},
         )
+        self.full_resolution = (
+            FullResolutionStages(self.head.channels, num_classes) if full_resolution else None
+        )
 
-    def forward(self, features, output_size):
-        return F.interpolate(self.head(features), size=output_size, mode="bilinear", align_corners=False)
+    @property
+    def reads_image(self) -> bool:
+        return self.full_resolution is not None
+
+    def forward(self, features, output_size, images=None):
+        if self.full_resolution is None:
+            logits = self.head(features)
+        else:
+            if images is None:
+                raise ValueError("the full-resolution stages read the image, and none was given")
+            logits = self.full_resolution(self.head._forward_feature(features), images)
+        if logits.shape[-2:] == tuple(output_size):
+            return logits
+        return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
+
+
+class LayerNorm2d(nn.Module):
+    """LayerNorm over the channels of each pixel of a `(B, C, H, W)` map, as in ConvNeXt and SAM.
+
+    Unlike batch norm it does not depend on the other images in the batch, which here is two.
+    """
+
+    def __init__(self, channels: int, eps: float = 1e-6):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels, eps=eps)
+
+    def forward(self, x):
+        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+
+def _conv_block(in_channels: int, out_channels: int, stride: int = 1):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False),
+        LayerNorm2d(out_channels),
+        nn.GELU(),
+    )
+
+
+def _upsample_block(in_channels: int, out_channels: int):
+    return nn.Sequential(
+        nn.ConvTranspose2d(in_channels, out_channels, 2, stride=2),
+        LayerNorm2d(out_channels),
+        nn.GELU(),
+    )
+
+
+class FullResolutionStages(nn.Module):
+    """Two learned x2 upsampling stages taking UperNet's stride-4 map to logits at stride 1.
+
+    UperNet's finest input is a ConvNeXt's stride-4 stage, so on its own each logit covers a 4x4
+    block of pixels. Each stage here upsamples by a transposed convolution, concatenates a skip of the
+    same resolution and convolves twice. The skips come from a small convolutional branch over the
+    image the trunk reads, beside the trunk rather than in front of it, so the pretrained stem sees
+    what it was trained on.
+    """
+
+    channels = (64, 32)
+    skip_channels = (32, 16)
+
+    def __init__(self, in_channels: int, num_classes: int, image_channels: int = 3):
+        super().__init__()
+        half, full = self.channels
+        half_skip, full_skip = self.skip_channels
+        self.skip_full = nn.Sequential(
+            _conv_block(image_channels, full_skip), _conv_block(full_skip, full_skip)
+        )
+        self.skip_half = nn.Sequential(
+            _conv_block(full_skip, half_skip, stride=2), _conv_block(half_skip, half_skip)
+        )
+        self.up_half = _upsample_block(in_channels, half)
+        self.fuse_half = nn.Sequential(_conv_block(half + half_skip, half), _conv_block(half, half))
+        self.up_full = _upsample_block(half, full)
+        self.fuse_full = nn.Sequential(_conv_block(full + full_skip, full), _conv_block(full, full))
+        self.classifier = nn.Conv2d(full, num_classes, 1)
+
+    @staticmethod
+    def _join(x, skip):
+        # An input whose side is not a multiple of four leaves the upsampled map a pixel off the skip.
+        if x.shape[-2:] != skip.shape[-2:]:
+            x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        return torch.cat([x, skip], dim=1)
+
+    def forward(self, fused, images):
+        skip_full = self.skip_full(images)
+        skip_half = self.skip_half(skip_full)
+        x = self.fuse_half(self._join(self.up_half(fused), skip_half))
+        x = self.fuse_full(self._join(self.up_full(x), skip_full))
+        return self.classifier(x)
 
 
 class UNetEncoder(nn.Module):
@@ -515,6 +604,13 @@ def _trainable_sam3_mlp_forward(mlp, x):
     return mlp.drop2(x)
 
 
+def _decode(probe, features, images):
+    """The probe's logits at the size of `images`, which a probe that reads the image is handed too."""
+    if getattr(probe, "reads_image", False):
+        return probe(features, images.shape[-2:], images)
+    return probe(features, images.shape[-2:])
+
+
 class SegmentationModel(nn.Module):
     def __init__(self, encoder, probe):
         super().__init__()
@@ -522,7 +618,7 @@ class SegmentationModel(nn.Module):
         self.probe = probe
 
     def forward(self, images):
-        return self.probe(self.encoder(images), images.shape[-2:])
+        return _decode(self.probe, self.encoder(images), images)
 
 
 class RefinementModel(nn.Module):
@@ -555,7 +651,7 @@ class RefinementModel(nn.Module):
         # holding it as a 0-1 intensity would be.
         guide = ((foreground - self.plane_mean) / self.plane_std).to(images.dtype)
         images = torch.cat([images[:, : self.plane], guide, images[:, self.plane + 1 :]], dim=1)
-        return self.probe(self.encoder(images), images.shape[-2:])
+        return _decode(self.probe, self.encoder(images), images)
 
 
 def build_model(
@@ -570,12 +666,16 @@ def build_model(
     refines_plane: int = 1,
     input_channels: int = 3,
     zscore: bool = False,
+    full_resolution: bool = False,
 ):
     """`refines` is a trained model for this one to correct; see `RefinementModel`.
 
     `zscore` and `input_channels` describe patches the loader standardises itself, which only the
-    UNet reads; see `UNetEncoder`.
+    UNet reads; see `UNetEncoder`. `full_resolution` extends UperNet to stride 1; see
+    `FullResolutionStages`.
     """
+    if full_resolution and probe_name != "upernet":
+        raise ValueError(f"model.full_resolution extends upernet, not {probe_name}")
     if "unet" in (model_name, probe_name):
         return _build_unet(
             model_name, probe_name, classes, checkpoint, train_encoder, injector, variant,
@@ -606,7 +706,8 @@ def build_model(
             encoder = adapters[model_name](checkpoint, trainable=train_encoder, injector=injector, **extra)
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
-    probe = probes[probe_name](encoder.feature_channels, classes)
+    probe_extra = {"full_resolution": True} if full_resolution else {}
+    probe = probes[probe_name](encoder.feature_channels, classes, **probe_extra)
     if refines is not None:
         return RefinementModel(refines, encoder, probe, refines_plane)
     return SegmentationModel(encoder, probe)
@@ -658,7 +759,7 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
         cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
         train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
         refines=load_first_stage(cfg, classes), refines_plane=cfg.refines_plane,
-        input_channels=cfg.input_channels, zscore=cfg.zscore,
+        input_channels=cfg.input_channels, zscore=cfg.zscore, full_resolution=cfg.full_resolution,
     )
     name = "final" if cfg.fold == "all" else checkpoint
     path = cfg.run_dir / f"{name}.pt"
