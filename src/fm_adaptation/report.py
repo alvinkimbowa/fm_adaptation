@@ -17,6 +17,7 @@ from .datasets import (
     dataset_dir as resolve_dataset_dir,
     dataset_root,
     family as _dataset_family,
+    fold_cases,
     metadata_values,
     resolve,
     split_cases,
@@ -273,6 +274,66 @@ def _render_interrater(rows, unpaired, statistic):
     return "".join(parts)
 
 
+def _distribution_table(dataset, folds, split):
+    """How a training set's images spread over the groups a split shows, in each part of it.
+
+    The columns are the groups of the results table above, in its order, so a count sits in line
+    with the column it explains. The test part is the dataset's own `imagesTs`, shown only where it
+    has one.
+    """
+    directory = split.directory(dataset)
+    parts = []
+    for fold in folds:
+        cases = fold_cases(directory, fold)
+        if cases is not None:
+            parts += [(f"Train (fold {fold})", cases[0]), (f"Validation (fold {fold})", cases[1])]
+    test = sorted(split_cases(directory, "Ts"))
+    if test:
+        parts.append(("Test", test))
+    if not parts:
+        return ""
+    found = set().union(*(split.groups(dataset, cases) for _, cases in parts))
+    shown = split.arrange(found)
+    # The whole set closes the row behind a rule, as `all` does in the results table.
+    edge = {group: " class='sep'" if index == len(shown) - 2 else ""
+            for index, group in enumerate(shown)}
+    header = (
+        "<tr><th></th>"
+        + "".join(f"<th{edge[group]}>{html.escape(split.label(group) or 'All')}</th>"
+                  for group in shown)
+        + "</tr>"
+    )
+    rows = []
+    for label, cases in parts:
+        counts = split.count(dataset, cases, shown)
+        whole = counts[""]
+        cells = "".join(
+            f"<td{edge[group]}>{counts[group]}"
+            + (f" ({counts[group] / whole:.0%})" if whole and group else "")
+            + "</td>"
+            for group in shown
+        )
+        rows.append(f"<tr><td>{html.escape(label)}</td>{cells}</tr>")
+    return f"<table class='counts'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
+
+
+def _render_distributions(family_folds, split):
+    """One distribution table per distinct table: two builds of the same images share one."""
+    tables = defaultdict(list)
+    for dataset in sorted(family_folds):
+        table = _distribution_table(dataset, family_folds[dataset], split)
+        if table:
+            tables[table].append(dataset)
+    return "".join(
+        f"<h1 style='margin-top:40px'>Training data by {html.escape(split.key)} — "
+        f"{html.escape(', '.join(_dataset_label(dataset) for dataset in datasets))}</h1>"
+        "<p class='undef'>Images in each part of the training set. All counts the groups shown, "
+        "as the results' all column does.</p>"
+        + table
+        for table, datasets in tables.items()
+    )
+
+
 def _shorten_name(name, limit=46):
     return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
@@ -488,13 +549,13 @@ class Split:
         any run named is searched, which is what gives the baselines their breakdown too.
         """
         if dataset not in self._values:
-            recorded = self.raw_dirs.get(dataset)
-            roots = [root for root in (recorded, *self.roots) if root is not None]
-            directory = (
-                resolve_dataset_dir(dataset_root(roots, dataset), dataset) if roots else Path()
-            )
-            self._values[dataset] = metadata_values(directory, self.key)
+            self._values[dataset] = metadata_values(self.directory(dataset), self.key)
         return self._values[dataset]
+
+    def directory(self, dataset):
+        recorded = self.raw_dirs.get(dataset)
+        roots = [root for root in (recorded, *self.roots) if root is not None]
+        return resolve_dataset_dir(dataset_root(roots, dataset), dataset) if roots else Path()
 
     def label(self, group):
         return f"no {self.key}" if group == UNGROUPED else group
@@ -547,6 +608,24 @@ class Split:
         if not keep.any():
             return None
         return {name: column[keep] for name, column in values.items()}
+
+    def count(self, dataset, cases, shown):
+        """How many of `cases` fall in each of the `shown` groups, `""` being the whole set.
+
+        A case with several values counts in each of its groups but once in the whole, which holds
+        the cases `select` keeps for it: those in a shown group, and those the field says nothing
+        about.
+        """
+        counts = dict.fromkeys(shown, 0)
+        answers = self._case_values(dataset)
+        for case in cases:
+            given = set(answers.get(case) or ()) or {UNGROUPED}
+            inside = given & counts.keys()
+            for group in inside:
+                counts[group] += 1
+            if inside or UNGROUPED in given:
+                counts[""] += 1
+        return counts
 
 
 def _column_source(column, trained_on):
@@ -1017,6 +1096,8 @@ def main():
        counts included, is centred like the metrics. */
     tbody td:first-child,tbody td:nth-child(4),
     thead tr:first-child th:first-child,thead tr:first-child th:nth-child(4){text-align:left}
+    table.counts tbody td,table.counts thead th{text-align:center}
+    table.counts tbody td:first-child{text-align:left}
     section{margin-bottom:56px}h1{color:#ddd;font-size:22px;margin:0 0 18px}h2{font-size:16px;font-weight:400;margin-top:28px}
     """
     split = Split(
@@ -1049,15 +1130,23 @@ def main():
             else sorted(evaluated)
         )
         in_domain = _in_domain(family_records, family_datasets, raw_dirs)
+        # A row pooling several folds is keyed by all of them, so each is read back on its own.
+        family_folds = defaultdict(set)
+        for _, _, trained_on, folds in family_records:
+            family_folds[trained_on].update(fold.strip() for fold in folds.split(","))
+        family_folds = {
+            trained_on: sorted(folds, key=lambda fold: (not fold.isdigit(), fold.zfill(4)))
+            for trained_on, folds in family_folds.items()
+        }
         # A dataset that ships an interrater split holds the same image annotated twice, which is
         # the ceiling every model in the table above is measured against. Measured by
         # compute_metrics, like every other number here, and read back from what it wrote.
         measured = {}
         for dataset in sorted(evaluated):
             dataset_dir = resolve_dataset_dir(raw_dirs.get(dataset, Path()), dataset)
-            for split in agreement.splits(dataset_dir):
+            for part in agreement.splits(dataset_dir):
                 rows, unpaired = agreement.read(
-                    agreement.path_for(agreement_dir, dataset_dir.name, split)
+                    agreement.path_for(agreement_dir, dataset_dir.name, part)
                 )
                 if rows or unpaired:
                     measured[dataset] = (rows, unpaired)
@@ -1075,6 +1164,7 @@ def main():
                     bool(args.group_by_train_dataset),
                     split,
                 )
+                + (_render_distributions(family_folds, split) if split.key else "")
                 + "".join(
                     f"<h1 style='margin-top:40px'>Annotator agreement — "
                     f"{html.escape(_dataset_label(dataset))}</h1>"

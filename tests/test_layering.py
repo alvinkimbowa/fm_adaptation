@@ -19,6 +19,7 @@ INDEPENDENT = (
     "compare_qualitative.py",
     "plot_qualitative.py",
     "qualitative.py",
+    "plot_results.py",
 )
 
 
@@ -37,7 +38,8 @@ class LayeringTests(unittest.TestCase):
     def test_prediction_and_figure_logic_is_not_explained_by_the_table(self):
         pattern = re.compile(r"results table|main table|report\.py|the report\b", re.I)
         offenders = []
-        for path in [SOURCE / name for name in INDEPENDENT] + sorted(SCRIPTS.glob("*qualitative.sh")):
+        scripts = sorted(SCRIPTS.glob("*qualitative.sh")) + [SCRIPTS / "plot_results.sh"]
+        for path in [SOURCE / name for name in INDEPENDENT] + scripts:
             offenders += [
                 f"{path.name}:{number}"
                 for number, line in enumerate(path.read_text().splitlines(), 1)

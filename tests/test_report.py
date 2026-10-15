@@ -1,12 +1,13 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 
-from fm_adaptation.report import (PARAMETER_COUNTS, _best_values, _dataset_family,
+from fm_adaptation.report import (PARAMETER_COUNTS, Split, _best_values, _dataset_family,
                                   _experiment_order, _in_domain, _model_matches, _pool_folds,
-                                  nnunet_label)
+                                  _render_distributions, nnunet_label)
 from fixtures import DatasetFixture
 
 
@@ -228,6 +229,86 @@ class InDomainTests(unittest.TestCase):
         shown against its own training set reads greyed there as well."""
         pairs = _in_domain(self.records, self.names, self.raw_dirs)
         self.assertIn(("Dataset208_combined", "Dataset208_combined"), pairs)
+
+
+class DistributionTests(unittest.TestCase):
+    """How a training set's images spread over the groups the results are split into."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.dataset = DatasetFixture(self.root, "Dataset701_nerve", {"0": "R", "1": "G", "2": "B"})
+        locations = {"t1": "wrist", "t2": "wrist", "t3": "elbow", "v1": "elbow",
+                     "s1": "wrist", "s2": "distal forearm", "s3": None}
+        for case_id in locations:
+            split = "Ts" if case_id.startswith("s") else "Tr"
+            self.dataset.add(case_id, split=split, planes={0: 1, 1: 1, 2: 1})
+        self.dataset.split(["t1", "t2", "t3"], ["v1"])
+        self.dataset.metadata({case: ({"location": value} if value else {})
+                               for case, value in locations.items()})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def table(self, order=(), folds=("0",)):
+        split = Split("location", tuple(order), {self.dataset.name: self.root}, (self.root,))
+        return _render_distributions({self.dataset.name: list(folds)}, split)
+
+    def cells(self, html_text):
+        """{part: {group: cell text}}, read off the table."""
+        head = html_text.split("<thead>")[1].split("</thead>")[0]
+        groups = [cell.split(">", 1)[1].split("</th")[0] for cell in head.split("<th")[2:]]
+        body = html_text.split("<tbody>")[1].split("</tbody>")[0]
+        table = {}
+        for row in body.split("</tr>"):
+            values = [cell.split(">", 1)[1].split("</td")[0] for cell in row.split("<td")[1:]]
+            if values:
+                table[values[0]] = dict(zip(groups, values[1:]))
+        return table
+
+    def test_each_part_is_counted_per_group(self):
+        table = self.cells(self.table())
+        self.assertEqual(list(table), ["Train (fold 0)", "Validation (fold 0)", "Test"])
+        self.assertEqual(list(table["Test"]),
+                         ["distal forearm", "elbow", "wrist", "no location", "All"])
+        self.assertEqual([table[part]["wrist"] for part in table], ["2 (67%)", "0 (0%)", "1 (33%)"])
+        self.assertEqual([table[part]["All"] for part in table], ["3", "1", "3"])
+
+    def test_all_leaves_out_the_groups_the_order_leaves_out(self):
+        table = self.cells(self.table(order=("wrist", "elbow")))
+        self.assertEqual(list(table["Test"]), ["wrist", "elbow", "no location", "All"])
+        # The distal-forearm test case is gone from All; the unlabelled one stays.
+        self.assertEqual(table["Test"]["All"], "2")
+
+    def test_a_dataset_without_a_test_split_has_no_test_row(self):
+        for case_id in ("s1", "s2", "s3"):
+            (self.dataset.path / "imagesTs" / f"{case_id}_0000.png").unlink()
+        self.assertNotIn("Test", self.cells(self.table()))
+
+    def test_a_fold_the_dataset_does_not_define_has_no_rows(self):
+        self.assertNotIn("fold 3", self.table(folds=("0", "3")))
+
+    def test_two_builds_of_the_same_images_share_one_table(self):
+        twin = DatasetFixture(self.root, "Dataset700_nerve_grey", {"0": "grey"})
+        for case_id in ("t1", "t2", "t3", "v1"):
+            twin.add(case_id, planes={0: 1})
+        for case_id in ("s1", "s2", "s3"):
+            twin.add(case_id, split="Ts", planes={0: 1})
+        twin.split(["t1", "t2", "t3"], ["v1"])
+        twin.metadata(json.loads((self.dataset.path / "image_metadata.json").read_text())["images"])
+        split = Split("location", (), {twin.name: self.root, self.dataset.name: self.root},
+                      (self.root,))
+        page = _render_distributions({twin.name: ["0"], self.dataset.name: ["0"]}, split)
+        self.assertEqual(page.count("<table"), 1)
+        self.assertIn("nerve_grey, nerve", page)
+
+    def test_a_case_with_several_values_counts_once_in_all(self):
+        self.dataset.metadata({"t1": {"location": ["wrist", "elbow"]}, "t2": {"location": "wrist"},
+                               "t3": {"location": "elbow"}, "v1": {"location": "elbow"}})
+        train = self.cells(self.table())["Train (fold 0)"]
+        self.assertTrue(train["wrist"].startswith("2 "))
+        self.assertTrue(train["elbow"].startswith("2 "))
+        self.assertEqual(train["All"], "3")
 
 
 class BestValueTests(unittest.TestCase):

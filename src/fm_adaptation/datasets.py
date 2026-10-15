@@ -117,6 +117,17 @@ def split_cases(dataset_dir, split):
     return {path.name.rsplit("_", 1)[0] for path in image_dir.glob("*_0000.*")}
 
 
+def fold_cases(dataset_dir, fold):
+    """The train and validation case ids of one fold, or None where the dataset defines no such fold."""
+    path = Path(dataset_dir) / "splits_final.json"
+    if not path.is_file() or not str(fold).isdigit():
+        return None
+    folds = json.loads(path.read_text())
+    if int(fold) >= len(folds):
+        return None
+    return folds[int(fold)]["train"], folds[int(fold)]["val"]
+
+
 def image_metadata(dataset_dir) -> dict[str, dict]:
     """What a dataset records about each of its images, keyed by case id.
 

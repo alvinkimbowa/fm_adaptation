@@ -28,10 +28,10 @@ split_by="${split_by:-location}"
 # field selects nothing.
 split_groups=(
     wrist
-    # distal forearm
-    mid-forearm
     elbow
     mid-arm
+    mid-forearm
+    "distal forearm"
 )
 
 # Group rows by their training dataset and rank best/second-best values within each group. Set to 0
