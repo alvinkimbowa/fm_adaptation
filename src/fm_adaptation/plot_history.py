@@ -8,6 +8,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 from .selection import matches as _matches
 
@@ -47,28 +48,76 @@ def _collect(results_dir: Path, datasets, experiments):
     return runs
 
 
-def _series(ax, epochs, values, **style):
-    """Drop the gaps left by runs that validate every few epochs, so the points still join up."""
+def _moving_average(values, window):
+    """Trailing mean over the last `window` points; the first few average whatever precedes them."""
+    cumulative = np.cumsum(np.insert(np.asarray(values, dtype=float), 0, 0.0))
+    ends = np.arange(1, len(values) + 1)
+    starts = np.maximum(0, ends - window)
+    return (cumulative[ends] - cumulative[starts]) / (ends - starts)
+
+
+def _smoothed(epochs, values):
+    """The logged points with gaps dropped, and their mean over the last epoch.
+
+    Runs that check several times per epoch average that many points; runs that check once per
+    epoch or less often get a window of one, which leaves the values as logged. Returns None when
+    nothing was logged."""
     points = [(x, y) for x, y in zip(epochs, values) if y == y]
     if not points:
+        return None
+    xs, ys = (np.array(column) for column in zip(*points))
+    window = max(1, round(1 / np.median(np.diff(xs)))) if len(xs) > 1 else 1
+    return xs, ys, _moving_average(ys, window), window
+
+
+def _series(ax, epochs, values, label=None, **style):
+    """Plot a metric's one-epoch moving average, with every logged value faint behind it. Gaps left
+    by runs that validate every few epochs are dropped, so the points still join up."""
+    smoothed = _smoothed(epochs, values)
+    if smoothed is None:
         return
-    marker = "o" if len(points) < len(epochs) else None
-    ax.plot(*zip(*points), marker=marker, markersize=3, **style)
+    xs, ys, average, window = smoothed
+    if window > 1:
+        ax.plot(xs, ys, lw=0.8, **{**style, "alpha": 0.2})
+    marker = "o" if len(xs) < len(epochs) else None
+    ax.plot(xs, average, marker=marker, markersize=3, lw=1.8, label=label, **style)
+
+
+def _mark_best(axes, epochs, val_dice, color):
+    """Star the peak of the val Dice moving average and line up its epoch on both panels."""
+    smoothed = _smoothed(epochs, val_dice)
+    if smoothed is None:
+        return
+    xs, _, average, _ = smoothed
+    best = int(np.argmax(average))
+    for ax in axes:
+        ax.axvline(xs[best], color=color, ls=":", lw=1, alpha=0.7)
+    axes[1].plot(xs[best], average[best], "*", color=color, markersize=12, markeredgecolor="white",
+                 label=f"best val {average[best]:.4f} @ epoch {xs[best]:g}")
 
 
 def _plot(curves, title, out_path):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # One run is coloured by split; several runs share the axes, so each run gets a colour and the
+    # split is told apart by line style.
+    single = len(curves) == 1
     colors = plt.get_cmap("tab10")
     for index, (label, history) in enumerate(curves):
-        color = colors(index % 10)
         epochs = history["epoch"]
         for ax, metric in zip(axes, ("loss", "dice")):
-            _series(ax, epochs, history[f"train_{metric}"], color=color, ls="--", alpha=0.6)
-            _series(ax, epochs, history[f"val_{metric}"], color=color, label=label)
+            if single:
+                _series(ax, epochs, history[f"train_{metric}"], label="train", color="tab:orange")
+                _series(ax, epochs, history[f"val_{metric}"], label="val", color="tab:blue")
+            else:
+                color = colors(index % 10)
+                _series(ax, epochs, history[f"train_{metric}"], color=color, ls="--")
+                _series(ax, epochs, history[f"val_{metric}"], label=label, color=color)
+        _mark_best(axes, epochs, history["val_dice"], "black" if single else colors(index % 10))
+    splits = "" if single else " (dashed=train, solid=val)"
     for ax, metric in zip(axes, ("loss", "dice")):
         ax.set_xlabel("epoch")
         ax.set_ylabel(metric)
-        ax.set_title(f"{metric} (dashed=train, solid=val)")
+        ax.set_title(f"{metric}{splits}\nbold: mean over the last epoch, faint: every check", fontsize="medium")
         ax.grid(alpha=0.3)
     axes[1].legend(fontsize="small")
     fig.suptitle(title)
