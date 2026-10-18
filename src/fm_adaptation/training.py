@@ -447,6 +447,7 @@ def main():
         input_channels=cfg.input_channels,
         zscore=cfg.zscore,
         full_resolution=cfg.full_resolution,
+        head_norm=cfg.head_norm,
     )
     if cfg.init_from and not args.resume:
         # A resume restores this run's own state; seeding on top of it would throw the run away.

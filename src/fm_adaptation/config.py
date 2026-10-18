@@ -120,6 +120,7 @@ class ExperimentConfig:
     weight_map_width: float = 5.0
     weight_map_floor: float = 0.1
     full_resolution: bool = False
+    head_norm: str = "bn"
     eval_every: int | None = None
 
     @classmethod
@@ -182,6 +183,9 @@ class ExperimentConfig:
             train_encoder=bool(model.get("train_encoder", False)),
             # UperNet's logits come out at stride 4; this adds two learned stages up to stride 1.
             full_resolution=bool(model.get("full_resolution", False)),
+            # UperNet's normalisation: `bn` is mmseg's BatchNorm + ReLU, which every run without the
+            # key was trained with; `ln` is LayerNorm2d + GELU, as in the ConvNeXt trunk.
+            head_norm=str(model.get("head_norm", "bn")),
             # Start from another run's weights instead of a fresh head, the way `LP + FT` starts from
             # its own probe: the run name to seed from, within the same model, dataset and fold.
             init_from=model.get("init_from"),

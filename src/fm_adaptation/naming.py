@@ -37,6 +37,7 @@ TOKENS = (
     ("nonlinear", "NLP"),
     ("upernet", "UperNet"),
     ("fullres", "full-res"),
+    ("ln", "LN head"),
     ("unet", "UNet"),
     ("m2f", "Mask2Former"),
     # What was added to it.

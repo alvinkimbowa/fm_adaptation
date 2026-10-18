@@ -379,6 +379,27 @@ class SAM3AdapterEncoder(PEEncoder):
         return tuple(features[key] for key in ("1", "2", "3", "4"))
 
 
+class LayerNorm2d(nn.Module):
+    """LayerNorm over the channels of each pixel of a `(B, C, H, W)` map, as in ConvNeXt and SAM.
+
+    Unlike batch norm it does not depend on the other images in the batch.
+    """
+
+    def __init__(self, channels: int, eps: float = 1e-6):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels, eps=eps)
+
+    def forward(self, x):
+        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+
+# The UperNet head's conv blocks, as mmcv `ConvModule` configs: normalisation, then activation.
+HEAD_NORMS = {
+    "bn": ({"type": "BN", "requires_grad": True}, {"type": "ReLU"}),
+    "ln": ({"type": LayerNorm2d}, {"type": "GELU"}),
+}
+
+
 class UperNetDecoder(nn.Module):
     """mmsegmentation's UPerHead over the adapter's four scales, driven directly as an nn.Module.
 
@@ -386,13 +407,16 @@ class UperNetDecoder(nn.Module):
     run is identical to a probe run apart from the decoder itself.
     """
 
-    def __init__(self, in_channels, num_classes: int, full_resolution: bool = False):
+    def __init__(
+        self, in_channels, num_classes: int, full_resolution: bool = False, head_norm: str = "bn"
+    ):
         super().__init__()
         from mmseg.models.decode_heads import UPerHead
 
         # One width per scale. The adapter emits the trunk's token width four times over; a ConvNeXt
         # widens as it goes, so it declares the four its stages actually have.
         widths = list(in_channels) if isinstance(in_channels, (list, tuple)) else [in_channels] * 4
+        norm_cfg, act_cfg = HEAD_NORMS[head_norm]
         self.head = UPerHead(
             in_channels=widths,
             in_index=[0, 1, 2, 3],
@@ -400,7 +424,8 @@ class UperNetDecoder(nn.Module):
             channels=512,
             dropout_ratio=0.1,
             num_classes=num_classes,
-            norm_cfg={"type": "BN", "requires_grad": True},
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
             align_corners=False,
             # Required by the constructor, never called: we compute the loss ourselves.
             loss_decode={"type": "CrossEntropyLoss"},
@@ -423,20 +448,6 @@ class UperNetDecoder(nn.Module):
         if logits.shape[-2:] == tuple(output_size):
             return logits
         return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
-
-
-class LayerNorm2d(nn.Module):
-    """LayerNorm over the channels of each pixel of a `(B, C, H, W)` map, as in ConvNeXt and SAM.
-
-    Unlike batch norm it does not depend on the other images in the batch, which here is two.
-    """
-
-    def __init__(self, channels: int, eps: float = 1e-6):
-        super().__init__()
-        self.norm = nn.LayerNorm(channels, eps=eps)
-
-    def forward(self, x):
-        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
 
 def _conv_block(in_channels: int, out_channels: int, stride: int = 1):
@@ -667,13 +678,18 @@ def build_model(
     input_channels: int = 3,
     zscore: bool = False,
     full_resolution: bool = False,
+    head_norm: str = "bn",
 ):
     """`refines` is a trained model for this one to correct; see `RefinementModel`.
 
     `zscore` and `input_channels` describe patches the loader standardises itself, which only the
     UNet reads; see `UNetEncoder`. `full_resolution` extends UperNet to stride 1; see
-    `FullResolutionStages`.
+    `FullResolutionStages`. `head_norm` picks UperNet's normalisation; see `UperNetDecoder`.
     """
+    if head_norm not in HEAD_NORMS:
+        raise ValueError(f"model.head_norm must be one of {sorted(HEAD_NORMS)}, not {head_norm}")
+    if head_norm != "bn" and probe_name != "upernet":
+        raise ValueError(f"model.head_norm sets upernet's normalisation, not {probe_name}'s")
     if full_resolution and probe_name != "upernet":
         raise ValueError(f"model.full_resolution extends upernet, not {probe_name}")
     if "unet" in (model_name, probe_name):
@@ -707,6 +723,8 @@ def build_model(
     else:
         encoder = encoders[model_name](checkpoint, trainable=train_encoder, **extra)
     probe_extra = {"full_resolution": True} if full_resolution else {}
+    if probe_name == "upernet":
+        probe_extra["head_norm"] = head_norm
     probe = probes[probe_name](encoder.feature_channels, classes, **probe_extra)
     if refines is not None:
         return RefinementModel(refines, encoder, probe, refines_plane)
@@ -760,6 +778,7 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
         train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
         refines=load_first_stage(cfg, classes), refines_plane=cfg.refines_plane,
         input_channels=cfg.input_channels, zscore=cfg.zscore, full_resolution=cfg.full_resolution,
+        head_norm=cfg.head_norm,
     )
     name = "final" if cfg.fold == "all" else checkpoint
     path = cfg.run_dir / f"{name}.pt"
