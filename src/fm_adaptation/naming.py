@@ -17,6 +17,7 @@ import re
 MODEL_NAMES = {
     "sam3": "SAM3",
     "dinov3": "DINOv3",
+    "vjepa21": "V-JEPA 2.1",
     "nnunet": "nnU-Net",
 }
 
@@ -35,6 +36,8 @@ TOKENS = (
     ("linear", "LP"),
     ("nonlinear", "NLP"),
     ("upernet", "UperNet"),
+    ("fullres", "full-res"),
+    ("ln", "LN head"),
     ("m2f", "Mask2Former"),
     # What was added to it.
     ("inj", "Inj"),
@@ -53,10 +56,16 @@ TOKENS = (
     # The encoder was not trained through the context frames.
     ("nograd", "no context grad"),
     ("ctxcopy", "copies"),
+    # A video encoder segmenting every frame of a clip, and how a frame gets features of its own
+    # from token steps that each pair two frames.
+    ("clip16", "16-frame clips"),
+    ("split", "tubelet split"),
+    ("repeat", "frame repeat"),
     ("kd", "KD"),
     ("ft", "FT"),
     ("finetune", "FT"),
-    # Trunk size, where it is not the default ViT-L.
+    # Trunk size, where it is not the model's default: ViT-L for DINOv3, ViT-B for V-JEPA 2.1.
+    ("vitl", "ViT-L"),
     ("vitb", "ViT-B"),
     ("vits", "ViT-S"),
     # Patch size, where it is not the encoder's own input size.

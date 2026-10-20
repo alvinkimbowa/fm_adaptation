@@ -75,6 +75,25 @@ class ContextConfig:
         return 2 * self.per_side
 
 
+CLIP_TEMPORALS = ("split", "repeat")
+
+
+@dataclass(frozen=True)
+class ClipConfig:
+    """Consecutive video frames segmented together, every one of them supervised where labelled.
+
+    The frames are read from `frames_from`'s `frames/` folder, which holds every frame of every
+    video; the labels are the training dataset's, on whichever of those frames it has one.
+    """
+
+    frames: int = 16
+    frames_from: str = ""
+    # A video encoder that pairs frames into one token step has to give each frame of the pair its
+    # own output: `split` decodes every token step into two frames, `repeat` feeds each frame twice
+    # so that a token step is one frame.
+    temporal: str = "split"
+
+
 @dataclass(frozen=True)
 class PromptField:
     """One question the prompt asks, with the answers it accepts.
@@ -228,6 +247,11 @@ class ExperimentConfig:
     channel_dropout: tuple[str, ...]
     channel_dropout_p: float
     balance_sources: bool
+    clip: "ClipConfig | None" = None
+    # The UperNet head's normalisation: `bn` (batch norm) or `ln` (layer norm per pixel).
+    head_norm: str = "bn"
+    # Two learned x2 stages after UperNet, taking its stride-4 output to logits at stride 1.
+    full_resolution: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -240,6 +264,14 @@ class ExperimentConfig:
         augment = data.get("augment") or {}
         prompt = data.get("prompt") or {}
         context = data.get("context") or {}
+        clip = data.get("clip") or {}
+        if clip:
+            if clip.get("temporal", "split") not in CLIP_TEMPORALS:
+                raise ValueError(f"data.clip.temporal must be one of {list(CLIP_TEMPORALS)}")
+            if context:
+                raise ValueError("data.clip and data.context are two different ways to show video")
+            if not clip.get("frames_from"):
+                raise ValueError("data.clip.frames_from names the dataset whose frames/ holds the videos")
         if context:
             if context.get("fusion", "late") not in CONTEXT_FUSIONS:
                 raise ValueError(f"data.context.fusion must be one of {list(CONTEXT_FUSIONS)}")
@@ -378,6 +410,17 @@ class ExperimentConfig:
                 if context
                 else None
             ),
+            clip=(
+                ClipConfig(
+                    frames=int(clip.get("frames", 16)),
+                    frames_from=resolve(raw_data_dir, clip["frames_from"]),
+                    temporal=str(clip.get("temporal", "split")),
+                )
+                if clip
+                else None
+            ),
+            head_norm=str(model.get("head_norm", "bn")),
+            full_resolution=bool(model.get("full_resolution", False)),
             # The class names the written prediction is mapped onto, in order, so a model trained on
             # many structures can be scored against a dataset labelled with one. Empty writes the
             # model's own class indices.

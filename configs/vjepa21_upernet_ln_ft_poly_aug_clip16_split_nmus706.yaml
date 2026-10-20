@@ -1,0 +1,51 @@
+data:
+  raw_data_dir: ../nmus_segmentation/data/nnUNet_raw
+  results_dir: models
+  train_dataset: Dataset706_nmus_median_prop_rgb
+  # 701 holds the same test videos with the frames traced by hand; 706's own test labels are SAM 3.1
+  # propagations of those tracings.
+  test_datasets:
+    - Dataset706_nmus_median_prop_rgb
+    - Dataset701_nmus_median_rgb
+  test_split: Ts
+  fold: 0
+  # Clips of 16 consecutive frames, read from 701's frames/, which holds every frame of every video;
+  # 706 labels the frames it has a propagated mask for.
+  clip:
+    frames: 16
+    frames_from: Dataset701_nmus_median_rgb
+    temporal: split
+  # Flips, rotation and zoom, on the square canvas the encoder sees, drawn once per clip. A rotation
+  # is cropped back to what is real image in every row and column, so nothing invented reaches the
+  # model. No vertical flip: a transverse nerve scan has an up, with the skin surface along the top
+  # edge.
+  augment:
+    hflip: true
+    vflip: false
+    rotation: 45
+    zoom_min: 0.5
+    zoom_max: 1.5
+
+model:
+  name: vjepa21
+  variant: vitb16
+  probe: upernet
+  head_norm: ln
+  train_encoder: true
+  run_name: upernet_ln_ft_poly_aug_clip16_split_ours
+  checkpoint: null
+
+training:
+  epochs: 50
+  early_stopping_patience: 0
+  # Clips per step, 32 frames.
+  batch_size: 2
+  num_workers: 4
+  learning_rate: 0.001
+  encoder_learning_rate: 0.00001
+  encoder_layer_decay: 0.9
+  weight_decay: 0.01
+  seed: 0
+  # A linear warmup of about one epoch, then a poly decay to zero over the 50 epochs.
+  lr_schedule: poly
+  device: cuda

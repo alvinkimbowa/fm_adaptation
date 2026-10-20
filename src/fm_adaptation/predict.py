@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from .config import ExperimentConfig
 from .data import (
+    ClipDataset,
     NnUNet2DDataset,
     _case_ids,
     trained_planes,
@@ -49,6 +50,40 @@ def _predict_patchwise(cfg, model, dataset_name, split, subset, classes, device,
         )
         cv2.imwrite(str(output_path), prediction)
     return len(cases)
+
+
+def _predict_clips(cfg, model, dataset_name, split, subset, cases, device, amp, prediction_dir):
+    """Every listed frame predicted from the clips around it, for a model that reads video.
+
+    Each video is read in windows of `clip.frames` frames, half a window apart, and a frame takes the
+    mean of the class probabilities every window holding it gave it, so no frame is judged from the
+    edge of a clip alone where the video carries on past it.
+    """
+    dataset = ClipDataset(
+        cfg.raw_data_dir, dataset_name, cfg.clip, split, cfg.fold, subset, model.encoder.preprocess,
+        stride=max(1, cfg.clip.frames // 2), cases=cases,
+    )
+    wanted = set(cases)
+    loader = DataLoader(
+        dataset, batch_size=cfg.batch_size, num_workers=cfg.num_workers,
+        collate_fn=collate_cases, pin_memory=True,
+    )
+    totals, counts, geometry = {}, {}, {}
+    with torch.no_grad():
+        for images, _, metadata in tqdm(loader, desc=f"{split} {dataset_name} clips"):
+            with amp:
+                probabilities = model(images.to(device)).float().softmax(2).cpu()
+            for clip, meta in zip(probabilities, metadata):
+                for frame, case_id in zip(clip, meta["frame_ids"]):
+                    if case_id not in wanted:
+                        continue
+                    totals[case_id] = totals.get(case_id, 0) + frame
+                    counts[case_id] = counts.get(case_id, 0) + 1
+                    geometry[case_id] = meta
+    for case_id, total in totals.items():
+        prediction = (total / counts[case_id]).argmax(0)
+        cv2.imwrite(str(prediction_dir / f"{case_id}.png"), restore_prediction(prediction, geometry[case_id]))
+    return len(totals)
 
 
 def _seen_in_training(cfg):
@@ -233,6 +268,21 @@ def main():
             )
             _write_source(output_dir, dataset_name, split)
             print(f"Wrote {count} predictions to {output_dir}")
+            continue
+        if cfg.clip is not None:
+            dataset_dir = resolve_dataset_dir(cfg.raw_data_dir, dataset_name)
+            cases = _case_ids(dataset_dir, split, cfg.fold, subset)
+            if dataset_name != cfg.train_dataset:
+                cases = [c for c in cases if c not in seen]
+            evaluated.setdefault((kind, column_name), set()).update(cases)
+            prediction_dir = output_dir / "predictions"
+            prediction_dir.mkdir(parents=True, exist_ok=True)
+            if not args.overwrite:
+                cases = [c for c in cases if not (prediction_dir / f"{c}.png").exists()]
+            if cases:
+                _predict_clips(cfg, model, dataset_name, split, subset, cases, device, amp, prediction_dir)
+            _write_source(output_dir, dataset_name, split)
+            print(f"Wrote {len(list(prediction_dir.glob('*.png')))} predictions to {output_dir}")
             continue
         dataset = NnUNet2DDataset(
             cfg.raw_data_dir, dataset_name, split, cfg.fold, subset, model.encoder.preprocess,

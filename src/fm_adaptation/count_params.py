@@ -32,7 +32,7 @@ def _counts(module):
 
 
 def _foundation_counts(model_name, run_name, probe, injector, train_encoder=False, variant="vitl16",
-                       prompt=None, context=None):
+                       prompt=None, context=None, clip=None, head_norm="bn", full_resolution=False):
     from .models import build_model
 
     if run_name in MMSEG_RUNS:
@@ -53,7 +53,7 @@ def _foundation_counts(model_name, run_name, probe, injector, train_encoder=Fals
         model_name, probe, NUM_CLASSES, None,
         # The two-stage finetuning runs say so in their name; the adapter runs say so in their config.
         train_encoder=train_encoder or "finetune" in run_name, injector=injector, variant=variant,
-        prompt=prompt, context=context,
+        prompt=prompt, context=context, clip=clip, head_norm=head_norm, full_resolution=full_resolution,
     )
     return _counts(model)
 
@@ -138,7 +138,8 @@ def main():
         print(f"counting {model_name}/{run_name} ...", flush=True)
         try:
             seen[key] = _foundation_counts(
-                model_name, run_name, probe, injector, train_encoder, variant, prompt, context
+                model_name, run_name, probe, injector, train_encoder, variant, prompt, context,
+                experiment.clip, experiment.head_norm, experiment.full_resolution,
             )
         except Exception as error:  # a missing optional dependency should not lose the rest
             print(f"  skipped: {type(error).__name__}: {error}")

@@ -13,6 +13,7 @@ from tqdm import tqdm
 from .config import ExperimentConfig
 from .data import (
     CachedFeatureDataset,
+    ClipDataset,
     NnUNet2DDataset,
     collate_cases,
     context_batch,
@@ -81,6 +82,8 @@ def _validate_data_mode(cfg, encoder_trains=None):
         raise ValueError("prompt is not supported with patchwise loading")
     if cfg.patching is not None and cfg.context is not None:
         raise ValueError("context is not supported with patchwise loading")
+    if cfg.clip is not None and (cfg.patching is not None or cfg.prompt is not None or cfg.channel_dropout):
+        raise ValueError("clips are read whole, with no patching, prompt or channel dropout")
     # What rules perturbation out is caching, not a frozen trunk: features cached once, from the
     # unaugmented image, would make any perturbation silently do nothing, since the cached loader
     # never opens an image again. Patching is cut fresh every epoch and so never caches, and neither
@@ -128,8 +131,26 @@ def _cache_features(cfg, encoder, dataset, device):
     encoder.cpu()
 
 
+def _clip_loader(cfg, preprocess, subset, shuffle=False):
+    """Clips of consecutive frames, for a model that reads video; see `ClipDataset`."""
+    dataset = ClipDataset(
+        cfg.raw_data_dir, cfg.train_dataset, cfg.clip, "Tr", cfg.fold, subset, preprocess,
+        augment=cfg.augment,
+    )
+    return DataLoader(
+        dataset,
+        batch_size=cfg.batch_size,
+        shuffle=shuffle,
+        num_workers=cfg.num_workers,
+        collate_fn=collate_cases,
+        pin_memory=True,
+    )
+
+
 def _image_loader(cfg, preprocess, subset, shuffle=False):
     """Whole images straight to the model, for runs whose encoder trains and so cannot be cached."""
+    if cfg.clip is not None:
+        return _clip_loader(cfg, preprocess, subset, shuffle)
     dataset = _raw_dataset(cfg, preprocess, subset)
     sampler = _balanced_sampler(dataset.ids) if shuffle and cfg.balance_sources else None
     return DataLoader(
@@ -245,7 +266,10 @@ def _layer_id(name: str, blocks: int) -> int:
     if name.startswith(("stages.", "downsample_layers.")):
         stage = int(name.split(".")[1])
         return stage if name.startswith("downsample_layers.") and stage == 0 else stage + 1
-    embedding = ("patch_embed", "pos_embed", "cls_token", "storage_tokens", "mask_token", "rope_embed")
+    embedding = (
+        "patch_embed", "pos_embed", "cls_token", "storage_tokens", "mask_token", "rope_embed",
+        "img_mod_embed", "video_mod_embed",
+    )
     return 0 if name.startswith(embedding) else blocks + 1
 
 
@@ -333,6 +357,9 @@ def _run_epoch(module, loader, loss_fn, device, optimizer=None, desc="", forward
         classes = prompt_classes(metadata)
         with amp:
             logits = forward(module, images, masks, prompt, steps)
+            if logits.dim() == 5:
+                # A clip model labels every frame of every clip; each frame is scored as an image.
+                logits, masks = logits.flatten(0, 1), masks.flatten(0, 1)
             loss = loss_fn(logits, masks, classes)
         if training:
             # Accumulation keeps the effective batch where the memory does not allow the real one.
@@ -376,6 +403,9 @@ def main():
         variant=cfg.variant,
         prompt=cfg.prompt,
         context=cfg.context,
+        clip=cfg.clip,
+        head_norm=cfg.head_norm,
+        full_resolution=cfg.full_resolution,
     )
     if cfg.init_from and not args.resume:
         # A resume restores this run's own state; seeding on top of it would throw the run away.

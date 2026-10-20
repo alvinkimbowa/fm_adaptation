@@ -201,11 +201,17 @@ def _inscribed(width, height, degrees):
 
 
 def _label_box(mask):
-    """(top, bottom, left, right) of the annotation, or None where there is none to keep in frame."""
-    rows = torch.any(mask > 0, dim=1).nonzero()
+    """(top, bottom, left, right) of the annotation, or None where there is none to keep in frame.
+
+    A stack of masks, `(T, H, W)`, is boxed as one: the box holds every frame's annotation.
+    """
+    present = mask > 0
+    if present.dim() == 3:
+        present = present.any(0)
+    rows = torch.any(present, dim=1).nonzero()
     if not len(rows):
         return None
-    columns = torch.any(mask > 0, dim=0).nonzero()
+    columns = torch.any(present, dim=0).nonzero()
     return int(rows[0]), int(rows[-1]), int(columns[0]), int(columns[-1])
 
 
@@ -220,6 +226,8 @@ def _holds(box, top, bottom, left, right):
 
 def _augment(image, mask, geometry, cfg, fill):
     """Flip, rotate and zoom one preprocessed case, introducing nothing that was never imaged.
+
+    `mask` is `(H, W)`, or `(T, H, W)` for the frames of a clip, which then all move together.
 
     This runs on the square canvas the encoder sees rather than on the image on disk: these sections
     reach 4598x15031, and warping one at full resolution once per epoch would cost more than the
@@ -267,10 +275,11 @@ def _turn(image, mask, geometry, angle, scale, fill):
         image, angle=angle, translate=[0, 0], scale=1.0, shear=[0.0, 0.0],
         interpolation=TF.InterpolationMode.BILINEAR, fill=list(fill),
     )
+    stacked = mask if mask.dim() == 3 else mask.unsqueeze(0)
     turned_mask = TF.affine(
-        mask.unsqueeze(0), angle=angle, translate=[0, 0], scale=1.0, shear=[0.0, 0.0],
+        stacked, angle=angle, translate=[0, 0], scale=1.0, shear=[0.0, 0.0],
         interpolation=TF.InterpolationMode.NEAREST, fill=[-1.0],
-    ).squeeze(0)
+    )
 
     # Back to what is real image in every row and column. The section sits centred on the canvas, so
     # the rectangle to keep is centred too.
@@ -283,19 +292,19 @@ def _turn(image, mask, geometry, angle, scale, fill):
     if not _holds(_label_box(turned_mask), top, bottom, left, right):
         return None
     turned_image = turned_image[:, top:bottom, left:right]
-    turned_mask = turned_mask[top:bottom, left:right]
+    turned_mask = turned_mask[:, top:bottom, left:right]
 
     # Refit, aspect preserved, at the drawn zoom: the same fit `_resize_and_pad` performs, on what is
     # left of the section rather than on the whole of it.
-    height, width = turned_mask.shape
+    height, width = turned_mask.shape[-2:]
     factor = scale * size / max(height, width)
     new_h, new_w = max(round(height * factor), 1), max(round(width * factor), 1)
     turned_image = F.interpolate(
         turned_image.unsqueeze(0), size=(new_h, new_w), mode="bilinear", align_corners=False,
     ).squeeze(0)
     turned_mask = F.interpolate(
-        turned_mask[None, None].float(), size=(new_h, new_w), mode="nearest",
-    ).squeeze(0).squeeze(0).long()
+        turned_mask[None].float(), size=(new_h, new_w), mode="nearest",
+    ).squeeze(0).long()
 
     # A zoom past the canvas is a centre crop, which the annotation also has to survive.
     if new_h > size or new_w > size:
@@ -304,17 +313,17 @@ def _turn(image, mask, geometry, angle, scale, fill):
         if not _holds(_label_box(turned_mask), top, bottom, left, right):
             return None
         turned_image = turned_image[:, top:bottom, left:right]
-        turned_mask = turned_mask[top:bottom, left:right]
-        new_h, new_w = turned_mask.shape
+        turned_mask = turned_mask[:, top:bottom, left:right]
+        new_h, new_w = turned_mask.shape[-2:]
 
     pad_top, pad_left = (size - new_h) // 2, (size - new_w) // 2
     canvas = torch.empty((image.shape[0], size, size), dtype=turned_image.dtype)
     for channel, value in enumerate(fill):
         canvas[channel] = value
     canvas[:, pad_top:pad_top + new_h, pad_left:pad_left + new_w] = turned_image
-    label = torch.full((size, size), -1, dtype=torch.long)
-    label[pad_top:pad_top + new_h, pad_left:pad_left + new_w] = turned_mask
-    return canvas, label
+    label = torch.full((turned_mask.shape[0], size, size), -1, dtype=torch.long)
+    label[:, pad_top:pad_top + new_h, pad_left:pad_left + new_w] = turned_mask
+    return canvas, label if mask.dim() == 3 else label.squeeze(0)
 
 
 class NnUNet2DDataset(Dataset):
@@ -537,6 +546,121 @@ class NnUNet2DDataset(Dataset):
                 names = tuple(names[index] for index in sorted(chosen))
             asked[field.key] = names
         return asked
+
+
+def clip_starts(n_frames: int, length: int, stride: int) -> list[int]:
+    """Where windows of `length` frames start so that, `stride` apart, they cover all `n_frames`.
+
+    The last window is moved back to end on the video's last frame rather than run past it.
+    """
+    if n_frames < length:
+        raise ValueError(f"a video of {n_frames} frames cannot hold a clip of {length}")
+    starts = list(range(0, n_frames - length + 1, stride))
+    if starts[-1] != n_frames - length:
+        starts.append(n_frames - length)
+    return starts
+
+
+class ClipDataset(Dataset):
+    """Clips of consecutive video frames, with a label for every frame the dataset traced.
+
+    The frames come from `clip.frames_from`'s `frames/` folder, which holds every frame of every
+    video, so a clip is always unbroken even where the labelled dataset skips frames. A frame without
+    a label is all -1, which the loss and the Dice ignore.
+
+    The cases of `dataset_name`'s split and fold, or `cases` where given, say which videos belong to
+    this subset and which of their frames are labelled. Training draws, every time a clip is asked
+    for, a window at random that holds at least one labelled frame, as many per video as it takes
+    clips to hold its labelled frames. Otherwise each video is tiled with windows `stride` apart,
+    keeping those that hold a labelled frame.
+    """
+
+    def __init__(self, raw_dir, dataset_name, clip, split, fold, subset, preprocess,
+                 augment=None, stride=None, cases=None):
+        self.dataset_dir = dataset_dir(raw_dir, dataset_name)
+        self.frames_dir = dataset_dir(raw_dir, clip.frames_from) / "frames"
+        self.ending = load_dataset_json(self.dataset_dir)["file_ending"]
+        self.label_dir = self.dataset_dir / f"labels{split}"
+        self.length = clip.frames
+        self.subset = subset
+        self.preprocess = preprocess
+        self.augment = augment if subset == "train" else None
+        self.fill = (
+            preprocess(np.zeros((1, 1, 3), np.uint8), np.zeros((1, 1), np.uint8))[0][:, 0, 0].tolist()
+            if self.augment is not None
+            else None
+        )
+        self.labelled = {}
+        for case_id in cases if cases is not None else _case_ids(self.dataset_dir, split, fold, subset):
+            video, frame = case_id.rsplit("_", 1)
+            self.labelled.setdefault(video, set()).add(int(frame))
+        counts = Counter(path.stem.rsplit("_", 1)[0] for path in self.frames_dir.glob(f"*{self.ending}"))
+        missing = sorted(set(self.labelled) - set(counts))
+        if missing:
+            raise FileNotFoundError(f"{self.frames_dir} holds no frame of {missing[:3]}")
+        self.video_frames = {video: counts[video] for video in self.labelled}
+        if subset == "train":
+            self.windows = [
+                (video, None)
+                for video, frames in sorted(self.labelled.items())
+                for _ in range(math.ceil(len(frames) / self.length))
+            ]
+        else:
+            stride = stride or self.length
+            self.windows = [
+                (video, start)
+                for video in sorted(self.labelled)
+                for start in clip_starts(self.video_frames[video], self.length, stride)
+                if self._holds_label(video, start)
+            ]
+
+    def _holds_label(self, video, start):
+        return any(start <= frame < start + self.length for frame in self.labelled[video])
+
+    def __len__(self):
+        return len(self.windows)
+
+    def __getitem__(self, index):
+        video, start = self.windows[index]
+        if start is None:
+            last = self.video_frames[video] - self.length
+            candidates = [s for s in range(last + 1) if self._holds_label(video, s)]
+            start = candidates[int(torch.randint(len(candidates), ()))]
+        images, masks, case_ids, labelled = [], [], [], []
+        for frame in range(start, start + self.length):
+            case_id = f"{video}_{frame:03d}"
+            path = self.frames_dir / f"{case_id}{self.ending}"
+            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if image is None:
+                raise FileNotFoundError(path)
+            has_label = frame in self.labelled[video]
+            if has_label:
+                mask = cv2.imread(str(self.label_dir / f"{case_id}{self.ending}"), cv2.IMREAD_GRAYSCALE)
+                if mask is None:
+                    raise FileNotFoundError(self.label_dir / f"{case_id}{self.ending}")
+            else:
+                mask = np.zeros(image.shape[:2], dtype=np.uint8)
+            image_t, mask_t, geometry = self.preprocess(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), mask)
+            if not has_label:
+                mask_t.fill_(-1)
+            images.append(image_t)
+            masks.append(mask_t)
+            case_ids.append(case_id)
+            labelled.append(has_label)
+        image_t, mask_t = torch.cat(images), torch.stack(masks)
+        if self.augment is not None:
+            # The frames as channels of one image, so the flips, turn and zoom are drawn once.
+            fill = self.fill * self.length
+            image_t, mask_t = _augment(image_t, mask_t, geometry, self.augment, fill)
+        metadata = {
+            "case_id": f"{video}_{start:03d}",
+            "video": video,
+            "start": start,
+            "frame_ids": case_ids,
+            "labelled": labelled,
+            **geometry,
+        }
+        return image_t.unflatten(0, (self.length, 3)), mask_t, metadata
 
 
 class CachedFeatureDataset(Dataset):

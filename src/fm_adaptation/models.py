@@ -405,6 +405,27 @@ class SAM3AdapterEncoder(PEEncoder):
         return tuple(features[key] for key in ("1", "2", "3", "4"))
 
 
+class LayerNorm2d(nn.Module):
+    """LayerNorm over the channels of each pixel of a `(B, C, H, W)` map, as in ConvNeXt and SAM.
+
+    Unlike batch norm it does not depend on the other images in the batch.
+    """
+
+    def __init__(self, channels: int, eps: float = 1e-6):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels, eps=eps)
+
+    def forward(self, x):
+        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+
+# The UperNet head's conv blocks, as mmcv `ConvModule` configs: normalisation, then activation.
+HEAD_NORMS = {
+    "bn": ({"type": "BN", "requires_grad": True}, {"type": "ReLU"}),
+    "ln": ({"type": LayerNorm2d}, {"type": "GELU"}),
+}
+
+
 class UperNetDecoder(nn.Module):
     """mmsegmentation's UPerHead over the adapter's four scales, driven directly as an nn.Module.
 
@@ -412,11 +433,19 @@ class UperNetDecoder(nn.Module):
     run is identical to a probe run apart from the decoder itself.
     """
 
-    def __init__(self, in_channels, num_classes: int, prompt_width: int | None = None):
+    def __init__(
+        self,
+        in_channels,
+        num_classes: int,
+        prompt_width: int | None = None,
+        full_resolution: bool = False,
+        head_norm: str = "bn",
+    ):
         super().__init__()
         from mmseg.models.decode_heads import UPerHead
 
         widths = decoder_widths(in_channels)
+        norm_cfg, act_cfg = HEAD_NORMS[head_norm]
         self.head = UPerHead(
             in_channels=widths,
             in_index=[0, 1, 2, 3],
@@ -424,21 +453,98 @@ class UperNetDecoder(nn.Module):
             channels=512,
             dropout_ratio=0.1,
             num_classes=num_classes,
-            norm_cfg={"type": "BN", "requires_grad": True},
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
             align_corners=False,
             # Required by the constructor, never called: we compute the loss ourselves.
             loss_decode={"type": "CrossEntropyLoss"},
         )
         # Gates the features the FPN has already fused, so one gate reaches every scale at once.
         self.gate = None if prompt_width is None else PromptGate(self.head.channels, prompt_width)
+        self.full_resolution = (
+            FullResolutionStages(self.head.channels, num_classes) if full_resolution else None
+        )
 
-    def forward(self, features, output_size, prompt=None):
-        if self.gate is None:
+    @property
+    def reads_image(self) -> bool:
+        return self.full_resolution is not None
+
+    def forward(self, features, output_size, prompt=None, images=None):
+        if self.gate is None and self.full_resolution is None:
             logits = self.head(features)
         else:
             fused = self.head._forward_feature(features)
-            logits = self.head.cls_seg(self.gate(fused, prompt))
+            if self.gate is not None:
+                fused = self.gate(fused, prompt)
+            if self.full_resolution is None:
+                logits = self.head.cls_seg(fused)
+            else:
+                if images is None:
+                    raise ValueError("the full-resolution stages read the image, and none was given")
+                logits = self.full_resolution(fused, images)
+        if logits.shape[-2:] == tuple(output_size):
+            return logits
         return F.interpolate(logits, size=output_size, mode="bilinear", align_corners=False)
+
+
+def _conv_block(in_channels: int, out_channels: int, stride: int = 1):
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False),
+        LayerNorm2d(out_channels),
+        nn.GELU(),
+    )
+
+
+def _upsample_block(in_channels: int, out_channels: int):
+    return nn.Sequential(
+        nn.ConvTranspose2d(in_channels, out_channels, 2, stride=2),
+        LayerNorm2d(out_channels),
+        nn.GELU(),
+    )
+
+
+class FullResolutionStages(nn.Module):
+    """Two learned x2 upsampling stages taking UperNet's stride-4 map to logits at stride 1.
+
+    UperNet's finest input is at stride 4, so on its own each logit covers a 4x4 block of pixels. Each
+    stage here upsamples by a transposed convolution, concatenates a skip of the same resolution and
+    convolves twice. The skips come from a small convolutional branch over the image the trunk reads,
+    beside the trunk rather than in front of it, so the pretrained stem sees what it was trained on.
+    The branch is 2D: given the frames of a clip as a batch, it reads each frame on its own.
+    """
+
+    channels = (64, 32)
+    skip_channels = (32, 16)
+
+    def __init__(self, in_channels: int, num_classes: int, image_channels: int = 3):
+        super().__init__()
+        half, full = self.channels
+        half_skip, full_skip = self.skip_channels
+        self.skip_full = nn.Sequential(
+            _conv_block(image_channels, full_skip), _conv_block(full_skip, full_skip)
+        )
+        self.skip_half = nn.Sequential(
+            _conv_block(full_skip, half_skip, stride=2), _conv_block(half_skip, half_skip)
+        )
+        self.up_half = _upsample_block(in_channels, half)
+        self.fuse_half = nn.Sequential(_conv_block(half + half_skip, half), _conv_block(half, half))
+        self.up_full = _upsample_block(half, full)
+        self.fuse_full = nn.Sequential(_conv_block(full + full_skip, full), _conv_block(full, full))
+        self.classifier = nn.Conv2d(full, num_classes, 1)
+
+    @staticmethod
+    def _join(x, skip):
+        # An input whose side is not a multiple of four leaves the upsampled map a pixel off the skip.
+        if x.shape[-2:] != skip.shape[-2:]:
+            x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        return torch.cat([x, skip], dim=1)
+
+    def forward(self, fused, images):
+        skip_full = self.skip_full(images)
+        skip_half = self.skip_half(skip_full)
+        x = self.fuse_half(self._join(self.up_half(fused), skip_half))
+        x = self.fuse_full(self._join(self.up_full(x), skip_full))
+        return self.classifier(x)
 
 
 def _sine_positions(height: int, width: int, channels: int, device) -> torch.Tensor:
@@ -571,6 +677,8 @@ def _trainable_sam3_mlp_forward(mlp, x):
 
 # Context frames encoded per forward pass of the encoder.
 CONTEXT_ENCODE_BATCH = 2
+# Frames of a clip decoded per pass of the decoder.
+CLIP_DECODE_FRAMES = 4
 
 
 class SegmentationModel(nn.Module):
@@ -630,7 +738,34 @@ class SegmentationModel(nn.Module):
         torch.clear_autocast_cache()
         return [torch.cat(maps) for maps in zip(*kept)]
 
+    def _decode(self, features, images, embedding=None):
+        extra = {"images": images} if getattr(self.probe, "reads_image", False) else {}
+        return self.probe(features, images.shape[-2:], embedding, **extra)
+
+    def _decode_clips(self, features, frames):
+        """The decoder over every frame of a batch of clips, `CLIP_DECODE_FRAMES` frames at a time.
+
+        Under a gradient each group is checkpointed, so a step holds the decoder's activations for
+        one group rather than for every frame of every clip. The groups are exact only because a clip
+        model's decoder normalises each frame on its own, which `build_model` makes sure of.
+        """
+        groups = []
+        for start in range(0, frames.shape[0], CLIP_DECODE_FRAMES):
+            part = slice(start, start + CLIP_DECODE_FRAMES)
+            group = (tuple(level[part] for level in features), frames[part])
+            if torch.is_grad_enabled():
+                groups.append(checkpoint.checkpoint(self._decode, *group, use_reentrant=False))
+            else:
+                groups.append(self._decode(*group))
+        return torch.cat(groups)
+
     def forward(self, images, prompt=None, steps=None):
+        if getattr(self.encoder, "takes_clips", False):
+            # A clip in, `(B, T, 3, H, W)`, and logits for every one of its frames out,
+            # `(B, T, K, H, W)`; the decoder reads the frames as one batch.
+            return self._decode_clips(self.encoder(images), images.flatten(0, 1)).unflatten(
+                0, images.shape[:2]
+            )
         frames = None
         if images.dim() == 5:
             if self.context is None:
@@ -649,7 +784,7 @@ class SegmentationModel(nn.Module):
                 raise ValueError("this model takes a prompt, and the batch carried none")
             embedding = self.prompt.encode(prompt)
             features = self.prompt.condition(features, embedding)
-        return self.probe(features, images.shape[-2:], embedding)
+        return self._decode(features, images, embedding)
 
 
 def build_model(
@@ -662,7 +797,36 @@ def build_model(
     variant: str = DEFAULT_DINOV3_VARIANT,
     prompt=None,
     context=None,
+    clip=None,
+    head_norm: str = "bn",
+    full_resolution: bool = False,
 ):
+    if head_norm not in HEAD_NORMS:
+        raise ValueError(f"model.head_norm must be one of {sorted(HEAD_NORMS)}, not {head_norm}")
+    if (head_norm != "bn" or full_resolution) and probe_name != "upernet":
+        raise ValueError(f"model.head_norm and model.full_resolution extend upernet, not {probe_name}")
+    if model_name == "vjepa21":
+        from .vjepa import VJEPAEncoder
+
+        if probe_name != "upernet":
+            raise ValueError("vjepa21 emits a feature pyramid per frame, which only upernet decodes")
+        if head_norm != "ln":
+            # The frames are decoded a few at a time, which batch statistics would see.
+            raise ValueError("vjepa21 decodes its frames in groups, so it needs model.head_norm: ln")
+        if clip is None:
+            raise ValueError("vjepa21 reads video, so it needs data.clip")
+        if prompt is not None or context is not None or injector:
+            raise ValueError("vjepa21 takes no prompt, context frames or injector")
+        encoder = VJEPAEncoder(
+            checkpoint, trainable=train_encoder, variant=variant,
+            frames=clip.frames, temporal=clip.temporal,
+        )
+        probe = UperNetDecoder(
+            encoder.feature_channels, classes, full_resolution=full_resolution, head_norm=head_norm
+        )
+        return SegmentationModel(encoder, probe)
+    if clip is not None:
+        raise ValueError(f"data.clip needs an encoder that reads video, which {model_name} is not")
     encoders = {"sam3": PEEncoder, "dinov3": DINOv3Encoder}
     probes = {"linear": LinearProbe, "nonlinear": NonlinearProbe, "upernet": UperNetDecoder}
     if model_name not in encoders:
@@ -704,6 +868,8 @@ def build_model(
         if prompt is not None and probe_name == "upernet" and prompt.gates_decoder
         else {}
     )
+    if probe_name == "upernet":
+        probe_extra.update(full_resolution=full_resolution, head_norm=head_norm)
     probe = probes[probe_name](encoder.feature_channels, classes, **probe_extra)
     conditioner = None
     if prompt is not None:
@@ -730,6 +896,8 @@ def load_trained_model(cfg, checkpoint: str, device, classes: int):
         cfg.model_name, cfg.probe_name, classes, cfg.checkpoint,
         train_encoder=cfg.train_encoder, injector=cfg.injector, variant=cfg.variant,
         prompt=getattr(cfg, "prompt", None), context=getattr(cfg, "context", None),
+        clip=getattr(cfg, "clip", None), head_norm=getattr(cfg, "head_norm", "bn"),
+        full_resolution=getattr(cfg, "full_resolution", False),
     )
     name = "final" if cfg.fold == "all" else checkpoint
     path = cfg.run_dir / f"{name}.pt"
