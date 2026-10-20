@@ -1,0 +1,288 @@
+<title>Median nerve segmentation: Preliminary results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow reading column; each question is a short answer, bullets, then one chart. */
+:root {
+  --bg: #f6f7f8;
+  --panel: #ffffff;
+  --fg: #1b2127;
+  --muted: #5d6873;
+  --rule: #dfe3e7;
+  --base: #6b7c8f;
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --good: #1a7f4e;
+  --bad: #b3261e;
+  --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14181c; --panel: #1c2227; --fg: #e8ecef; --muted: #9aa6b1; --rule: #2e363d;
+    --base: #8a9bae; --s1: #3987e5; --s2: #d95926; --good: #4cc38a; --bad: #f2867f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14181c; --panel: #1c2227; --fg: #e8ecef; --muted: #9aa6b1; --rule: #2e363d;
+  --base: #8a9bae; --s1: #3987e5; --s2: #d95926; --good: #4cc38a; --bad: #f2867f;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; display: grid; gap: 22px; }
+header h1 { font-size: 26px; margin: 0 0 6px; text-wrap: balance; letter-spacing: -0.01em; }
+header p { margin: 0; color: var(--muted); font-size: 14px; }
+section { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px 16px; display: grid; gap: 10px; min-width: 0; }
+.q { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+h2 { font-size: 19px; margin: 0; text-wrap: balance; }
+.answer { font-weight: 600; margin: 0; }
+ul, ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+li { max-width: 65ch; }
+.chart { overflow-x: auto; }
+.chart svg { display: block; width: 100%; min-width: 460px; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+table { border-collapse: collapse; font-family: var(--font-data); font-size: 13px; font-variant-numeric: tabular-nums; width: 100%; min-width: 460px; }
+th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--rule); }
+th:first-child, td:first-child { text-align: left; font-family: var(--font-body); }
+thead th { color: var(--muted); font-weight: 500; font-family: var(--font-body); }
+.weak { color: var(--bad); font-weight: 500; }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+.forward { border-color: var(--fg); }
+.forward li strong { font-weight: 700; }
+</style>
+
+<main>
+  <header>
+    <h1>Median nerve segmentation: Preliminary results</h1>
+    <p>Test Dice (%) per scan location, 59 test images from 3 subjects not seen in training. One training run per model.</p>
+  </header>
+
+  <section>
+    <p class="q">Data</p>
+    <h2>Median nerve: labelled images per location</h2>
+    <ul>
+      <li>Train 193, validation 38, test 59 images. Test subjects (A, K, W) are not in training.</li>
+      <li>Distal forearm has the least: 10 training images, all from 1 clip of 1 subject.</li>
+      <li>Two probes: most clips use SL2325 (preset "PN"). SL1543 (preset "UPPER ARM") is 27 of 193 training images (2 clips) and 12 of 59 test images: both of subject A's test clips, i.e. all 5 distal-forearm and 7 of the 22 mid-forearm test images.</li>
+    </ul>
+    <div class="chart" data-bars="data"></div>
+    <div class="legend">
+      <span style="--c: var(--s1)">Train</span>
+      <span style="--c: var(--s2)">Validation</span>
+      <span style="--c: var(--base)">Test</span>
+    </div>
+    <h2 style="margin-top:14px">Other structures: labelled frames</h2>
+    <ul>
+      <li>340 frames in the all-structures set; 290 have the median nerve, 50 have only other structures.</li>
+      <li>Only the brachial artery and humerus have more than 30 frames. Most structures come from 1–5 clips.</li>
+    </ul>
+    <div class="chart" data-hbars="anatomy"></div>
+  </section>
+
+  <section>
+    <p class="q">Question 1</p>
+    <h2>Baseline: one labelled frame, median nerve only</h2>
+    <p class="answer">Median Dice 84–92% at wrist, elbow and mid-arm, 41% at mid-forearm, 0% at distal forearm.</p>
+    <ul>
+      <li>When it fails, it does not find the nerve at all: 8 of 22 mid-forearm images and all 5 distal-forearm images score close to 0%.</li>
+      <li>Most misses are on the SL1543 probe: 10 of its 12 test images are missed, against 3 of the 47 SL2325 test images.</li>
+      <li>On SL2325 alone, mid-forearm median Dice is 66%.</li>
+    </ul>
+    <div class="chart" data-chart="q1"></div>
+    <div class="legend"><span style="--c: var(--s1)">Box: middle half of images; line and label: median; dots: each test image</span></div>
+    <p class="note">Comparison made with DINOv3 + UperNet + Inj + FT + aug.</p>
+  </section>
+
+  <section>
+    <p class="q">Question 2</p>
+    <h2>Does knowing the location, or labelling surrounding tissue, help?</h2>
+    <p class="answer">No. Neither raises mid-forearm or distal forearm.</p>
+    <ul>
+      <li><strong>Location given to the model:</strong> results about the same as without it.</li>
+      <li><strong>Surrounding tissue labelled</strong> (22 structures): mean mid-forearm Dice drops from 34% to 26%.</li>
+      <li>Only 97 of 236 training frames had any structure other than the nerve labelled, mostly the brachial artery.</li>
+    </ul>
+    <div class="chart" data-chart="q2"></div>
+    <div class="legend">
+      <span style="--c: var(--base)">Baseline</span>
+      <span style="--c: var(--s1)">+ location</span>
+      <span style="--c: var(--s2)">+ surrounding tissue labels</span>
+    </div>
+    <p class="note">Comparison made with DINOv3 + ConvNeXt-L + UperNet + FT + aug.</p>
+  </section>
+
+  <section>
+    <p class="q">Question 3</p>
+    <h2>Does video context help, with only the target frame labelled?</h2>
+    <p class="answer">A little, at mid-forearm only. Not yet confirmed.</p>
+    <ul>
+      <li>Mid-forearm mean Dice goes from 34% to 47%; images where the nerve is not found go from 7 to 4 of 22.</li>
+      <li>Other locations are about the same.</li>
+      <li>Distal forearm is still 0%.</li>
+      <li>To confirm, the model must also be trained with copies of the labelled frame in place of its neighbours. If that scores the same, the gain is not from the video. This check has not been run yet.</li>
+    </ul>
+    <div class="chart" data-chart="q3"></div>
+    <div class="legend">
+      <span style="--c: var(--base)">Single frame</span>
+      <span style="--c: var(--s1)">+ neighbouring frames</span>
+    </div>
+    <p class="note">Comparison made with DINOv3 + ConvNeXt-L + UperNet + FT + aug.</p>
+    <p class="note">Context: 3 frames before and 3 after the labelled frame, sampled 2 frames apart.</p>
+  </section>
+
+  <section class="forward">
+    <p class="q">Way forward</p>
+    <h2>More labels are needed for the following locations, in decreasing order of priority</h2>
+    <ol>
+      <li>Distal forearm</li>
+      <li>Mid-forearm</li>
+      <li>Mid-arm</li>
+      <li>Elbow</li>
+    </ol>
+    <ul>
+      <li>Label new clips from new subjects. More frames from clips we already have are less useful, since neighbouring frames look alike.</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+const LOCATIONS = ["Wrist", "Elbow", "Mid-arm", "Mid-forearm", "Distal forearm"];
+const DICE = {"vitl":[[0.906,0.872,0.938,0.923,0.93,0.94,0.922,0.962,0.909,0.87],[0.84,0.766,0.892,0.818,0.884,0.858,0.847,0.862,0.87,0.845],[0.859,0.808,0.798,0.848,0.86,0.862,0.768,0.719,0.839,0.868,0.816,0.832],[0.76,0.0,0.0,0.0,0.0,0.0,0.314,0.743,0.664,0.245,0.0,0.0,0.0,0.059,0.505,0.78,0.711,0.758,0.808,0.648,0.904,0.84],[0.0,0.0,0.0,0.0,0.0]],"cnl":[[0.802,0.934,0.917,0.879,0.895,0.894,0.909,0.924,0.895,0.732],[0.823,0.738,0.84,0.825,0.741,0.891,0.855,0.836,0.805,0.773],[0.741,0.665,0.693,0.723,0.666,0.849,0.824,0.792,0.781,0.792,0.798,0.791],[0.0,0.0,0.296,0.0,0.0,0.0,0.191,0.472,0.372,0.267,0.0,0.636,0.369,0.673,0.672,0.634,0.0,0.387,0.471,0.675,0.601,0.828],[0.0,0.0,0.0,0.0,0.0]],"cnl_loc":[[0.808,0.906,0.949,0.937,0.937,0.936,0.924,0.939,0.905,0.854],[0.872,0.674,0.858,0.783,0.739,0.9,0.849,0.816,0.841,0.782],[0.737,0.668,0.748,0.807,0.82,0.856,0.863,0.838,0.83,0.834,0.856,0.868],[0.846,0.0,0.723,0.0,0.0,0.105,0.81,0.475,0.256,0.0,0.124,0.879,0.0,0.0,0.762,0.482,0.0,0.46,0.0,0.76,0.472,0.874],[0.0,0.0,0.0,0.0,0.0]],"cnl_tis":[[0.908,0.898,0.926,0.921,0.933,0.927,0.928,0.946,0.92,0.833],[0.745,0.752,0.81,0.705,0.849,0.828,0.821,0.814,0.825,0.855],[0.442,0.67,0.72,0.749,0.674,0.838,0.868,0.797,0.817,0.846,0.763,0.771],[0.483,0.0,0.0,0.0,0.0,0.0,0.0,0.826,0.664,0.443,0.0,0.317,0.0,0.0,0.0,0.0,0.0,0.542,0.422,0.709,0.551,0.792],[0.0,0.0,0.0,0.0,0.0]],"cnl_ctx":[[0.855,0.913,0.933,0.911,0.917,0.916,0.934,0.923,0.898,0.846],[0.899,0.654,0.856,0.82,0.806,0.809,0.809,0.763,0.804,0.719],[0.81,0.682,0.735,0.791,0.84,0.869,0.83,0.85,0.855,0.79,0.752,0.854],[0.885,0.344,0.477,0.557,0.0,0.11,0.736,0.0,0.448,0.0,0.0,0.79,0.356,0.602,0.554,0.311,0.46,0.65,0.583,0.714,0.831,0.821],[0.0,0.0,0.0,0.0,0.0]]};
+const CHARTS = {
+  q1: [{ color: "--s1", values: DICE.vitl }],
+  q2: [
+    { color: "--base", values: DICE.cnl },
+    { color: "--s1", values: DICE.cnl_loc },
+    { color: "--s2", values: DICE.cnl_tis },
+  ],
+  q3: [
+    { color: "--base", values: DICE.cnl },
+    { color: "--s1", values: DICE.cnl_ctx },
+  ],
+};
+const DATA = {
+  series: [
+    { color: "--s1", values: [78, 20, 49, 35, 10] },
+    { color: "--s2", values: [11, 4, 5, 6, 12] },
+    { color: "--base", values: [10, 10, 12, 22, 5] },
+  ],
+  sub: ["11 clips · 6 subj.", "3 clips · 2 subj.", "6 clips · 2 subj.", "4 clips · 4 subj.", "1 clip · 1 subj."],
+};
+
+const ANATOMY = [
+  ["Brachial artery", 69, 13], ["Humerus", 39, 9], ["Biceps brachii", 28, 8], ["Brachialis", 19, 7],
+  ["Radius", 16, 6], ["FDP", 13, 5], ["FDS", 13, 5], ["FCR muscle", 13, 3], ["Bifid median nerve", 13, 2],
+  ["Pronator quadratus", 12, 4], ["Radial artery", 9, 2], ["Pronator teres", 8, 2], ["Ulna", 8, 4],
+  ["Interosseous membrane", 6, 3], ["Subcutaneous tissue", 6, 2], ["Transverse carpal ligament", 5, 2],
+  ["Scaphoid", 4, 3], ["FCR tendon", 2, 2], ["Persistent median artery", 1, 1], ["Bone", 1, 1],
+  ["Branch of AIN", 1, 1],
+];
+const NS = "http://www.w3.org/2000/svg";
+function canvas(el, W, H, label) {
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", label);
+  el.appendChild(svg);
+  return (tag, attrs, text) => {
+    const node = document.createElementNS(NS, tag);
+    // Theme tokens only resolve through style, not presentation attributes.
+    for (const [k, v] of Object.entries(attrs)) {
+      if (["fill", "stroke", "font-family", "fill-opacity"].includes(k)) node.style.setProperty(k, v);
+      else node.setAttribute(k, v);
+    }
+    if (text !== undefined) node.textContent = text;
+    svg.appendChild(node);
+    return node;
+  };
+}
+
+function quantile(sorted, q) {
+  const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+function boxes(el, series) {
+  const W = 700, H = 260, left = 40, right = 8, top = 22, bottom = 30;
+  const plotH = H - top - bottom, plotW = W - left - right, groupW = plotW / LOCATIONS.length;
+  const boxW = Math.min(46, (groupW * 0.8) / series.length);
+  const y = v => top + plotH * (1 - v);
+  const add = canvas(el, W, H, "Dice per test image, by location");
+  for (const tick of [0, 0.25, 0.5, 0.75, 1]) {
+    add("line", { x1: left, x2: W - right, y1: y(tick), y2: y(tick), stroke: "var(--rule)", "stroke-width": 1 });
+    add("text", { x: left - 6, y: y(tick) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-data)" }, `${Math.round(tick * 100)}%`);
+  }
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  LOCATIONS.forEach((loc, i) => {
+    const cx = left + groupW * (i + 0.5);
+    const start = cx - (boxW * series.length) / 2;
+    series.forEach((s, j) => {
+      const data = [...s.values[i]].sort((a, b) => a - b);
+      const x0 = start + j * boxW + 3, w = boxW - 6, mid = x0 + w / 2;
+      const q1 = quantile(data, 0.25), med = quantile(data, 0.5), q3 = quantile(data, 0.75);
+      const reach = 1.5 * (q3 - q1);
+      const lo = data.find(v => v >= q1 - reach), hi = [...data].reverse().find(v => v <= q3 + reach);
+      const color = `var(${s.color})`;
+      add("line", { x1: mid, x2: mid, y1: y(hi), y2: y(lo), stroke: color, "stroke-width": 1.2 });
+      add("rect", { x: x0, y: y(q3), width: w, height: Math.max(y(q1) - y(q3), 1.5), rx: 2,
+        fill: color, "fill-opacity": 0.18, stroke: color, "stroke-width": 1.2 });
+      add("line", { x1: x0, x2: x0 + w, y1: y(med), y2: y(med), stroke: color, "stroke-width": 2.5 });
+      add("text", { x: mid, y: Math.max(y(hi) - 6, 10), "text-anchor": "middle", "font-size": 10.5,
+        fill: "var(--fg)", "font-family": "var(--font-data)" }, `${Math.round(med * 100)}%`);
+      for (const v of data) {
+        add("circle", { cx: mid + (rand() - 0.5) * w * 0.7, cy: y(v), r: 2.6, fill: color, "fill-opacity": 0.75 });
+      }
+    });
+    add("text", { x: cx, y: H - 10, "text-anchor": "middle", "font-size": 12, fill: "var(--fg)" },
+      `${loc} (n=${series[0].values[i].length})`);
+  });
+}
+
+function bars(el, spec) {
+  const W = 700, H = 240, left = 40, right = 8, top = 18, bottom = 44;
+  const peak = 80, plotH = H - top - bottom, plotW = W - left - right, groupW = plotW / LOCATIONS.length;
+  const barW = Math.min(40, (groupW * 0.8) / spec.series.length);
+  const y = v => top + plotH * (1 - v / peak);
+  const add = canvas(el, W, H, "Labelled images per location: train, validation, test");
+  for (const tick of [0, 20, 40, 60, 80]) {
+    add("line", { x1: left, x2: W - right, y1: y(tick), y2: y(tick), stroke: "var(--rule)", "stroke-width": 1 });
+    add("text", { x: left - 6, y: y(tick) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-data)" }, tick);
+  }
+  LOCATIONS.forEach((loc, i) => {
+    const cx = left + groupW * (i + 0.5);
+    const start = cx - (barW * spec.series.length) / 2;
+    spec.series.forEach((s, j) => {
+      const v = s.values[i], x = start + j * barW + 1;
+      add("rect", { x, y: y(v), width: barW - 2, height: y(0) - y(v), rx: 2, fill: `var(${s.color})` });
+      add("text", { x: x + (barW - 2) / 2, y: y(v) - 4, "text-anchor": "middle", "font-size": 11, fill: "var(--fg)", "font-family": "var(--font-data)" }, v);
+    });
+    add("text", { x: cx, y: H - 24, "text-anchor": "middle", "font-size": 12, fill: "var(--fg)" }, loc);
+    add("text", { x: cx, y: H - 8, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, spec.sub[i]);
+  });
+}
+
+function hbars(el, rows) {
+  const W = 700, rowH = 18, left = 190, right = 120, top = 20;
+  const H = top + rows.length * rowH + 6, peak = 70, plotW = W - left - right;
+  const x = v => left + plotW * (v / peak);
+  const add = canvas(el, W, H, "Labelled frames per structure");
+  for (const tick of [0, 20, 40, 60]) {
+    add("line", { x1: x(tick), x2: x(tick), y1: top - 4, y2: H - 4, stroke: "var(--rule)", "stroke-width": 1 });
+    add("text", { x: x(tick), y: top - 8, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-data)" }, tick);
+  }
+  rows.forEach(([name, frames, clips], i) => {
+    const yy = top + i * rowH;
+    add("text", { x: left - 8, y: yy + 12, "text-anchor": "end", "font-size": 12, fill: "var(--fg)" }, name);
+    add("rect", { x: left, y: yy + 3, width: Math.max(x(frames) - left, 2), height: rowH - 6, rx: 2, fill: "var(--s1)" });
+    add("text", { x: x(frames) + 6, y: yy + 12, "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-data)" },
+      `${frames} frames · ${clips} clip${clips === 1 ? "" : "s"}`);
+  });
+}
+
+document.querySelectorAll("[data-chart]").forEach(el => boxes(el, CHARTS[el.dataset.chart]));
+bars(document.querySelector("[data-bars]"), DATA);
+hbars(document.querySelector("[data-hbars]"), ANATOMY);
+</script>
