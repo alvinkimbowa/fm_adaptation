@@ -10,8 +10,8 @@ results_dir=models
 # A plans is a network of its own, so each is named here separately: `nnUNet` takes the stock 2d
 # plans, `nnUNetResEncM` the residual-encoder preset, and `nnUNet*` every plans at once.
 models=(
-    nnUNet
-    nnUNetResEncM
+    # nnUNet
+    # nnUNetResEncM
     XTinyUNet     # its own model, so no `nnUNet` entry above selects it
     MonoUNet
     sam3
@@ -96,19 +96,20 @@ configs=(
     # convnexts_upernet_ft_aug_promptboth_ours
     # convnexts_upernet_ft_aug_gateonly_ours
     # convnextb_upernet_ft_aug_promptenc_ours
-    # convnext_upernet_ft_aug_promptenc_ours
     # convnexts_upernet_ft_aug_promptanat_ours
     # convnextb_upernet_ft_aug_promptanat_ours
-    # convnext_upernet_ft_aug_promptanat_ours
     # upernet_ours
     # upernet_inj_ours
     
     # convnexts_upernet_ft_aug_ours
     # convnextb_upernet_ft_aug_ours
-    # convnext_upernet_ft_aug_ours
+
+    convnext_upernet_ft_aug_ours
+    convnext_upernet_ft_aug_promptenc_ours
+    convnext_upernet_ft_aug_promptanat_ours
+    convnext_upernet_ft_aug_ctxmid_ours
 
     # convnext_upernet_ft_aug_ctxearly_ours
-    # convnext_upernet_ft_aug_ctxmid_ours
     # convnext_upernet_ft_aug_ctxlate_ours
     # convnext_upernet_ft_aug_ctxmidconv_ours
     # convnext_upernet_ft_aug_ctxlateconv_ours
@@ -117,9 +118,12 @@ configs=(
     # upernet_inj_ft_vitb_ours
     # upernet_inj_ft_vits_ours
 
-    upernet_inj_ft_vits_aug_ours
-    upernet_inj_ft_vitb_aug_ours
+    # upernet_inj_ft_vits_aug_ours
+    # upernet_inj_ft_vitb_aug_ours
+    
     upernet_inj_ft_aug_ours
+    upernet_inj_ft_aug_promptenc_ours
+    upernet_inj_ft_aug_ctxlateconv_ours
     
     # upernet_inj_ft_vits_aug_ctxlate_ours
     # upernet_inj_ft_vits_aug_ctxlateconv_ours
@@ -131,7 +135,6 @@ configs=(
     
     # upernet_inj_ft_vits_aug_promptenc_ours
     # upernet_inj_ft_vitb_aug_promptenc_ours
-    # upernet_inj_ft_aug_promptenc_ours
     # upernet_inj_ft_poly_ours
     # upernet_inj_ft_init_ours
     # m2f
