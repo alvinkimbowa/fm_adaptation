@@ -2,6 +2,7 @@ logs/
 *.jsonl
 .local/
 .pooria/
+/rough/
 
 /data/
 
